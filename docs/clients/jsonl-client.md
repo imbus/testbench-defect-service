@@ -1,0 +1,174 @@
+---
+sidebar_position: 2
+title: JSONL Client
+---
+# JSONL Client
+
+The JSONL client is the default, zero-dependency backend for the Testbench Defect Service. It stores defects as [newline-delimited JSON](https://jsonlines.org) (`.jsonl`) files on the local file system.
+
+---
+
+## Overview
+
+Each project maps to a subdirectory under the configured `defects_path`. Defects are stored as individual JSON objects, one per line, in a `.jsonl` file inside that directory.
+
+```
+defects/jsonl/
+├── ProjectA/
+│   ├── defects.jsonl
+│   └── UserDefinedAttributes.json
+└── ProjectB/
+    └── defects.jsonl
+```
+
+A single defect line looks like:
+
+```json
+{"id": "BUG-1", "title": "Login fails on Safari", "status": "open", "priority": "high"}
+```
+
+---
+
+## When to Use the JSONL Client
+
+- No external service or internet access required.
+- Ideal for local development, demos, and CI/CD pipelines.
+- Defect data can be read and modified by any text editor or script.
+- Supports the full defect lifecycle: create, read, update, delete.
+
+---
+
+## Configuration
+
+Add the following to your `config.toml` to enable the JSONL client:
+
+```toml
+[testbench-defect-service]
+client_class       = "testbench_defect_service.clients.JsonlDefectClient"
+client_config_path = "config.toml"
+
+[testbench-defect-service.client_config]
+name                       = "JSONL"
+description                = "File-based defect management"
+defects_path               = "defects/jsonl"
+readonly                   = false
+supports_changes_timestamps = true
+attributes                 = ["title", "status", "priority"]
+```
+
+### Option Reference
+
+**Identity**
+
+| Key | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | string | No | `"JSONL"` | Display name shown in TestBench. Must match the name in the DMProxy properties file or during setup. |
+| `description` | string | No | `"JSONL client..."` | Short description displayed in `/settings`. |
+
+**Storage**
+
+| Key | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `defects_path` | string | **Yes** | — | Root directory for all defect files. Must exist before starting the service. |
+
+:::warning
+The `defects_path` directory and all project subdirectories must be created manually before starting the service. The service will not start if the path does not exist.
+:::
+
+**Query & Fields**
+
+| Key | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `attributes` | list | No | `["title", "status"]` | Defect fields to include in responses. Field names must match the keys used in the `.jsonl` records. |
+| `control_fields` | table | No | `{}` | Allowed values for controlled fields. See [Control Fields](#control-fields). |
+
+**Behavior**
+
+| Key | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `readonly` | boolean | No | `false` | When `true`, all write operations (create, update, delete) are rejected. |
+| `supports_changes_timestamps` | boolean | No | `true` | Whether the client tracks modification timestamps. |
+
+**Advanced**
+
+| Key | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `commands` | table | No | — | Pre/post sync commands. See [Configuration](../configuration.md#prepost-sync-commands). |
+| `projects` | table | No | `{}` | Per-project configuration overrides. See [Per-Project Overrides](jsonl-client#per-project-overrides). |
+
+---
+
+## Control Fields
+
+Control fields are attributes whose values are restricted to a predefined list. TestBench uses them to present validated dropdowns.
+
+```toml
+[testbench-defect-service.client_config.control_fields]
+status   = ["open", "in_progress", "blocked", "closed"]
+priority = ["low", "medium", "high", "critical"]
+severity = ["minor", "major", "critical"]
+```
+
+Any key-value pair is valid. The field names must match the names used in the `attributes` list.
+
+---
+
+## User-Defined Attributes (UDFs)
+
+Each project can have a `UserDefinedAttributes.json` file that describes custom fields:
+
+```json
+[
+  {
+    "name": "Customer",
+    "valueType": "STRING",
+    "mustField": false
+  },
+  {
+    "name": "Regression",
+    "valueType": "BOOLEAN",
+    "mustField": true
+  }
+]
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Field name as it appears in TestBench. |
+| `valueType` | `"STRING"` \| `"BOOLEAN"` | Data type of the field. |
+| `mustField` | boolean | Whether the field is mandatory. |
+
+---
+
+## Per-Project Overrides
+
+Any top-level option can be overridden for a specific project:
+
+```toml
+[testbench-defect-service.client_config.projects.ProjectA]
+readonly = true
+
+[testbench-defect-service.client_config.projects.ProjectA.control_fields]
+status = ["open", "closed"]
+
+[testbench-defect-service.client_config.projects.ProjectA.commands.presync]
+scheduled = "C:\\scripts\\project-a-pre.bat"
+```
+
+The project key must match the subdirectory name under `defects_path`.
+
+---
+
+## How Defect IDs Work
+
+IDs are auto-generated by the client when a defect is created. The format is `BUG-<n>` where `<n>` is an incrementing integer based on the current count of defects in the file.
+
+:::warning
+Do not manually edit or reuse defect IDs in the `.jsonl` file. TestBench uses the ID to track defect identity across syncs — changing an ID causes TestBench to treat it as a new defect and lose the link to the original.
+:::
+---
+
+## Limitations
+
+- **Single file per project** — all defects for a project are stored in one `.jsonl` file. Large projects with many thousands of defects may experience slower read/write times.
+- **No concurrent write safety** — the client does not use file locking. Avoid modifying the `.jsonl` file externally while the service is running.

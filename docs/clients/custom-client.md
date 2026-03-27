@@ -1,0 +1,231 @@
+---
+sidebar_position: 4
+title: Custom Client
+---
+
+# Custom Client
+
+The Testbench Defect Service supports custom backends through a pluggable client interface. Any Python class that extends `AbstractDefectClient` and implements the required methods can be used as a drop-in replacement for the built-in JSONL or Jira clients.
+
+Typical use cases:
+
+- Integrating a defect tracker that is not supported out of the box (e.g. Azure DevOps, GitHub Issues, Bugzilla).
+- Wrapping an internal or proprietary issue management system.
+- Building a read-only adapter over a reporting or analytics backend.
+
+---
+
+## How It Works
+
+At startup the service reads `client_class` from `config.toml`, imports the class by its fully qualified Python dotted path, and instantiates it with the validated `client_config` section. As long as your class is importable and implements the interface, no other changes to the service are required.
+
+---
+
+## Step 1 — Create the Config Model
+
+Each client defines its own configuration model as a [Pydantic](https://docs.pydantic.dev) `BaseModel`. The model is validated once at startup and passed to `__init__`.
+
+```python
+# my_client/config.py
+from pydantic import BaseModel, Field
+
+class MyClientConfig(BaseModel):
+    server_url: str = Field(..., description="URL of the backend system")
+    api_key: str = Field(..., description="API key for authentication")
+    readonly: bool = Field(default=False)
+    project_prefix: str = Field(default="PRJ")
+```
+:::tip
+Use `Field(...)` (no default) for required settings and `Field(default=...)` for optional ones. Pydantic reports missing required fields at startup with a clear validation error pointing to the exact key.
+:::
+---
+
+## Step 2 — Implement the Client Class
+
+Subclass `AbstractDefectClient`, set `CONFIG_CLASS`, and implement every abstract method.
+
+```python
+# my_client/client.py
+from pydantic import BaseModel
+from sanic.exceptions import NotFound
+
+from testbench_defect_service.clients.abstract_client import AbstractDefectClient
+from testbench_defect_service.models.defects import (
+    Defect,
+    DefectID,
+    DefectWithAttributes,
+    ExtendedAttributes,
+    Protocol,
+    ProtocolCode,
+    ProtocolledDefectSet,
+    ProtocolledString,
+    Results,
+    Settings,
+    SyncContext,
+    UserDefinedAttribute,
+)
+
+from .config import MyClientConfig
+
+
+class MyDefectClient(AbstractDefectClient):
+    CONFIG_CLASS = MyClientConfig
+
+    def __init__(self, config: MyClientConfig):
+        self.config = config
+        # Initialise your backend connection here
+
+    # --- Identity & settings ------------------------------------------------
+
+    def get_settings(self) -> Settings:
+        return Settings(
+            name="My Backend",
+            description="Custom defect client for My Backend",
+            readonly=self.config.readonly,
+        )
+
+    def check_login(self, project: str | None) -> bool:
+        # Return True when credentials are valid and the backend is reachable
+        return True
+
+    def supports_changes_timestamps(self) -> bool:
+        return False
+
+    # --- Projects ------------------------------------------------------------
+
+    def get_projects(self) -> list[str]:
+        # Return the list of project identifiers available to the authenticated user
+        return []
+
+    # --- Control fields & UDFs ----------------------------------------------
+
+    def get_control_fields(self, project: str | None) -> dict[str, list[str]]:
+        return {"status": ["open", "closed"], "priority": ["low", "high"]}
+
+    def get_user_defined_attributes(self, project: str | None) -> list[UserDefinedAttribute]:
+        return []
+
+    # --- Defect CRUD ---------------------------------------------------------
+
+    def get_defects(self, project: str, sync_context: SyncContext) -> ProtocolledDefectSet:
+        raise NotImplementedError
+
+    def get_defects_batch(
+        self, project: str, defect_ids: list[DefectID], sync_context: SyncContext
+    ) -> ProtocolledDefectSet:
+        raise NotImplementedError
+
+    def get_defect_extended(
+        self, project: str, defect_id: str, sync_context: SyncContext
+    ) -> DefectWithAttributes:
+        raise NotImplementedError
+
+    def create_defect(
+        self, project: str, defect: Defect, sync_context: SyncContext
+    ) -> ProtocolledString:
+        raise NotImplementedError
+
+    def update_defect(
+        self, project: str, defect_id: str, defect: Defect, sync_context: SyncContext
+    ) -> Protocol:
+        raise NotImplementedError
+
+    def delete_defect(
+        self, project: str, defect_id: str, defect: Defect, sync_context: SyncContext
+    ) -> Protocol:
+        raise NotImplementedError
+
+    # --- Sync lifecycle ------------------------------------------------------
+
+    def before_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
+        return Protocol(protocolCode=ProtocolCode.OK, messages=[])
+
+    def after_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
+        return Protocol(protocolCode=ProtocolCode.OK, messages=[])
+
+    def correct_sync_results(self, project: str, body: Results) -> Results:
+        return body
+```
+
+### Required Methods
+
+| Method | Purpose |
+|---|---|
+| `__init__(config)` | Initialise the client with the validated config object. |
+| `get_settings()` | Return the backend name, description, and read-only flag. |
+| `check_login(project)` | Validate credentials; return `True` if the backend is reachable. |
+| `supports_changes_timestamps()` | Return `True` if the backend tracks modification timestamps. |
+| `get_projects()` | List all available project identifiers. |
+| `get_control_fields(project)` | Return allowed values per field (e.g. statuses, priorities). |
+| `get_user_defined_attributes(project)` | Return custom field definitions. |
+| `get_defects(project, sync_context)` | Return all defects for a project. |
+| `get_defects_batch(project, ids, sync_context)` | Return a specific subset of defects by ID. |
+| `get_defect_extended(project, id, sync_context)` | Return a single defect with its extended attributes. |
+| `create_defect(project, defect, sync_context)` | Create a defect; return its assigned ID. |
+| `update_defect(project, id, defect, sync_context)` | Update an existing defect. |
+| `delete_defect(project, id, defect, sync_context)` | Delete an existing defect. |
+| `before_sync(project, sync_type, sync_context)` | Pre-sync hook (acquire locks, validate state). |
+| `after_sync(project, sync_type, sync_context)` | Post-sync hook (release locks, persist state). |
+| `correct_sync_results(project, results)` | Filter or adjust the proposed sync change set. |
+
+### Exception Conventions
+
+Raise the following Sanic exceptions consistently so the service translates them into the correct HTTP responses:
+
+| Situation | Exception |
+|---|---|
+| Project or defect not found | `sanic.exceptions.NotFound` |
+| Backend or network error | `sanic.exceptions.ServerError` |
+| Invalid input data | `pydantic.ValidationError` |
+
+---
+
+## Step 3 — Make the Class Importable
+
+Place your package somewhere on the Python path. The simplest options are:
+
+**Install as a package alongside the service:**
+
+```bash
+pip install ./my_client
+```
+
+**Add the directory to `PYTHONPATH`:**
+
+```bash
+export PYTHONPATH="/path/to/my_client:$PYTHONPATH"
+```
+
+**Use a local `src` layout** next to the service source — if you run from the same virtual environment, the package is already importable.
+
+:::warning
+The package must be importable from the same Python environment as the Defect Service. Installing it globally or in a different virtual environment will result in an `ImportError` at startup.
+:::
+---
+
+## Step 4 — Configure the Service
+
+Point `client_class` at your class and add the matching `client_config` section:
+
+```toml
+[testbench-defect-service]
+client_class       = "my_client.client.MyDefectClient"
+client_config_path = "config.toml"
+
+[testbench-defect-service.client_config]
+server_url     = "https://backend.example.com"
+api_key        = "secret"
+readonly       = false
+project_prefix = "PRJ"
+```
+
+The `client_config` keys must match the fields defined in your `MyClientConfig` Pydantic model. The service validates the section on startup and raises an error if required fields are missing or have the wrong type.
+
+---
+
+## Tips
+
+- **Reuse config building blocks** — `SyncCommandConfig`, `PhaseCommands`, and `ProjectConfig` from `testbench_defect_service.clients.jsonl.config` are plain Pydantic models you can compose into your own config to get pre/post sync command and per-project override support for free.
+- **Look at the JSONL client** — `testbench_defect_service.clients.jsonl.client` is the simplest complete reference implementation.
+- **Read-only mode** — check `self.config.readonly` in every write method and raise `sanic.exceptions.Forbidden` when set.
+- **Logging** — import and use `from testbench_defect_service.log import logger` instead of the standard `logging` module so your output appears in the same structured log stream.

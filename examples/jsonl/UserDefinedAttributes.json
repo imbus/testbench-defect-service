@@ -1,0 +1,20 @@
+[
+    {
+        "name": "Sprint",
+        "valueType": "STRING",
+        "mustField": false,
+        "stringValue": "Production"
+    },
+    {
+        "name": "Rank",
+        "valueType": "STRING",
+        "mustField": false,
+        "booleanValue": false
+    },
+    {
+        "name": "dropdown",
+        "valueType": "STRING",
+        "mustField": false,
+        "lastEdited": "2026-01-27T10:30:00Z"
+    }
+]

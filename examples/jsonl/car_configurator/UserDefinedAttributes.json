@@ -1,0 +1,8 @@
+[
+    {
+        "name": "Sprint",
+        "valueType": "STRING",
+        "mustField": true,
+        "stringValue": "Production"
+    }
+]
