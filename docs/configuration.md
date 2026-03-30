@@ -37,6 +37,19 @@ A `config.toml` has two top-level sections:
 
 ## Service Settings
 
+### Client
+
+```toml
+[testbench-defect-service]
+client_class       = "testbench_defect_service.clients.JsonlDefectClient"
+client_config_path = "config.toml"
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `client_class` | string | — | Fully qualified Python class name of the backend client. See [Clients](clients/). |
+| `client_config_path` | string | — | Path to the TOML file containing the `client_config` section. Defaults to the same file. |
+
 ### Network
 
 ```toml
@@ -51,19 +64,6 @@ debug = false
 | `host` | string | `"127.0.0.1"` | Network interface to listen on. Use `"0.0.0.0"` to accept external connections. |
 | `port` | integer | `8030` | TCP port the service listens on. |
 | `debug` | boolean | `false` | Enable Sanic debug mode (verbose logging, auto-reload). **Do not use in production.** |
-
-### Client
-
-```toml
-[testbench-defect-service]
-client_class       = "testbench_defect_service.clients.JsonlDefectClient"
-client_config_path = "config.toml"
-```
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `client_class` | string | — | Fully qualified Python class name of the backend client. See [Clients](clients/). |
-| `client_config_path` | string | — | Path to the TOML file containing the `client_config` section. Defaults to the same file. |
 
 ### Authentication
 

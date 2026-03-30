@@ -8,11 +8,6 @@ title: Installation
 
 - **Python 3.10 or higher** — [Download Python](https://www.python.org/downloads/)
 - **pip** — included with Python 3.4+; verify with `pip --version`
-
----
-
-There are two supported ways to install the Testbench Defect Service.
-
 ---
 
 ## Option 1: Install from a Wheel (Recommended for Production)

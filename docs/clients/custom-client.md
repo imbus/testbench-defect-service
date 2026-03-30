@@ -30,14 +30,11 @@ Each client defines its own configuration model as a [Pydantic](https://docs.pyd
 from pydantic import BaseModel, Field
 
 class MyClientConfig(BaseModel):
-    server_url: str = Field(..., description="URL of the backend system")
-    api_key: str = Field(..., description="API key for authentication")
-    readonly: bool = Field(default=False)
-    project_prefix: str = Field(default="PRJ")
+    server_url: str = ""
+    api_key: str = ""
+    readonly: bool = False
+    project_prefix: str = "PRJ"
 ```
-:::tip
-Use `Field(...)` (no default) for required settings and `Field(default=...)` for optional ones. Pydantic reports missing required fields at startup with a clear validation error pointing to the exact key.
-:::
 ---
 
 ## Step 2 — Implement the Client Class
@@ -210,7 +207,6 @@ Point `client_class` at your class and add the matching `client_config` section:
 ```toml
 [testbench-defect-service]
 client_class       = "my_client.client.MyDefectClient"
-client_config_path = "config.toml"
 
 [testbench-defect-service.client_config]
 server_url     = "https://backend.example.com"
