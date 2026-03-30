@@ -37,7 +37,7 @@ At its core the service:
 │      TestBench Defect Service        │
 │                (Sanic)               │
 ├──────────────────────────────────────┤
-│            DefectCleient             │
+│            DefectClient              │
 ├───────────────────┬──────────────────┤
 │        JSONL      │       Jira       │
 └──────────┬────────┴────────┬─────────┘
