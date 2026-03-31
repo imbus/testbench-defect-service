@@ -10,7 +10,23 @@ title: Installation
 - **pip** — included with Python 3.4+; verify with `pip --version`
 ---
 
-## Option 1: Install from a Wheel (Recommended for Production)
+## Option 1: Install from PyPI (Recommended)
+
+Install the latest release directly from [PyPI](https://pypi.org/project/testbench-defect-service/):
+
+```bash
+pip install testbench-defect-service
+```
+
+To include Jira support:
+
+```bash
+pip install "testbench-defect-service[jira]"
+```
+
+---
+
+## Option 2: Install from a Wheel
 
 Download the `.whl` file from the release page and install it with pip:
 
@@ -26,7 +42,7 @@ pip install "testbench_defect_service-<version>-py3-none-any.whl[jira]"
 
 ---
 
-## Option 2: Install from Source (Development)
+## Option 3: Install from Source (Development)
 
 Clone the repository and install in editable mode:
 
