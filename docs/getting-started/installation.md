@@ -47,7 +47,7 @@ pip install "testbench_defect_service-<version>-py3-none-any.whl[jira]"
 Clone the repository and install in editable mode:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/imbus/testbench-defect-service.git
 cd defect-service-python
 pip install -e ".[dev,jira]"
 ```
