@@ -198,7 +198,6 @@ testbench-defect-service start \
 By default the service runs in **multi-process mode** (one worker per CPU core), managed by Sanic's `AppLoader`.
 
 The service automatically switches to **single-process mode** when:
-- Running as a frozen PyInstaller executable (`.exe`).
 - mTLS is enabled (`--ssl-ca-cert`), because `ssl.SSLContext` objects cannot be forked.
 
 ---

@@ -32,7 +32,6 @@ A single defect line looks like:
 ## When to Use the JSONL Client
 
 - No external service or internet access required.
-- Ideal for local development, demos, and CI/CD pipelines.
 - Defect data can be read and modified by any text editor or script.
 - Supports the full defect lifecycle: create, read, update, delete.
 

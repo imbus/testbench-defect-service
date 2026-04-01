@@ -37,6 +37,19 @@ A `config.toml` has two top-level sections:
 
 ## Service Settings
 
+### Client
+
+```toml
+[testbench-defect-service]
+client_class       = "testbench_defect_service.clients.JsonlDefectClient"
+client_config_path = "config.toml"
+```
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `client_class` | string | — | Fully qualified Python class name of the backend client. See [Clients](clients/). |
+| `client_config_path` | string | — | Path to the TOML file containing the `client_config` section. Defaults to the same file. |
+
 ### Network
 
 ```toml
@@ -51,19 +64,6 @@ debug = false
 | `host` | string | `"127.0.0.1"` | Network interface to listen on. Use `"0.0.0.0"` to accept external connections. |
 | `port` | integer | `8030` | TCP port the service listens on. |
 | `debug` | boolean | `false` | Enable Sanic debug mode (verbose logging, auto-reload). **Do not use in production.** |
-
-### Client
-
-```toml
-[testbench-defect-service]
-client_class       = "testbench_defect_service.clients.JsonlDefectClient"
-client_config_path = "config.toml"
-```
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `client_class` | string | — | Fully qualified Python class name of the backend client. See [Clients](clients/). |
-| `client_config_path` | string | — | Path to the TOML file containing the `client_config` section. Defaults to the same file. |
 
 ### Authentication
 
@@ -147,15 +147,6 @@ file_path  = "testbench-defect-service.log"
 
 ---
 
-## Client Configuration
-
-Each backend client has its own `[testbench-defect-service.client_config]` section. See the individual client documentation for the full option reference:
-
-- [JSONL Client](clients/jsonl-client.md#configuration) — file-based storage, no external dependencies
-- [Jira Client](clients/jira-client.md#configuration) — Jira Cloud / Data Center
-
----
-
 ## Pre/Post Sync Commands
 
 Both clients support running shell commands before and after TestBench syncs defects, configured under a `commands` subsection.
@@ -180,3 +171,72 @@ scheduled = "C:\\scripts\\project-before.bat"
 | `partial` | Script or executable to run during partial syncs. |
 
 The process is launched via `subprocess` and the service waits for it to complete before continuing.
+
+---
+
+## Client Configuration
+
+Each backend client has its own `[testbench-defect-service.client_config]` section. See the individual client documentation for the full option reference:
+
+- [JSONL Client](clients/jsonl-client.md#configuration) — file-based storage, no external dependencies
+- [Jira Client](clients/jira-client.md#configuration) — Jira Cloud / Data Center
+
+---
+
+## Running multiple instances
+
+Each `start` command loads exactly one config file and binds to one port. To serve multiple data sources simultaneously — for example, one service for JSONL defects and one for Jira — start one process per config file on a different port.
+
+### Setup
+
+**1. Create a config file per instance:**
+
+`jsonl_config.toml`
+```toml
+[testbench-defect-service]
+reader_class = "testbench_defect_service.clients.JsonlDefectClient"
+port = 8030
+
+[testbench-defect-service.reader_config]
+# Jsonl-specific settings ...
+```
+
+`jira_config.toml`
+```toml
+[testbench-defect-service]
+reader_class = "testbench_defect_service.clients.JiraDefectClient"
+port = 8031
+
+[testbench-defect-service.reader_config]
+# Jira-specific settings ...
+```
+
+**2. Start each instance in its own terminal (or as separate Windows services):**
+
+```bash
+# Terminal 1 — JSONL service on port 8030
+testbench-defect-service start --config jsonl_config.toml
+
+# Terminal 2 — Jira service on port 8031
+testbench-defect-service start --config jira_config.toml
+```
+
+The `--port` flag overrides the port in the config file, so you can also reuse the same config and just change the port at start time:
+
+```bash
+testbench-defect-service start --config shared_config.toml --port 8032
+```
+
+### TestBench integration with multiple instances
+
+For each running instance, configure a separate RMProxy wrapper entry in TestBench pointing to the corresponding URL:
+
+```properties
+# JSONL service
+server.url=http://127.0.0.1:8030
+
+# Jira service
+server.url=http://127.0.0.1:8031
+```
+
+See the [TestBench Integration](testbench-integration.md) page for the full RMProxy setup.

@@ -41,20 +41,31 @@ pip install -e ".[jira]"
 
 The service account used by the Defect Service must hold the following Jira project permissions:
 
-| Category | Permission |
+#### Project & Users
+| Permission | Required |
 |---|---|
-| **Project & Users** | Browse Projects |
-| **Project & Users** | Browse Users |
-| **Issue Management** | Create Issues |
-| **Issue Management** | Edit Issues |
-| **Issue Management** | Delete Issues |
-| **Issue Management** | Transition Issues |
-| **Attachments** | Create Attachments |
-| **Attachments** | Delete Attachments |
+| **Browse Projects** | List and query projects |
+| **Browse Users** | Display assignees and reporters |
 
-Permissions are configured per project under **Project Settings → Permissions**. Assign them to the role or user the service authenticates as.
+#### Issue Management
+| Permission | Required |
+|---|---|
+| **Create Issues** | Sync new defects to Jira |
+| **Edit Issues** | Update defect attributes |
+| **Delete Issues** | Delete defects (`readonly = false` only) |
+| **Transition Issues** | Update defect status |
 
-> **Read-only mode:** When `readonly = true` is set, the service does not exercise any write permissions. Browse Projects and Browse Users are still required for read operations.
+#### Attachments
+| Permission | Required |
+|---|---|
+| **Create Attachments** | Sync attachments to defects |
+| **Delete Attachments** | Remove attachments (`readonly = false` only) |
+
+**Configuration:** Permissions are configured per project under **Project Settings → Permissions**. Assign them to the role or user the service authenticates as.
+
+:::note
+ When `readonly = true` is set, the service does not exercise any write permissions. Browse Projects and Browse Users are still required for read operations.
+:::
 
 ---
 
@@ -92,7 +103,7 @@ readonly       = false
 |---|---|---|---|---|
 | `auth_type` | string | No | `"basic"` | Authentication method. One of `"basic"`, `"token"`, or `"oauth"`. |
 | `username` | string | No | — | Jira username for basic auth. Can also be set via `JIRA_USERNAME`. |
-| `api_token` | string | No | — | Jira API token for basic auth (Jira Cloud). Can also be set via `JIRA_API_TOKEN`. |
+| `password` | string | No | — | Jira API token for basic auth. Can also be set via `JIRA_PASSWORD`. |
 | `token` | string | No | — | Personal Access Token for token auth (Jira Data Center). Can also be set via `JIRA_BEARER_TOKEN`. |
 | `enable_shared_auth` | boolean | No | — | Use service account credentials for all projects instead of per-user auth. |
 
@@ -131,7 +142,7 @@ Recommended for Jira Cloud. Uses your Atlassian account email and an API token.
 [testbench-defect-service.client_config]
 auth_type  = "basic"
 username   = "your-email@company.com"
-api_token  = "your-api-token"
+password  = "your-api-token"
 ```
 
 Generate an API token at `https://id.atlassian.com/manage-profile/security/api-tokens`.
@@ -161,7 +172,7 @@ To avoid storing credentials in the config file, use environment variables inste
 | Variable | Used for |
 |---|---|
 | `JIRA_USERNAME` | Username (basic auth) |
-| `JIRA_API_TOKEN` | API token (basic auth, Jira Cloud) |
+| `JIRA_PASSWORD` | API token (basic auth) |
 | `JIRA_BEARER_TOKEN` | Personal Access Token (token auth, Jira Data Center) |
 
 ---

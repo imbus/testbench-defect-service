@@ -5,7 +5,7 @@ title: Introduction
 
 # Introduction
 
-**Testbench Defect Service** is a lightweight, asynchronous REST API service that acts as a bridge between [Imbus TestBench](https://www.testbench.com/de/) and external defect tracking systems.
+[**Testbench Defect Service**](https://github.com/imbus/testbench-defect-service) is a lightweight, asynchronous REST API service that acts as a bridge between [Imbus TestBench](https://www.testbench.com/de/) and external defect tracking systems.
 
 ## What It Does
 
@@ -37,7 +37,7 @@ At its core the service:
 │      TestBench Defect Service        │
 │                (Sanic)               │
 ├──────────────────────────────────────┤
-│            DefectCleient             │
+│            DefectClient              │
 ├───────────────────┬──────────────────┤
 │        JSONL      │       Jira       │
 └──────────┬────────┴────────┬─────────┘
