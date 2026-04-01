@@ -214,10 +214,10 @@ port = 8031
 **2. Start each instance in its own terminal (or as separate Windows services):**
 
 ```bash
-# Terminal 1 — JSONL service on port 8020
-testbench-defect-service start --config excel_config.toml
+# Terminal 1 — JSONL service on port 8030
+testbench-defect-service start --config jsonl_config.toml
 
-# Terminal 2 — Jira service on port 8021
+# Terminal 2 — Jira service on port 8031
 testbench-defect-service start --config jira_config.toml
 ```
 
