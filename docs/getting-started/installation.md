@@ -10,7 +10,7 @@ title: Installation
 - **pip** — included with Python 3.4+; verify with `pip --version`
 ---
 
-## Option 1: Install from PyPI (Recommended)
+## Option 1: Install from PyPI *(Recommended)*
 
 Install the latest release directly from [PyPI](https://pypi.org/project/testbench-defect-service/):
 
@@ -26,23 +26,39 @@ pip install "testbench-defect-service[jira]"
 
 ---
 
-## Option 2: Install from a Wheel
+## Option 2: Install from a wheel package *(Offline)*
 
-Download the `.whl` file from the release page and install it with pip:
+Use this option when installing on a machine without internet access, for example when you received an offline installation package (`.zip`).
 
-```bash
-pip install testbench_defect_service-<version>-py3-none-any.whl
+**1. Extract the zip:**
+
+Unzip the provided package to a local folder, e.g. `C:\install\`:
+
+```
+C:\install\
+  testbench_defect_service-x.y.z-py3-none-any.whl
+  <dependency wheels ...>
 ```
 
-To include Jira support:
+**2. Install from the local folder:**
 
 ```bash
-pip install "testbench_defect_service-<version>-py3-none-any.whl[jira]"
+pip install --no-index --find-links "C:\install" testbench-defect-service
 ```
+
+To include optional extras, add them as usual — pip will resolve them from the local folder:
+
+```bash
+pip install --no-index --find-links "C:\install" testbench-defect-service[jira]
+```
+
+:::note
+The offline package is platform- and Python-version-specific. Make sure you use the package that matches your system (e.g. `win_amd64`, `py310`).
+:::
 
 ---
 
-## Option 3: Install from Source (Development)
+## Option 3: Install from Source *(Development)*
 
 Clone the repository and install in editable mode:
 
