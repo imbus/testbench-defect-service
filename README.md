@@ -1,10 +1,14 @@
 ﻿# Testbench Defect Service
 
+[![PyPI Version](https://img.shields.io/pypi/v/testbench-defect-service)](https://pypi.org/project/testbench-defect-service/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/testbench-defect-service)](https://pypi.org/project/testbench-defect-service/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+
 A flexible REST API service for managing defects across multiple backends including Jira and JSONL (file-based). Built with Sanic for high-performance asynchronous operations.
 
 ## Table of Contents
-
 - [Features](#features)
+- [Quick Start](#quick-start)
 - [Installation](#installation)
 - [Setup and Configuration](#setup-and-configuration)
 - [Usage](#usage)
@@ -13,6 +17,11 @@ A flexible REST API service for managing defects across multiple backends includ
 - [API Documentation](#api-documentation)
 - [Known Limitations](#known-limitations)
 - [Development](#development)
+  - [Prerequisites](#prerequisites)
+  - [Set Up the Development Environment](#set-up-the-development-environment)
+  - [Code Quality Tools](#code-quality-tools)
+  - [Run Tests](#run-tests)
+  - [Build Package](#build-package)
 - [License](#license)
 
 ## Features
@@ -25,6 +34,20 @@ A flexible REST API service for managing defects across multiple backends includ
 - Multiple Projects: Manage defects across different projects from a single service
 
 For more details on the architecture and supported backends, see [docs/intro.md](docs/intro.md).
+
+## Quick Start
+
+```bash
+pip install testbench-defect-service
+
+# Interactive setup wizard — creates config.toml
+testbench-defect-service init
+
+# Start the service (default: http://127.0.0.1:8030)
+testbench-defect-service start
+```
+
+Once running, open `http://127.0.0.1:8030/docs` for the interactive Swagger UI.
 
 ## Installation
 
@@ -60,9 +83,7 @@ For the full configuration reference (all parameters, logging, proxy settings, c
 
 ## API Documentation
 
-For the full API endpoint reference, see [docs/api-reference.md](docs/api-reference.md).
-
-The interactive Swagger UI is available at `http://<host>:<port>/docs` when the service is running.
+The interactive Swagger UI is available at `http://<host>:<port>/docs` when the service is running. It provides a full reference of all available endpoints and allows you to test them directly from the browser.
 
 ## Known Limitations
 
