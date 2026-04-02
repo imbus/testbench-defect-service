@@ -56,19 +56,6 @@ cover/
 *.mo
 *.pot
 
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
 # Sphinx documentation
 docs/_build/
 
@@ -112,13 +99,6 @@ ipython_config.py
 
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
 __pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
 
 # Environments
 .env
@@ -175,15 +155,30 @@ pyrightconfig.json
 
 # Temporary directories and files
 temp/
-tmp/
+tmp*/
 *.tmp
 
 # Backup files
 *backup*
+*.backup
 
 # Application log files
 *.log
 *.log.*
+*.log.lck
+
+# Test result artifacts
+results/
+logs/
+
+# TLS certificates and keys
+certs/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.p8
 
 # Configuration files with sensitive data
 # Block all config files by default to prevent accidental commits of credentials
@@ -210,8 +205,8 @@ config.py
 
 # Environment files (contain Jira credentials, etc.)
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # VS Code settings
 .vscode/
@@ -221,8 +216,3 @@ results/
 
 # Defect files
 defects/
-
-# Certificates
-*.crt
-*.pem
-*.key
