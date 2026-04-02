@@ -6,6 +6,7 @@ build-backend = "flit_core.buildapi"
 name = "testbench-defect-service"
 readme = "README.md"
 license = { file = "LICENSE" }
+authors = [{name = "imbus AG"}]
 dynamic = ["version", "description"]
 requires-python = ">=3.10,<3.15"
 keywords = [
@@ -64,7 +65,10 @@ dev = [
 ]
 
 [project.urls]
-Home = "https://github.com/imbus/testbench-defect-service"
+Homepage = "https://github.com/imbus/testbench-defect-service"
+Documentation = "https://github.com/imbus/testbench-defect-service/tree/main/docs"
+Source = "https://github.com/imbus/testbench-defect-service"
+Changelog = "https://github.com/imbus/testbench-defect-service/blob/main/CHANGELOG.md"
 
 [project.scripts]
 testbench-defect-service = "testbench_defect_service.cli:cli"
