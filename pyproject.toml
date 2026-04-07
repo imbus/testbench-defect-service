@@ -4,10 +4,11 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "testbench-defect-service"
+authors = [{ name = "imbus AG", email = "support@imbus.de" }]
 readme = "README.md"
 license = { file = "LICENSE" }
-authors = [{name = "imbus AG"}]
-dynamic = ["version", "description"]
+dynamic = ["version"]
+description = "A REST API service for the imbus testbench to manage defects."
 requires-python = ">=3.10,<3.15"
 keywords = [
   "testbench",
@@ -15,7 +16,6 @@ keywords = [
   "testing",
   "rest-api",
   "jira",
-  "excel",
   "defect-management",
   "test-automation",
 ]
@@ -65,10 +65,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/imbus/testbench-defect-service"
-Documentation = "https://github.com/imbus/testbench-defect-service/tree/main/docs"
-Source = "https://github.com/imbus/testbench-defect-service"
-Changelog = "https://github.com/imbus/testbench-defect-service/blob/main/CHANGELOG.md"
+Home = "https://github.com/imbus/testbench-defect-service"
 
 [project.scripts]
 testbench-defect-service = "testbench_defect_service.cli:cli"
