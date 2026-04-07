@@ -21,4 +21,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI entry point (`testbench-defect-service`) with `init`, `start`, and `set-credentials` commands.
 - `jira` optional dependency group for Jira backend support.
 
-[0.1.0]: https://github.com/imbus/testbench-defect-service/releases/tag/v0.1.0
+[0.1.0]: https://github.com/imbus/testbench-defect-service/releases/tag/0.1.0
