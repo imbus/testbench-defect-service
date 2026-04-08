@@ -62,6 +62,30 @@ class JiraDefectClient(AbstractDefectClient):
                     "Connection timeout",
                 ) from ConnectTimeout
             except JIRAError as exc:
+                if exc.status_code == 401:  # noqa: PLR2004
+                    logger.error(
+                        "Jira API error during authentication (token expired or wrong credentials):"
+                        "Status: %s, URL: %s",
+                        exc.status_code,
+                        exc.url,
+                    )
+                    raise Unauthorized(
+                        "Unable to connect to Jira. Your API token may be expired or the "
+                        "credentials provided are incorrect. Please verify your settings "
+                        "and try again."
+                        f"Details: Status: {exc.status_code} | Endpoint: {exc.url}"
+                    ) from JIRAError
+                if exc.status_code == 403:  # noqa: PLR2004
+                    logger.error(
+                        "Jira API access denied: Status: %s, URL: %s",
+                        exc.status_code,
+                        exc.url,
+                    )
+                    raise Forbidden(
+                        "Access Denied: You do not have the required permissions to perform this "
+                        "action in Jira. Check your project roles or contact your administrator."
+                        f"Details: Status: {exc.status_code} | Endpoint: {exc.url}"
+                    ) from JIRAError
                 logger.error(
                     "Jira API error during authentication: Status: %s, URL: %s",
                     exc.status_code,
