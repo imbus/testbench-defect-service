@@ -4,8 +4,9 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from jira import Project
+from jira import JIRAError, Project
 from jira.resources import IssueType, Priority, Status
+from requests import ConnectTimeout
 from sanic import NotFound, ServerError
 
 from testbench_defect_service.clients.abstract_client import AbstractDefectClient
@@ -71,8 +72,24 @@ class JiraDefectClient(AbstractDefectClient):
         except (ValueError, RuntimeError) as exc:
             logger.error("Failed to authenticate to Jira: %s", exc)
             return False
+        except ConnectTimeout:
+            logger.error(
+                "Connection timeout: could not reach Jira server at %s", self.config.server_url
+            )
+            return False
+        except JIRAError as exc:
+            logger.error(
+                "Jira API error during authentication: Status: %s, URL: %s",
+                exc.status_code,
+                exc.url,
+            )
+            return False
         except Exception as exc:
-            logger.error("Unhandled exception during Jira authentication: %s", exc)
+            logger.error(
+                "Unhandled exception during Jira authentication (%s): %s",
+                type(exc).__name__,
+                exc,
+            )
             return False
 
         if project and project not in self.projects:
