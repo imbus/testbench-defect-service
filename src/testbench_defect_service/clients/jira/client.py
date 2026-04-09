@@ -4,9 +4,10 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from jira import Project
+from jira import JIRAError, Project
 from jira.resources import IssueType, Priority, Status
-from sanic import NotFound, ServerError
+from requests import ConnectTimeout
+from sanic import Forbidden, NotFound, ServerError, Unauthorized
 
 from testbench_defect_service.clients.abstract_client import AbstractDefectClient
 from testbench_defect_service.clients.jira.config import JiraDefectClientConfig
@@ -50,7 +51,50 @@ class JiraDefectClient(AbstractDefectClient):
     @property
     def jira_client(self) -> JiraClient:
         if self._jira_client is None:
-            self._jira_client = JiraClient(self.config)
+            try:
+                self._jira_client = JiraClient(self.config)
+            except ConnectTimeout:
+                logger.error(
+                    "Connection timeout: could not reach Jira server at %s", self.config.server_url
+                )
+                raise NotFound(
+                    f"Unable to connect to Jira server at {self.config.server_url}: "
+                    "Connection timeout",
+                ) from ConnectTimeout
+            except JIRAError as exc:
+                if exc.status_code == 401:  # noqa: PLR2004
+                    logger.error(
+                        "Jira API error during authentication (token expired or wrong credentials):"
+                        "Status: %s, URL: %s",
+                        exc.status_code,
+                        exc.url,
+                    )
+                    raise Unauthorized(
+                        "Unable to connect to Jira. Your API token may be expired or the "
+                        "credentials provided are incorrect. Please verify your settings "
+                        "and try again."
+                        f"Details: Status: {exc.status_code} | Endpoint: {exc.url}"
+                    ) from JIRAError
+                if exc.status_code == 403:  # noqa: PLR2004
+                    logger.error(
+                        "Jira API access denied: Status: %s, URL: %s",
+                        exc.status_code,
+                        exc.url,
+                    )
+                    raise Forbidden(
+                        "Access Denied: You do not have the required permissions to perform this "
+                        "action in Jira. Check your project roles or contact your administrator."
+                        f"Details: Status: {exc.status_code} | Endpoint: {exc.url}"
+                    ) from JIRAError
+                logger.error(
+                    "Jira API error during authentication: Status: %s, URL: %s",
+                    exc.status_code,
+                    exc.url,
+                )
+                raise Unauthorized(
+                    f"Jira API error during authentication: Status: {exc.status_code},"
+                    f" URL: {exc.url}"
+                ) from JIRAError
         return self._jira_client
 
     @property
@@ -71,8 +115,24 @@ class JiraDefectClient(AbstractDefectClient):
         except (ValueError, RuntimeError) as exc:
             logger.error("Failed to authenticate to Jira: %s", exc)
             return False
+        except ConnectTimeout:
+            logger.error(
+                "Connection timeout: could not reach Jira server at %s", self.config.server_url
+            )
+            return False
+        except JIRAError as exc:
+            logger.error(
+                "Jira API error during authentication: Status: %s, URL: %s",
+                exc.status_code,
+                exc.url,
+            )
+            return False
         except Exception as exc:
-            logger.error("Unhandled exception during Jira authentication: %s", exc)
+            logger.error(
+                "Unhandled exception during Jira authentication (%s): %s",
+                type(exc).__name__,
+                exc,
+            )
             return False
 
         if project and project not in self.projects:
@@ -288,6 +348,11 @@ class JiraDefectClient(AbstractDefectClient):
                 f"Failed to fetch defects for project '{project}': {exc}",
                 protocol_code=ProtocolCode.INSERT_ERROR,
             )
+        except (Unauthorized, NotFound) as exc:
+            protocol.add_general_error(
+                exc.message,
+                protocol_code=ProtocolCode.READ_ACCESS_ERROR,
+            )
 
         return ProtocolledDefectSet(value=defects, protocol=protocol)
 
@@ -302,6 +367,12 @@ class JiraDefectClient(AbstractDefectClient):
             logger.error("Unknown project '%s' requested while creating defect", project)
             protocol.add_general_error(
                 f"Unknown project '{project}': {exc}", protocol_code=ProtocolCode.PROJECT_NOT_FOUND
+            )
+            return ProtocolledDefectSet(value=[], protocol=protocol)
+        except (Unauthorized, NotFound) as exc:
+            protocol.add_general_error(
+                exc.message,
+                protocol_code=ProtocolCode.READ_ACCESS_ERROR,
             )
             return ProtocolledDefectSet(value=[], protocol=protocol)
 
@@ -369,7 +440,14 @@ class JiraDefectClient(AbstractDefectClient):
     ) -> ProtocolledString:
         protocol = Protocol()
         issue_key = ""
-        jira_client = self._resolve_jira_client(project, defect.principal)
+        try:
+            jira_client = self._resolve_jira_client(project, defect.principal)
+        except (Unauthorized, NotFound) as exc:
+            protocol.add_general_error(
+                exc.message,
+                protocol_code=ProtocolCode.READ_ACCESS_ERROR,
+            )
+            return ProtocolledString(value="", protocol=protocol)
 
         if self._get_config_value("readonly", project=project):
             protocol.add_error(
@@ -412,7 +490,15 @@ class JiraDefectClient(AbstractDefectClient):
         self, project: str, defect_id: str, defect: Defect, sync_context: SyncContext
     ) -> Protocol:
         protocol = Protocol()
-        jira_client = self._resolve_jira_client(project, defect.principal)
+
+        try:
+            jira_client = self._resolve_jira_client(project, defect.principal)
+        except (Unauthorized, NotFound) as exc:
+            protocol.add_general_error(
+                exc.message,
+                protocol_code=ProtocolCode.READ_ACCESS_ERROR,
+            )
+            return protocol
 
         if self._get_config_value("readonly", project=project):
             protocol.add_error(
@@ -432,6 +518,12 @@ class JiraDefectClient(AbstractDefectClient):
                 f"Unknown project '{project}': {exc}", protocol_code=ProtocolCode.PROJECT_NOT_FOUND
             )
             return protocol
+        except (Unauthorized, NotFound) as exc:
+            protocol.add_general_error(
+                exc.message,
+                protocol_code=ProtocolCode.READ_ACCESS_ERROR,
+            )
+            return protocol
 
         try:
             issue = jira_client.fetch_issue(defect_id)
@@ -444,13 +536,14 @@ class JiraDefectClient(AbstractDefectClient):
                 protocol.add_general_error(
                     "No matching issues found to update", protocol_code=ProtocolCode.NO_DEFECT_FOUND
                 )
-                return protocol
-
-            jira_client.update_issue(project_key, issue, defect)
-            logger.info("Successfully updated issue '%s' in project '%s'", issue.key, project)
-            protocol.add_success(
-                issue.key, "Issue updated successfully", protocol_code=ProtocolCode.PUBLISH_SUCCESS
-            )
+            else:
+                jira_client.update_issue(project_key, issue, defect)
+                logger.info("Successfully updated issue '%s' in project '%s'", issue.key, project)
+                protocol.add_success(
+                    issue.key,
+                    "Issue updated successfully",
+                    protocol_code=ProtocolCode.PUBLISH_SUCCESS,
+                )
         except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
             logger.error("Failed to update Jira issues for project '%s': %s", project_key, exc)
             protocol.add_general_error(
@@ -547,7 +640,7 @@ class JiraDefectClient(AbstractDefectClient):
                     f"Defect '{defect_id}' could not be converted to detailed attributes: {exc}"
                 ) from exc
 
-        except (NotFound, ServerError):
+        except (NotFound, Unauthorized, ServerError):
             raise
         except Exception as exc:
             logger.error(
