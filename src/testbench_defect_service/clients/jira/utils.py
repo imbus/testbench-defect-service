@@ -7,6 +7,7 @@ import jira
 from jira import Issue
 from jira.resources import Project
 
+from testbench_defect_service.clients.jira.render_utils import build_rendered_field_html
 from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import (
     DefectID,
@@ -48,7 +49,10 @@ def create_defect_from_issue(issue: Issue, fields: list[dict[str, Any]]) -> Defe
     return DefectWithID(
         id=DefectID(root=str(issue.key)),
         title=issue.fields.summary,
-        description=issue.fields.description,
+        # description=issue.fields.description,
+        description=build_rendered_field_html(
+            issue, field_id="description", jira_server_url="https://linddrit.atlassian.net/"
+        ),
         reporter=_safe_display_name(issue.fields.creator),
         status=_safe_field_name(issue.fields.status),
         classification=_safe_field_name(issue.fields.issuetype),

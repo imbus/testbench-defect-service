@@ -309,10 +309,11 @@ class JiraDefectClient(AbstractDefectClient):
     def get_defects(self, project: str, sync_context: SyncContext) -> ProtocolledDefectSet:
         protocol = Protocol()
         defects: list[DefectWithID] = []
+        expand = "renderedFields"
         try:
             jql_query = str(self.config.defect_jql).format(project=self.projects[project].key)
             logger.debug("Fetching defects for project '%s' with JQL '%s'", project, jql_query)
-            issues = self.jira_client.fetch_issues_by_jql(jql_query)
+            issues = self.jira_client.fetch_issues_by_jql(jql_query, expand=expand)
             if not issues:
                 logger.info("No issues found for project '%s'", project)
                 protocol.add_general_error(
@@ -361,6 +362,7 @@ class JiraDefectClient(AbstractDefectClient):
     ) -> ProtocolledDefectSet:
         protocol = Protocol()
         defects: list[DefectWithID] = []
+        expand = "renderedFields"
         try:
             project_key = self.projects[project].key
         except KeyError as exc:
@@ -383,7 +385,9 @@ class JiraDefectClient(AbstractDefectClient):
             if not defect_identifier:
                 continue
             try:
-                issue = self.jira_client.fetch_issue(str(defect_identifier), fields="*all")
+                issue = self.jira_client.fetch_issue(
+                    str(defect_identifier), fields="*all", expand=expand
+                )
                 if issue is None:
                     logger.warning("Issue with id '%s' not found", defect_identifier)
                     protocol.add_warning(
@@ -611,7 +615,9 @@ class JiraDefectClient(AbstractDefectClient):
         try:
             project_key = self.projects[project].key
 
-            issue = self.jira_client.fetch_issue(defect_id, fields="*all", expand="changelog")
+            issue = self.jira_client.fetch_issue(
+                defect_id, fields="*all", expand="changelog,renderedFields"
+            )
             if issue is None:
                 logger.warning("Issue with id '%s' not found", defect_id)
                 raise NotFound(f"Issue with id '{defect_id}' not found in Jira")

@@ -33,6 +33,9 @@ class JiraProjectConfig(BaseModel):
     enable_shared_auth: bool | None = Field(
         None, description="Enable use of a shared service account for Jira authentication."
     )
+    rendered_fields: list[str] | None = Field(
+        None, description="Fields to render as HTML (e.g., description) for this project"
+    )
 
 
 class JiraDefectClientConfig(BaseModel):
@@ -191,6 +194,9 @@ class JiraDefectClientConfig(BaseModel):
     )
     supports_changes_timestamps: bool = Field(
         default=True, description="Whether the client supports change timestamps"
+    )
+    rendered_fields: list[str] = Field(
+        default_factory=list, description="Fields to render as HTML (e.g., description)"
     )
 
     timeout: int = Field(
