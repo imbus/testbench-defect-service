@@ -5,7 +5,7 @@ title: CLI reference
 
 # CLI Reference
 
-The Testbench Defect Service is controlled entirely from the command line. The main entry point is:
+The TestBench Defect Service is controlled entirely from the command line. The main entry point is:
 
 ```bash
 testbench-defect-service [COMMAND] [OPTIONS]

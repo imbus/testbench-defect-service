@@ -4,7 +4,7 @@ title: JSONL Client
 ---
 # JSONL Client
 
-The JSONL client is the default, zero-dependency backend for the Testbench Defect Service. It stores defects as [newline-delimited JSON](https://jsonlines.org) (`.jsonl`) files on the local file system.
+The JSONL client is the default, zero-dependency backend for the TestBench Defect Service. It stores defects as [newline-delimited JSON](https://jsonlines.org) (`.jsonl`) files on the local file system.
 
 ---
 

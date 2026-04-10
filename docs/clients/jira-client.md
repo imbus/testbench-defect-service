@@ -5,7 +5,7 @@ title: Jira Client
 
 # Jira Client
 
-The Jira client integrates the Testbench Defect Service with [Jira Cloud](https://www.atlassian.com/software/jira) and [Jira Data Center / Server](https://www.atlassian.com/enterprise/data-center/jira). It maps TestBench defect operations to Jira issue operations using the official `jira` Python library.
+The Jira client integrates the TestBench Defect Service with [Jira Cloud](https://www.atlassian.com/software/jira) and [Jira Data Center / Server](https://www.atlassian.com/enterprise/data-center/jira). It maps TestBench defect operations to Jira issue operations using the official `jira` Python library.
 
 ---
 
@@ -23,7 +23,7 @@ When the Jira client is active, defect CRUD operations performed by TestBench ar
 
 ---
 
-## Prerequisites
+## Requirements
 
 The Jira client is an **optional** component. Install it with:
 

@@ -49,7 +49,7 @@ curl -u "admin:mypassword" http://127.0.0.1:8030/projects
 
 ### 1. Install optional dependencies (if needed)
 
-Choose the extras for your backend. See [Installation](installation.md#available-extras) for available options.
+Choose the extras for your backend. See [Installation](installation.md#from-pypi-online-recommended) for available options.
 
 ### 2. Create `config.toml`
 
@@ -99,9 +99,19 @@ curl -u "admin:mypassword" http://127.0.0.1:8030/projects
 Use `testbench-defect-service configure` to update specific parts of your configuration later without starting from scratch.
 :::
 
+## API documentation endpoints
+
+Once the service is running, these endpoints are available without authentication:
+
+| Endpoint | Description |
+|----------|-------------|
+| `/docs` | Interactive Swagger UI |
+| `/docs/openapi.json` | OpenAPI specification (JSON) |
+| `/openapi.yaml` | OpenAPI specification (YAML) |
+
 ## Next steps
 
 - Customize the service → [Configuration](../configuration.md)
 - Learn about clients → [Clients overview](../clients/index.md)
 - Connect TestBench → [TestBench Integration](../testbench-integration.md)
-- Explore all CLI options → [CLI commands](../cli.md)
+- Explore all CLI options → [CLI reference](../cli.md)

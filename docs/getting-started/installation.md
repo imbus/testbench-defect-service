@@ -2,107 +2,156 @@
 sidebar_position: 1
 title: Installation
 ---
+
 # Installation
 
-## Requirements
+There are two options depending on whether you want to install Python or not:
 
-- **Python 3.10 or higher** — [Download Python](https://www.python.org/downloads/)
-- **pip** — included with Python 3.4+; verify with `pip --version`
+- **[Option 1: Ready-to-use executable](#option-1-ready-to-use-executable)** (**No Python required**. Download a zip, extract, run. Best for Windows service deployments.)
+- **[Option 2: Install with Python](#option-2-install-with-python)** (For users who have Python or are installing it. Managed via pip.)
+
 ---
 
-## Option 1: Install from PyPI *(Recommended)*
+## Option 1: Ready-to-use executable
 
-Install the latest release directly from [PyPI](https://pypi.org/project/testbench-defect-service/):
+The executable is a self-contained zip archive. No Python, no pip, no virtual environment needed. Both clients (JSONL and Jira) are included.
+
+**1. Download the zip**
+
+Either use the zip you received directly, or download it from the [GitHub releases page](https://github.com/imbus/testbench-defect-service/releases) — expand **Assets** and pick the file for your platform (e.g. `testbench-defect-service-x.y.z-win_amd64.zip`).
+
+**2. Extract to a permanent location**
+
+Unzip to a folder you won't move later, for example `C:\TestBenchDefectService\`:
+
+```
+C:\TestBenchDefectService\
+  testbench-defect-service.exe
+  <support files>
+```
+
+**3. Verify**
+
+```cmd
+C:\TestBenchDefectService\testbench-defect-service.exe --version
+```
+
+---
+
+## Option 2: Install with Python
+
+Use this option if you have Python installed or are about to install it.
+
+### Requirements
+
+- **Python 3.10–3.14** — 3.13 recommended ([download](https://www.python.org/downloads/))
+- **pip** (included with Python)
+
+### Set up a virtual environment
+
+:::note
+For [From source](#from-source-developers): skip this step and create the virtual environment inside the cloned repository instead (shown there).
+:::
+
+A virtual environment keeps the installation isolated and provides a stable, predictable path to the executable. Navigate to the directory where you want the service to live, then run:
+
+```bash
+python -m venv .venv
+```
+
+```bash
+# Windows
+.venv\Scripts\activate
+
+# Linux / macOS
+source .venv/bin/activate
+```
+
+---
+
+### From PyPI *(online, recommended)*
 
 ```bash
 pip install testbench-defect-service
 ```
 
-To include Jira support:
+The base install includes the [JSONL client](../clients/jsonl-client.md). Add extras for other clients:
 
+| Client | Install command |
+|--------|-----------------|
+| [JSONL](../clients/jsonl-client.md) *(default)* | `pip install testbench-defect-service` |
+| [Jira](../clients/jira-client.md) | `pip install testbench-defect-service[jira]` |
+
+Verify:
 ```bash
-pip install "testbench-defect-service[jira]"
+testbench-defect-service --version
 ```
 
 ---
 
-## Option 2: Install from a wheel package *(Offline)*
+### From a wheel file *(offline)*
 
-Use this option when installing on a machine without internet access, for example when you received an offline installation package (`.zip`).
-
-**1. Extract the zip:**
-
-Unzip the provided package to a local folder, e.g. `C:\install\`:
-
-```
-C:\install\
-  testbench_defect_service-x.y.z-py3-none-any.whl
-  <dependency wheels ...>
-```
-
-**2. Install from the local folder:**
+Use this if you received a `.whl` file or downloaded one from the [GitHub releases page](https://github.com/imbus/testbench-defect-service/releases) (look for `testbench_defect_service-x.y.z-py3-none-any.whl` in the Assets).
 
 ```bash
-pip install --no-index --find-links "C:\install" testbench-defect-service
+pip install testbench_defect_service-x.y.z-py3-none-any.whl
 ```
 
-To include optional extras, add them as usual — pip will resolve them from the local folder:
+With optional extras:
 
 ```bash
-pip install --no-index --find-links "C:\install" testbench-defect-service[jira]
+pip install "testbench_defect_service-x.y.z-py3-none-any.whl[jira]"
 ```
 
-:::note
-The offline package is platform- and Python-version-specific. Make sure you use the package that matches your system (e.g. `win_amd64`, `py310`).
+Verify:
+
+```bash
+testbench-defect-service --version
+```
+
+:::note Fully offline install
+By default pip still fetches dependencies from PyPI. To install on a machine with no internet access:
+
+**On a machine with internet access**, download the wheel and all its dependencies into a local folder:
+
+```bash
+pip download "testbench_defect_service-x.y.z-py3-none-any.whl[jira]" -d ./wheels
+```
+
+This saves every required wheel into `./wheels/`. Copy that folder together with the `.whl` file to the target machine.
+
+**On the target machine**, install entirely from the local folder:
+
+```bash
+pip install --no-index --find-links ./wheels "testbench_defect_service-x.y.z-py3-none-any.whl[jira]"
+```
 :::
 
 ---
 
-## Option 3: Install from Source *(Development)*
-
-Clone the repository and install in editable mode:
+### From source *(developers)*
 
 ```bash
 git clone https://github.com/imbus/testbench-defect-service.git
-cd defect-service-python
-pip install -e ".[dev,jira]"
+cd testbench-defect-service
 ```
 
-Available extras:
+Create and activate the virtual environment inside the cloned repository. See [Set up a virtual environment](#set-up-a-virtual-environment).
 
-| Extra | Packages installed | When to use |
-|---|---|---|
-| *(default)* | — | Uses JSONL files as data source; included in base install |
-| `jira` | `jira`, `beautifulsoup4` | Required for Jira backend |
-| `dev` | `ruff`, `pre-commit`, `invoke`, `mypy`, `flit`, `wheel`, `robotframework`, `pytest`, … | Development, linting, and testing |
-
----
-
-## Verifying the Installation
-
-After installation, verify the CLI is available:
+Install with all clients and development dependencies:
 
 ```bash
-testbench-defect-service --help
+pip install -e .[jira,dev]
 ```
 
-Expected output:
+Verify:
 
-```
-Usage: testbench-defect-service [OPTIONS] COMMAND [ARGS]...
-
-Options:
-  --help  Show this message and exit.
-
-Commands:
-  configure        Create or update the service configuration interactively.
-  init             Initialize a new service configuration interactively.
-  set-credentials  Set the service username and password.
-  start            Start the defect service.
+```bash
+testbench-defect-service --version
 ```
 
 ---
 
-## Next Step
+## Next steps
 
-→ [Quick Start](quickstart.md)
+Head to the [Quickstart](quickstart.md) to configure and start the service.

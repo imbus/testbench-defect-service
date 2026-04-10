@@ -5,7 +5,7 @@ title: Configuration
 
 # Configuration
 
-The Testbench Defect Service is configured through a single TOML file (`config.toml` in the working directory by default). This page documents every available option.
+The TestBench Defect Service is configured through a single TOML file (`config.toml` in the working directory by default). This page documents every available option.
 
 :::tip
 Use the CLI wizards instead of editing the file by hand — they validate your input and prevent syntax errors:
@@ -115,6 +115,27 @@ ssl_ca_cert = "certs/ca.crt"   # optional — enables mTLS
 
 ---
 
+## Server Process Settings
+
+**`[testbench-defect-service.server]`**
+
+Controls how Sanic spawns and manages its worker process. In most cases you can leave this section out and rely on the defaults.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `single_process` | boolean | `true` | Run in single-process mode. Required when using mTLS. Set to `false` to enable multi-worker throughput. |
+| `keep_alive_timeout` | integer | `5` | Seconds an idle HTTP keep-alive connection is held open waiting for the next request before being closed. A shorter value reduces the number of open connections that can delay shutdown. |
+| `run_kwargs` | table | `{}` | Raw keyword arguments forwarded verbatim to Sanic's `run()` call. Use for advanced Sanic tuning not exposed by other settings. |
+
+```toml
+[testbench-defect-service.server]
+single_process = false
+keep_alive_timeout = 3
+run_kwargs = { workers = 4 }
+```
+
+---
+
 ## Logging
 
 ### Console
@@ -194,20 +215,20 @@ Each `start` command loads exactly one config file and binds to one port. To ser
 `jsonl_config.toml`
 ```toml
 [testbench-defect-service]
-reader_class = "testbench_defect_service.clients.JsonlDefectClient"
+client_class = "testbench_defect_service.clients.JsonlDefectClient"
 port = 8030
 
-[testbench-defect-service.reader_config]
+[testbench-defect-service.client_config]
 # Jsonl-specific settings ...
 ```
 
 `jira_config.toml`
 ```toml
 [testbench-defect-service]
-reader_class = "testbench_defect_service.clients.JiraDefectClient"
+client_class = "testbench_defect_service.clients.JiraDefectClient"
 port = 8031
 
-[testbench-defect-service.reader_config]
+[testbench-defect-service.client_config]
 # Jira-specific settings ...
 ```
 

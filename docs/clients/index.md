@@ -4,7 +4,7 @@ title: Clients
 ---
 # Clients
 
-The Testbench Defect Service uses a pluggable client architecture. A **client** is a Python class that connects the service's generic defect API to a specific backend — such as a file system or a project management tool.
+The TestBench Defect Service uses a pluggable client architecture. A **client** is a Python class that connects the service's generic defect API to a specific backend — such as a file system or a project management tool.
 
 ---
 

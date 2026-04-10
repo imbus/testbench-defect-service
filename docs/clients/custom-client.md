@@ -5,7 +5,7 @@ title: Custom Client
 
 # Custom Client
 
-The Testbench Defect Service supports custom backends through a pluggable client interface. Any Python class that extends `AbstractDefectClient` and implements the required methods can be used as a drop-in replacement for the built-in JSONL or Jira clients.
+The TestBench Defect Service supports custom backends through a pluggable client interface. Any Python class that extends `AbstractDefectClient` and implements the required methods can be used as a drop-in replacement for the built-in JSONL or Jira clients.
 
 Typical use cases:
 

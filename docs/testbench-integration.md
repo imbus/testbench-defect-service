@@ -4,7 +4,7 @@ title: TestBench Integration
 ---
 # TestBench Integration
 
-This page explains how to connect TestBench to the running Testbench Defect Service.
+This page explains how to connect TestBench to the running TestBench Defect Service.
 
 ---
 
@@ -14,9 +14,9 @@ TestBench communicates with the Defect Service through the **DMProxy** (Defect M
 
 ---
 
-## Prerequisites
+## Requirements
 
-- Testbench Defect Service is installed and running (see [Quick Start](getting-started/quickstart)).
+- TestBench Defect Service is installed and running (see [Quick Start](getting-started/quickstart)).
 - You know the host and port the service is listening on.
 - You have set credentials with `testbench-defect-service set-credentials`.
 
