@@ -18,7 +18,7 @@ test/unit/
 
 ## Running Tests
 
-### Prerequisites
+### Requirements
 
 Install test dependencies:
 

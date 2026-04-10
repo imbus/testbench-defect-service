@@ -1,11 +1,11 @@
-﻿# Testbench Defect Service
+﻿# TestBench Defect Service
 [![PyPI version](https://img.shields.io/pypi/v/testbench-defect-service)](https://pypi.org/project/testbench-defect-service/)
 [![Python versions](https://img.shields.io/pypi/pyversions/testbench-defect-service)](https://pypi.org/project/testbench-defect-service/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 ## Introduction
 
-[imbus TestBench](https://www.testbench.com/) can create and synchronise bug reports with external defect tracking systems, but requires a specific HTTP interface to do so. The **Testbench Defect Service** provides exactly that interface.
+[imbus TestBench](https://www.testbench.com/) can create and synchronise bug reports with external defect tracking systems, but requires a specific HTTP interface to do so. The **TestBench Defect Service** provides exactly that interface.
 
 It is a lightweight, self-hosted REST API you run alongside TestBench. TestBench talks to this service, and the service translates those calls into operations against your actual defect tracker.
 
