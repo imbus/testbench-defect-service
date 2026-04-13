@@ -4,6 +4,7 @@ from typing import Any
 
 from jira import JIRA, JIRAError
 
+from testbench_defect_service.clients.jira.html_to_jira import convert_html_to_jira_markup
 from testbench_defect_service.clients.jira.utils import FieldInfo
 from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import Defect
@@ -49,7 +50,13 @@ class DefectToJiraMapper:
 
         # Standard fields
         self._set_field(fields, "summary", str(defect.title) or "", allowed)
-        self._set_field(fields, "description", str(defect.description) or "", allowed)
+        self._set_field(
+            fields,
+            "description",
+            str(convert_html_to_jira_markup(defect.description)) or "",
+            allowed,
+        )
+
         self._set_field(fields, "priority", str(defect.priority), allowed)
         self._set_field(fields, "issuetype", str(defect.classification), allowed)
         if defect.reporter:
@@ -59,7 +66,6 @@ class DefectToJiraMapper:
                 defect.reporter,
                 allowed,
             )
-
         return {k: v for k, v in fields.items() if v is not None}
 
     def _set_field(
