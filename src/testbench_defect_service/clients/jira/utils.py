@@ -39,7 +39,9 @@ def extract_valuetype_from_issue_field(field: dict[str, Any]) -> ValueType:
     return ValueType.STRING
 
 
-def create_defect_from_issue(issue: Issue, fields: list[dict[str, Any]]) -> DefectWithID:
+def create_defect_from_issue(
+    issue: Issue, fields: list[dict[str, Any]], jira_server_url: str
+) -> DefectWithID:
     """Convert a Jira *issue* into a ``DefectWithID`` model.
 
     Args:
@@ -51,7 +53,7 @@ def create_defect_from_issue(issue: Issue, fields: list[dict[str, Any]]) -> Defe
         title=issue.fields.summary,
         # description=issue.fields.description,
         description=build_rendered_field_html(
-            issue, field_id="description", jira_server_url="https://linddrit.atlassian.net/"
+            issue, field_id="description", jira_server_url=jira_server_url
         ),
         reporter=_safe_display_name(issue.fields.creator),
         status=_safe_field_name(issue.fields.status),

@@ -325,7 +325,11 @@ class JiraDefectClient(AbstractDefectClient):
 
             for issue in issues:
                 try:
-                    defects.append(create_defect_from_issue(issue, fields))
+                    defects.append(
+                        create_defect_from_issue(
+                            issue, fields, jira_server_url=self.config.server_url
+                        )
+                    )
                 except (ValueError, KeyError, AttributeError, TypeError) as exc:
                     logger.error(
                         "Failed to convert issue '%s' to defect", getattr(issue, "key", "<unknown>")
@@ -381,6 +385,8 @@ class JiraDefectClient(AbstractDefectClient):
         logger.info("Processing batch of %d defect IDs for project '%s'", len(defect_ids), project)
         fields = self.jira_client.fetch_all_custom_fields(project=project_key)
         for defect_id in defect_ids:
+            if defect_id is None:
+                continue
             defect_identifier = defect_id.root
             if not defect_identifier:
                 continue
@@ -398,7 +404,9 @@ class JiraDefectClient(AbstractDefectClient):
                     continue
 
                 try:
-                    defect = create_defect_from_issue(issue, fields)
+                    defect = create_defect_from_issue(
+                        issue, fields, jira_server_url=self.config.server_url
+                    )
                     defects.append(defect)
                 except (ValueError, KeyError, AttributeError, TypeError) as exc:
                     logger.error(
@@ -632,7 +640,9 @@ class JiraDefectClient(AbstractDefectClient):
             ]
 
             try:
-                defect = create_defect_from_issue(issue, fields_list)
+                defect = create_defect_from_issue(
+                    issue, fields_list, jira_server_url=self.config.server_url
+                )
                 return self._build_defect_with_attributes(
                     defect=defect,
                     project=project,
