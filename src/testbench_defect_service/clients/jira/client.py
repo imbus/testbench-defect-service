@@ -385,8 +385,6 @@ class JiraDefectClient(AbstractDefectClient):
         logger.info("Processing batch of %d defect IDs for project '%s'", len(defect_ids), project)
         fields = self.jira_client.fetch_all_custom_fields(project=project_key)
         for defect_id in defect_ids:
-            if defect_id is None:
-                continue
             defect_identifier = defect_id.root
             if not defect_identifier:
                 continue

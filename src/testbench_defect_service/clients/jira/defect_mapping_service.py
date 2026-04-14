@@ -53,7 +53,7 @@ class DefectToJiraMapper:
         self._set_field(
             fields,
             "description",
-            str(convert_html_to_jira_markup(defect.description)) or "",
+            convert_html_to_jira_markup(str(defect.description)) or "",
             allowed,
         )
 

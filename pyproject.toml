@@ -61,6 +61,7 @@ dev = [
   "robotframework-robocop>=5.8.1",
   "robotframework-tidy>=4.16.0",
   "requests>=2.32.3",
+  "types-requests>=2.32.0",
   "pytest>=9.0.2",
 ]
 
