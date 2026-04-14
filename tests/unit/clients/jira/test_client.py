@@ -630,14 +630,11 @@ class TestCreateDefect:
         defect = _make_defect()
         mock_issue = Mock()
         mock_issue.key = "TEST-99"
-        with patch("testbench_defect_service.clients.jira.client.JiraClient") as mock_jira:
-            per_user = Mock()
-            per_user.create_issue.return_value = mock_issue
-            mock_jira.return_value = per_user
+        mock_jira_client_instance.jira_client.create_issue.return_value = mock_issue
 
-            result = mock_jira_client_instance.create_defect(
-                "Test Project (TEST)", defect, sync_context
-            )
+        result = mock_jira_client_instance.create_defect(
+            "Test Project (TEST)", defect, sync_context
+        )
         assert result.value == "TEST-99"
         assert result.protocol.successes
 
@@ -684,6 +681,9 @@ class TestCreateDefect:
         assert result.value == "TEST-1"
 
     def test_uses_per_user_auth_by_default(self, mock_jira_client_instance, sync_context):
+        mock_jira_client_instance.config.projects["Test Project (TEST)"] = JiraProjectConfig(
+            enable_shared_auth=False
+        )
         defect = _make_defect()
         with patch("testbench_defect_service.clients.jira.client.JiraClient") as mock_jira:
             per_user_client = Mock()
@@ -878,9 +878,10 @@ class TestGetUserDefinedAttributes:
         assert "Environment" in names
         assert "Team" in names
 
-    def test_raises_not_found_when_no_project(self, mock_jira_client_instance):
-        with pytest.raises(NotFound):
-            mock_jira_client_instance.get_user_defined_attributes(None)
+    def test_returns_empty_for_no_project(self, mock_jira_client_instance):
+        mock_jira_client_instance.jira_client.fetch_all_custom_fields.return_value = []
+        result = mock_jira_client_instance.get_user_defined_attributes(None)
+        assert result == []
 
     def test_raises_not_found_for_unknown_project(self, mock_jira_client_instance):
         with pytest.raises(NotFound):

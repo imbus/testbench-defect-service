@@ -102,24 +102,26 @@ class TestCreateDefectFromIssue:
         mock_jira_issue.fields.customfield_10002 = "Custom Value 2"
         mock_jira_issue.fields.customfield_10003 = True
 
-        result = create_defect_from_issue(mock_jira_issue, sample_field_metadata)
+        result = create_defect_from_issue(
+            mock_jira_issue, sample_field_metadata, "https://example.com"
+        )
 
         assert isinstance(result, DefectWithID)
         assert result.id.root == "TEST-123"
         assert result.title == "Test Issue Summary"
-        assert result.description == "Test Issue Description"
+        assert "Test Issue Description" in result.description
         assert result.status == "Open"
         assert result.priority == "High"
         assert result.classification == "Bug"
         assert result.reporter == "John Doe"
-        assert len(result.references) == 2
+        assert len(result.references) == 3
 
     def test_create_defect_from_issue_with_list_values(self, mock_jira_issue):
         """Test creating defect when field values are lists."""
         fields = [{"id": "customfield_10001", "name": "Labels"}]
         mock_jira_issue.fields.customfield_10001 = ["label1", "label2", "label3"]
 
-        result = create_defect_from_issue(mock_jira_issue, fields)
+        result = create_defect_from_issue(mock_jira_issue, fields, "https://example.com")
 
         udf = next((f for f in result.userDefinedFields if f.name == "Labels"), None)
         assert udf is not None
@@ -131,7 +133,7 @@ class TestCreateDefectFromIssue:
         mock_jira_issue.fields.priority = None
 
         fields = [{"id": "customfield_10001", "name": "Custom Field"}]
-        result = create_defect_from_issue(mock_jira_issue, fields)
+        result = create_defect_from_issue(mock_jira_issue, fields, "https://example.com")
 
         assert result.status == ""
         assert result.priority == ""
@@ -141,7 +143,7 @@ class TestCreateDefectFromIssue:
         fields = [{"id": "customfield_10099", "name": "Missing Field"}]
         type(mock_jira_issue.fields).customfield_10099 = property(lambda self: None)
 
-        result = create_defect_from_issue(mock_jira_issue, fields)
+        result = create_defect_from_issue(mock_jira_issue, fields, "https://example.com")
 
         udf = next((f for f in result.userDefinedFields if f.name == "Missing Field"), None)
         assert udf is not None

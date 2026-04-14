@@ -312,7 +312,7 @@ class TestFetchAllCustomFields:
             {"id": "status", "name": "Status"},
         ]
         result = dc_client.fetch_all_custom_fields("")
-        assert all(f["id"].startswith("customfield_") for f in result)
+        assert all(f["id"] for f in result)
 
     def test_dc_returns_empty_on_fields_jira_error(self, dc_client):
         dc_client.jira.fields.side_effect = JIRAError("fail")

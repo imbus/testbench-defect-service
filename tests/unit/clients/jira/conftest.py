@@ -61,6 +61,13 @@ def mock_jira_issue() -> Mock:
     attachment2.content = "https://example.com/attachment2.pdf"
     issue.fields.attachment = [attachment1, attachment2]
 
+    # Mock rendered fields for build_rendered_field_html
+    issue.renderedFields = Mock()
+    issue.renderedFields.description = "<p>Test Issue Description</p>"
+
+    # Mock permalink
+    issue.permalink.return_value = "https://example.com/browse/TEST-123"
+
     return issue
 
 
