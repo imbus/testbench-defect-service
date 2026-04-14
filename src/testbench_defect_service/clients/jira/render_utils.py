@@ -222,7 +222,7 @@ def process_image_tags(
         if handle_attachment_image(img, src, issue, attachment_cache, jira_server_url):
             continue
 
-        if handle_remote_image(img, src, image_cache, issue, jira_server_url):
+        if handle_remote_image(img, src, image_cache, issue, jira_server_url, soup):
             continue
 
         # Unsupported
@@ -267,7 +267,12 @@ def apply_attachment_image(
 
 
 def handle_remote_image(
-    img, src: str, image_cache: dict[str, str | None], issue: Issue, jira_server_url: str
+    img,
+    src: str,
+    image_cache: dict[str, str | None],
+    issue: Issue,
+    jira_server_url: str,
+    soup: BeautifulSoup,
 ) -> bool:
     # Normalize relative URLs
     if is_relative_url(src):
@@ -280,6 +285,10 @@ def handle_remote_image(
     if src in image_cache:
         if image_cache[src]:
             img["src"] = image_cache[src]
+            if "emoticon" in (img.attrs.pop("class", None) or []):
+                span = soup.new_tag("span")
+                span["class"] = Path(urlparse(src).path).stem
+                img.wrap(span)
         return True
 
     # Try to inline
@@ -287,12 +296,20 @@ def handle_remote_image(
         data_uri = fetch_image_as_data_uri(issue, src)
         image_cache[src] = data_uri
         if data_uri:
+            if "emoticon" in (img.attrs.pop("class", None) or []):
+                span = soup.new_tag("span")
+                span["class"] = Path(urlparse(src).path).stem
+                img.wrap(span)
             img["src"] = data_uri
             return True
 
     # Use remote URL directly
     image_cache[src] = None
     img["src"] = src
+    if "emoticon" in (img.attrs.pop("class", None) or []):
+        span = soup.new_tag("span")
+        span["class"] = Path(urlparse(src).path).stem
+        img.wrap(span)
     return True
 
 

@@ -1,10 +1,34 @@
 import re
+from enum import Enum
 
 from bs4 import BeautifulSoup, NavigableString
 
 
 class _HtmlToJiraConverter:
     """Converts HTML to Jira wiki markup."""
+
+    class Emoticons(Enum):
+        smile = ":)"
+        sad = ":("
+        tongue = ":P"
+        biggrin = ":D"
+        wink = ";)"
+        thumbs_up = "(y)"
+        thumbs_down = "(n)"
+        information = "(i)"
+        check = "(/)"
+        error = "(x)"
+        warning = "(!)"
+        forbidden = "(-)"
+        add = "(+)"
+        help_16 = "(?)"
+        lightbulb_on = "(on)"
+        lightbulb = "(off)"
+        star_yellow = "(*y)"
+        star_red = "(*r)"
+        star_green = "(*g)"
+        star_blue = "(*b)"
+        flag = "(flag)"
 
     def convert(self, html_content: str) -> str:
         if not html_content:
@@ -101,10 +125,16 @@ class _HtmlToJiraConverter:
 
     def _span(self, tag) -> str:
         style = tag.get("style", "")
+        classes = tag.get("class", None)
         if "underline" in style:
             return self._underline(tag)
         if "line-through" in style:
             return self._strikethrough(tag)
+        if classes:
+            emoticon = set(classes) & {str(emoticon.name) for emoticon in self.Emoticons}
+            for emote in emoticon:
+                return f"{(self.Emoticons[emote].value)} "
+
         return self._process_node(tag)
 
     def _paragraph(self, tag) -> str:
