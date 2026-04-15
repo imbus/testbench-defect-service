@@ -188,7 +188,7 @@ def ask_for_separate_config(client_type: str, existing_path: Path | None = None)
     """Ask user if they want to use a separate configuration file.
 
     Args:
-        client_type: The type of client (jsonl, excel, jira, custom)
+        client_type: The type of client (jsonl, jira, custom)
         existing_path: Path to existing separate config file if any
 
     Returns:
@@ -318,7 +318,6 @@ def configure_client_only(config_path: Path):
             "Select client type:",
             choices=[
                 questionary.Choice("📄 JSONL Files", "jsonl"),
-                questionary.Choice("📊 Excel/CSV Files", "excel"),
                 questionary.Choice("🔗 Jira", "jira"),
                 questionary.Choice("⚙️  Custom Client", "custom"),
             ],
@@ -541,7 +540,6 @@ def run_full_wizard(config_path: Path):  # noqa: C901, PLR0912, PLR0915
         "Where are your defects stored?",
         choices=[
             questionary.Choice("📄 JSONL Files (lightweight, file-based storage)", "jsonl"),
-            questionary.Choice("📊 Excel/CSV Files (spreadsheet-based storage)", "excel"),
             questionary.Choice("🔗 Jira (connect to Atlassian Jira)", "jira"),
             questionary.Choice("⚙️  Custom Client (your own implementation)", "custom"),
         ],
