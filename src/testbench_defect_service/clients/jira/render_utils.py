@@ -266,6 +266,20 @@ def apply_attachment_image(
     img["src"] = build_absolute_jira_url(fallback_url, jira_server_url)
 
 
+def _wrap_emoticon_if_needed(img, src: str, soup: BeautifulSoup) -> None:
+    """Wrap an emoticon <img> in a <span> with the image stem as its class and src as data-src."""
+    if "emoticon" in (img.attrs.pop("class", None) or []):
+        span = soup.new_tag("span")
+        span["class"] = Path(urlparse(src).path).stem
+        img.wrap(span)
+    elif img.parent and img.parent.name == "span":
+        img.parent["data-src"] = src
+    else:
+        span = soup.new_tag("span")
+        span["class"] = "image-wrap"
+        img.parent["data-src"] = src
+
+
 def handle_remote_image(
     img,
     src: str,
@@ -285,10 +299,7 @@ def handle_remote_image(
     if src in image_cache:
         if image_cache[src]:
             img["src"] = image_cache[src]
-            if "emoticon" in (img.attrs.pop("class", None) or []):
-                span = soup.new_tag("span")
-                span["class"] = Path(urlparse(src).path).stem
-                img.wrap(span)
+            _wrap_emoticon_if_needed(img, src, soup)
         return True
 
     # Try to inline
@@ -296,20 +307,14 @@ def handle_remote_image(
         data_uri = fetch_image_as_data_uri(issue, src)
         image_cache[src] = data_uri
         if data_uri:
-            if "emoticon" in (img.attrs.pop("class", None) or []):
-                span = soup.new_tag("span")
-                span["class"] = Path(urlparse(src).path).stem
-                img.wrap(span)
+            _wrap_emoticon_if_needed(img, src, soup)
             img["src"] = data_uri
             return True
 
     # Use remote URL directly
     image_cache[src] = None
     img["src"] = src
-    if "emoticon" in (img.attrs.pop("class", None) or []):
-        span = soup.new_tag("span")
-        span["class"] = Path(urlparse(src).path).stem
-        img.wrap(span)
+    _wrap_emoticon_if_needed(img, src, soup)
     return True
 
 

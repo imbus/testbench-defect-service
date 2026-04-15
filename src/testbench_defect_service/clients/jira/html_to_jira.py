@@ -134,6 +134,8 @@ class _HtmlToJiraConverter:
             emoticon = set(classes) & {str(emoticon.name) for emoticon in self.Emoticons}
             for emote in emoticon:
                 return f"{(self.Emoticons[emote].value)} "
+        if "image-wrap" in classes:
+            return f"!{tag.get('data-src')}]!"
 
         return self._process_node(tag)
 
