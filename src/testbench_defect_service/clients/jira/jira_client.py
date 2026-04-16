@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import urllib3
 from jira import JIRA, Issue, JIRAError
 from jira.resources import Field, Project
 from sanic import NotFound
@@ -22,6 +23,8 @@ class JiraClient:
     def __init__(self, config: JiraDefectClientConfig, principal: Login | None = None):
         self.config = config
         self._options: dict[str, Any] = {"verify": self.config.ssl_verify}
+        if self.config.ssl_verify is False:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         if self.config.client_cert is not None:
             self._options["client_cert"] = self.config.client_cert
         if principal:

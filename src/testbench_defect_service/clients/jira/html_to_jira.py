@@ -135,7 +135,9 @@ class _HtmlToJiraConverter:
             for emote in emoticon:
                 return f"{(self.Emoticons[emote].value)} "
         if "image-wrap" in classes:
-            return f"!{tag.get('data-src')}]!"
+            if tag.get("data-src", None):
+                return f"!{tag.get('data-src', None)}!"
+            return self._process_node(tag)
 
         return self._process_node(tag)
 
@@ -226,12 +228,40 @@ class _HtmlToJiraConverter:
         pre_content = pre.get_text() if pre else ""
         return f"\n{{noformat}}\n{pre_content.strip()}\n{{noformat}}\n"
 
+    def _parse_css(self, style: str) -> dict:
+        css = {}
+        for declaration in style.split(";"):
+            if ":" in declaration:
+                prop, _, value = declaration.partition(":")
+                css[prop.strip().lower()] = value.strip()
+        return css
+
     def _div_panel(self, tag) -> str:
         title_div = tag.find("div", class_="panelHeader")
         content_div = tag.find("div", class_="panelContent")
-        title_str = f"title={title_div.get_text().strip()}" if title_div else ""
+
+        params = []
+        if title_div and (title_text := title_div.get_text().strip()):
+            params.append(f"title={title_text}")
+
+        css = self._parse_css(tag.get("style", ""))
+        if border_style := css.get("border-style"):
+            params.append(f"borderStyle={border_style}")
+        if border_color := css.get("border-color"):
+            params.append(f"borderColor={border_color}")
+        if border_width := css.get("border-width"):
+            params.append(f"borderWidth={border_width}")
+        if bg_color := css.get("background-color"):
+            params.append(f"bgColor={bg_color}")
+
+        if title_div:
+            title_css = self._parse_css(title_div.get("style", ""))
+            if title_bg_color := title_css.get("background-color"):
+                params.append(f"titleBGColor={title_bg_color}")
+
+        param_str = "|".join(params)
         content = self._process_node(content_div) if content_div else ""
-        return f"\n{{panel:{title_str}}}\n{content}\n{{panel}}\n"
+        return f"\n{{panel:{param_str}}}\n{content}\n{{panel}}\n"
 
 
 def convert_html_to_jira_markup(html_content: str) -> str:

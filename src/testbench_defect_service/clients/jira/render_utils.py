@@ -277,7 +277,8 @@ def _wrap_emoticon_if_needed(img, src: str, soup: BeautifulSoup) -> None:
     else:
         span = soup.new_tag("span")
         span["class"] = "image-wrap"
-        img.parent["data-src"] = src
+        span["data-src"] = src
+        img.wrap(span)
 
 
 def handle_remote_image(
