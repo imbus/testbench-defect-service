@@ -273,7 +273,7 @@ def _wrap_emoticon_if_needed(img, src: str, soup: BeautifulSoup) -> None:
         span["class"] = Path(urlparse(src).path).stem
         img.wrap(span)
     elif img.parent and img.parent.name == "span":
-        img.parent["data-src"] = src
+        img.parent["data-src"] = img.attrs.pop("alt", None)
     else:
         span = soup.new_tag("span")
         span["class"] = "image-wrap"
