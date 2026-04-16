@@ -47,8 +47,22 @@ client_config_path = "config.toml"
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `client_class` | string | — | Fully qualified Python class name of the backend client. See [Clients](clients/). |
-| `client_config_path` | string | — | Path to the TOML file containing the `client_config` section. Defaults to the same file. |
+| `client_class` | string | — | Identifies the client to load. See supported formats below. |
+| `client_config_path` | string | — | Path to the `.toml` config file containing the client config. When omitted, the `[testbench-defect-service.client_config]` section of the main config file is used. |
+
+#### `client_class` formats
+
+| Format | Example | Notes |
+|--------|---------|-------|
+| Built-in class name | `"JsonlDefectClient"` | Short name of any class in the built-in `testbench_defect_service.clients` package |
+| File path with extension | `"custom_client.py"` | Absolute path, or relative to the directory the service is started from |
+| File path without extension | `"custom_client"` | `.py` is appended automatically |
+| Module string | `"my_package.MyClient"` | Imported via `importlib`; the file must be on `PYTHONPATH` or in the working directory |
+| Full dotted module path | `"my_package.my_module.MyClient"` | Module and class can also be combined into one string |
+
+#### `client_config_path` formats
+
+The path should point to a `.toml` file containing the client configuration as raw key-value pairs (no TOML section headers). The path is resolved relative to the directory where the service is started.
 
 ### Network
 

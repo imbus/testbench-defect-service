@@ -21,9 +21,11 @@ At startup the service reads `client_class` from `config.toml`, imports the clas
 
 ---
 
-## Step 1 — Create the Config Model
+## Setup
 
-Each client defines its own configuration model as a [Pydantic](https://docs.pydantic.dev) `BaseModel`. The model is validated once at startup and passed to `__init__`.
+### 1. Define a config model
+
+Create a Pydantic `BaseModel` for your client's configuration. The service uses this class to validate the config before passing it to your client:
 
 ```python
 # my_client/config.py
@@ -35,11 +37,10 @@ class MyClientConfig(BaseModel):
     readonly: bool = False
     project_prefix: str = "PRJ"
 ```
----
 
-## Step 2 — Implement the Client Class
+### 2. Implement the client class
 
-Subclass `AbstractDefectClient`, set `CONFIG_CLASS`, and implement every abstract method.
+Subclass `AbstractDefectClient`, set `CONFIG_CLASS`, and implement all abstract methods. Your `__init__` receives an already-validated instance of your config model — you do not need to load or parse any config file yourself:
 
 ```python
 # my_client/client.py
@@ -144,7 +145,7 @@ class MyDefectClient(AbstractDefectClient):
         return body
 ```
 
-### Required Methods
+#### Required Methods
 
 | Method | Purpose |
 |---|---|
@@ -165,7 +166,7 @@ class MyDefectClient(AbstractDefectClient):
 | `after_sync(project, sync_type, sync_context)` | Post-sync hook (release locks, persist state). |
 | `correct_sync_results(project, results)` | Filter or adjust the proposed sync change set. |
 
-### Exception Conventions
+#### Exception Conventions
 
 Raise the following Sanic exceptions consistently so the service translates them into the correct HTTP responses:
 
@@ -175,38 +176,37 @@ Raise the following Sanic exceptions consistently so the service translates them
 | Backend or network error | `sanic.exceptions.ServerError` |
 | Invalid input data | `pydantic.ValidationError` |
 
----
-
-## Step 3 — Make the Class Importable
+### 3. Make the class importable
 
 Place your package somewhere on the Python path. The simplest options are:
 
-**Install as a package alongside the service:**
-
-```bash
-pip install ./my_client
-```
+**Use a single file** in the directory you run the service from. File-path loading requires no additional setup.
 
 **Add the directory to `PYTHONPATH`:**
 
 ```bash
-export PYTHONPATH="/path/to/my_client:$PYTHONPATH"
+export PYTHONPATH="/path/to/custom_client:$PYTHONPATH"
 ```
 
-**Use a local `src` layout** next to the service source — if you run from the same virtual environment, the package is already importable.
+**Install as a package alongside the service:**
+
+```bash
+pip install ./custom_client
+```
 
 :::warning
 The package must be importable from the same Python environment as the Defect Service. Installing it globally or in a different virtual environment will result in an `ImportError` at startup.
 :::
----
 
-## Step 4 — Configure the Service
+### 4. Configure the service
 
-Point `client_class` at your class and add the matching `client_config` section:
+Point `client_class` at your class and add the matching `client_config` section.
+
+**Using a file path (recommended for single-file clients):**
 
 ```toml
 [testbench-defect-service]
-client_class       = "my_client.client.MyDefectClient"
+client_class = "my_defect_client.py"
 
 [testbench-defect-service.client_config]
 server_url     = "https://backend.example.com"
@@ -214,6 +214,31 @@ api_key        = "secret"
 readonly       = false
 project_prefix = "PRJ"
 ```
+
+**Using a module string (recommended for packaged clients):**
+
+```toml
+[testbench-defect-service]
+client_class = "my_client.client.MyDefectClient"
+
+[testbench-defect-service.client_config]
+server_url     = "https://backend.example.com"
+api_key        = "secret"
+readonly       = false
+project_prefix = "PRJ"
+```
+
+The `client_class` option accepts several formats:
+
+| Format | Example |
+|--------|--------|
+| File path (with extension) | `"my_defect_client.py"` |
+| File path (without extension) | `"my_defect_client"` |
+| Absolute file path | `"/opt/clients/my_defect_client.py"` |
+| Module string | `"my_package.MyDefectClient"` |
+| Full dotted module path | `"my_package.my_module.MyDefectClient"` |
+
+File paths are resolved relative to the directory you start the service from. For file-path loading the class is discovered automatically — either by deriving the PascalCase class name from the filename (`my_defect_client.py` → `MyDefectClient`), or by scanning the file for the single `AbstractDefectClient` subclass defined in it.
 
 The `client_config` keys must match the fields defined in your `MyClientConfig` Pydantic model. The service validates the section on startup and raises an error if required fields are missing or have the wrong type.
 
