@@ -8,7 +8,7 @@ The TestBench Defect Service uses a pluggable client architecture. A **client** 
 
 ---
 
-## How Clients Work
+## How clients work
 
 When the service receives an API request from TestBench, it delegates the operation to the configured client. Every client implements the same interface (`AbstractDefectClient`), so swapping one client for another requires only a configuration change.
 
@@ -21,9 +21,9 @@ client_class = "testbench_defect_service.clients.JsonlDefectClient"
 
 ---
 
-## Available Clients
+## Available clients
 
-| Client | `client_class` value | Extra required | Description |
+| Client | `client_class` value | Extra dependencies | Description |
 |---|---|---|---|
 | [**JSONL**](jsonl-client.md) | `testbench_defect_service.clients.JsonlDefectClient` | — | File-based storage using newline-delimited JSON. No external service required. |
 | [**Jira**](jira-client.md) | `testbench_defect_service.clients.JiraDefectClient` | `[jira]` | Full integration with Jira Cloud or Jira Data Center / Server. |
@@ -31,7 +31,7 @@ client_class = "testbench_defect_service.clients.JsonlDefectClient"
 
 ---
 
-## Common Client Features
+## Common client features
 
 All clients share these capabilities:
 
@@ -44,22 +44,58 @@ All clients share these capabilities:
 
 ---
 
-## Choosing a Client
+## Choosing a client
+
+### JSONL client
 
 Use the [**JSONL client**](jsonl-client.md) when:
 - You want a simple, self-contained setup without external dependencies.
 - You are evaluating the service or running tests.
 - Your defect data lives in plain files that other tools also read.
 
+**Get started:** [JSONL Client](jsonl-client.md)
+
+---
+
+### Jira client
+
 Use the [**Jira client**](jira-client.md) when:
 - You manage defects in Jira Cloud or Jira Data Center.
 - You want TestBench to stay in sync with your existing Jira project.
 - You need Jira-specific features like workflow transitions, issue types, and custom fields.
 
+**Get started:** [Jira Client](jira-client.md)
+
 ---
 
-## Client Details
+### Custom client
 
-- [JSONL Client](jsonl-client.md)
-- [Jira Client](jira-client.md)
-- [Custom Client](custom-client.md)
+None of the built-in clients fit? You can create your own by subclassing `AbstractDefectClient`.
+
+**Learn how:** [Custom Client](custom-client.md)
+
+---
+
+## Configuring a client
+
+Set `client_class` in your `config.toml` and provide client-specific settings under `[testbench-defect-service.client_config]`:
+
+```toml
+# config.toml
+[testbench-defect-service]
+client_class = "JsonlDefectClient"   # or JiraDefectClient
+
+[testbench-defect-service.client_config]
+# client-specific settings go here
+```
+
+Alternatively, keep client settings in a separate file using `client_config_path`:
+
+```toml
+# config.toml
+[testbench-defect-service]
+client_class = "JiraDefectClient"
+client_config_path = "jira_config.toml"
+```
+
+See the [Configuration](../configuration.md#service-settings) reference for details.

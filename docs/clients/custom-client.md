@@ -15,7 +15,7 @@ Typical use cases:
 
 ---
 
-## How It Works
+## How it works
 
 At startup the service reads `client_class` from `config.toml`, imports the class by its fully qualified Python dotted path, and instantiates it with the validated `client_config` section. As long as your class is importable and implements the interface, no other changes to the service are required.
 
@@ -145,7 +145,7 @@ class MyDefectClient(AbstractDefectClient):
         return body
 ```
 
-#### Required Methods
+#### Required methods
 
 | Method | Purpose |
 |---|---|
@@ -166,7 +166,7 @@ class MyDefectClient(AbstractDefectClient):
 | `after_sync(project, sync_type, sync_context)` | Post-sync hook (release locks, persist state). |
 | `correct_sync_results(project, results)` | Filter or adjust the proposed sync change set. |
 
-#### Exception Conventions
+#### Exception conventions
 
 Raise the following Sanic exceptions consistently so the service translates them into the correct HTTP responses:
 

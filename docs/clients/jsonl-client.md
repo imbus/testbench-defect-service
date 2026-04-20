@@ -29,7 +29,7 @@ A single defect line looks like:
 
 ---
 
-## When to Use the JSONL Client
+## When to use the JSONL client
 
 - No external service or internet access required.
 - Defect data can be read and modified by any text editor or script.
@@ -42,6 +42,7 @@ A single defect line looks like:
 Add the following to your `config.toml` to enable the JSONL client:
 
 ```toml
+# config.toml
 [testbench-defect-service]
 client_class       = "testbench_defect_service.clients.JsonlDefectClient"
 client_config_path = "config.toml"
@@ -55,20 +56,20 @@ supports_changes_timestamps = true
 attributes                 = ["title", "status", "priority"]
 ```
 
-### Option Reference
+### Configuration settings
 
 **Identity**
 
-| Key | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `name` | string | No | `"JSONL"` | Display name shown in TestBench. Must match the name in the DMProxy properties file or during setup. |
-| `description` | string | No | `"JSONL client..."` | Short description displayed in `/settings`. |
+| Option | Type | Description | Required | Default |
+|--------|------|-------------|----------|---------|
+| `name` | String | Display name shown in TestBench. Must match the name in the DMProxy properties file or during setup. | No | `"JSONL"` |
+| `description` | String | Short description displayed in `/settings`. | No | `"JSONL client..."` |
 
 **Storage**
 
-| Key | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `defects_path` | string | **Yes** | — | Root directory for all defect files. Must exist before starting the service. |
+| Option | Type | Description | Required | Default |
+|--------|------|-------------|----------|---------|
+| `defects_path` | String | Root directory for all defect files. Must exist before starting the service. | **Yes** | — |
 
 :::warning
 The `defects_path` directory and all project subdirectories must be created manually before starting the service. The service will not start if the path does not exist.
@@ -76,32 +77,33 @@ The `defects_path` directory and all project subdirectories must be created manu
 
 **Query & Fields**
 
-| Key | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `attributes` | list | No | `["title", "status"]` | Defect fields to include in responses. Field names must match the keys used in the `.jsonl` records. |
-| `control_fields` | table | No | `{}` | Allowed values for controlled fields. See [Control Fields](#control-fields). |
+| Option | Type | Description | Required | Default |
+|--------|------|-------------|----------|---------|
+| `attributes` | List | Defect fields to include in responses. Field names must match the keys used in the `.jsonl` records. | No | `["title", "status"]` |
+| `control_fields` | Table | Allowed values for controlled fields. See [Control fields](#control-fields). | No | `{}` |
 
 **Behavior**
 
-| Key | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `readonly` | boolean | No | `false` | When `true`, all write operations (create, update, delete) are rejected. |
-| `supports_changes_timestamps` | boolean | No | `true` | Whether the client tracks modification timestamps. |
+| Option | Type | Description | Required | Default |
+|--------|------|-------------|----------|---------|
+| `readonly` | Boolean | When `true`, all write operations (create, update, delete) are rejected. | No | `false` |
+| `supports_changes_timestamps` | Boolean | Whether the client tracks modification timestamps. | No | `true` |
 
 **Advanced**
 
-| Key | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `commands` | table | No | — | Pre/post sync commands. See [Configuration](../configuration.md#prepost-sync-commands). |
-| `projects` | table | No | `{}` | Per-project configuration overrides. See [Per-Project Overrides](jsonl-client#per-project-overrides). |
+| Option | Type | Description | Required | Default |
+|--------|------|-------------|----------|---------|
+| `commands` | Table | Pre/post sync commands. See [Configuration](../configuration.md#prepost-sync-commands). | No | — |
+| `projects` | Table | Per-project configuration overrides. See [Per-project overrides](#per-project-overrides). | No | `{}` |
 
 ---
 
-## Control Fields
+## Control fields
 
 Control fields are attributes whose values are restricted to a predefined list. TestBench uses them to present validated dropdowns.
 
 ```toml
+# config.toml
 [testbench-defect-service.client_config.control_fields]
 status   = ["open", "in_progress", "blocked", "closed"]
 priority = ["low", "medium", "high", "critical"]
@@ -112,7 +114,7 @@ Any key-value pair is valid. The field names must match the names used in the `a
 
 ---
 
-## User-Defined Attributes (UDFs)
+## User-defined attributes (UDFs)
 
 Each project can have a `UserDefinedAttributes.json` file that describes custom fields:
 
@@ -132,18 +134,19 @@ Each project can have a `UserDefinedAttributes.json` file that describes custom 
 ```
 
 | Field | Type | Description |
-|---|---|---|
-| `name` | string | Field name as it appears in TestBench. |
+|-------|------|-------------|
+| `name` | String | Field name as it appears in TestBench. |
 | `valueType` | `"STRING"` \| `"BOOLEAN"` | Data type of the field. |
-| `mustField` | boolean | Whether the field is mandatory. |
+| `mustField` | Boolean | Whether the field is mandatory. |
 
 ---
 
-## Per-Project Overrides
+## Per-project overrides
 
 Any top-level option can be overridden for a specific project:
 
 ```toml
+# config.toml
 [testbench-defect-service.client_config.projects.ProjectA]
 readonly = true
 
@@ -158,7 +161,7 @@ The project key must match the subdirectory name under `defects_path`.
 
 ---
 
-## How Defect IDs Work
+## How defect IDs work
 
 IDs are auto-generated by the client when a defect is created. The format is `BUG-<n>` where `<n>` is an incrementing integer based on the current count of defects in the file.
 

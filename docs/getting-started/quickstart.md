@@ -18,10 +18,10 @@ testbench-defect-service init
 ```
 
 This single command walks you through:
-- Service settings (host, port, debug mode)
-- Credentials setup (username, password)
-- Client selection (JSONL or Jira)
-- Client-specific configuration
+- [Service settings](../configuration.md#service-settings) (host, port, debug mode)
+- [Credentials setup](../configuration.md#authentication) (username, password)
+- Client selection ([JSONL](../clients/jsonl-client.md) or [Jira](../clients/jira-client.md))
+- Client-specific configuration (see the chosen client's Configuration section)
 
 It creates a complete `config.toml` when finished.
 
@@ -38,7 +38,7 @@ Visit [http://127.0.0.1:8030/docs](http://127.0.0.1:8030/docs) to explore the AP
 ### 4. Quick API check
 
 ```bash
-curl -u "admin:mypassword" http://127.0.0.1:8030/projects
+curl -u "ADMIN_USERNAME:PASSWORD" http://127.0.0.1:8030/projects
 ```
 
 **That's it!** Your service is ready to use.
@@ -51,11 +51,12 @@ curl -u "admin:mypassword" http://127.0.0.1:8030/projects
 
 Choose the extras for your backend. See [Installation](installation.md#from-pypi-online-recommended) for available options.
 
-### 2. Create `config.toml`
+### 2. Create the configuration file
 
-Start from a minimal example. Here is one for the JSONL client:
+Create a new file called `config.toml` in the root directory of your installation. Start from a minimal example. Here is one for the JSONL client:
 
 ```toml
+# config.toml
 [testbench-defect-service]
 client_class = "testbench_defect_service.clients.JsonlDefectClient"
 host = "127.0.0.1"
@@ -90,14 +91,14 @@ Visit [http://127.0.0.1:8030/docs](http://127.0.0.1:8030/docs).
 ### 6. Quick API check
 
 ```bash
-curl -u "admin:mypassword" http://127.0.0.1:8030/projects
+curl -u "ADMIN_USERNAME:PASSWORD" http://127.0.0.1:8030/projects
 ```
-
----
 
 :::tip
 Use `testbench-defect-service configure` to update specific parts of your configuration later without starting from scratch.
 :::
+
+---
 
 ## API documentation endpoints
 

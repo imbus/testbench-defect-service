@@ -5,9 +5,9 @@ title: Introduction
 
 # Introduction
 
-[**TestBench Defect Service**](https://github.com/imbus/testbench-defect-service) is a lightweight, asynchronous REST API service that acts as a bridge between [Imbus TestBench](https://www.testbench.com/de/) and external defect tracking systems.
+[**TestBench Defect Service**](https://github.com/imbus/testbench-defect-service) is a lightweight, asynchronous REST API service that acts as a bridge between [imbus TestBench](https://www.testbench.com) and external defect tracking systems.
 
-## What It Does
+## What it does
 
 TestBench works with defect data — creating, reading, updating, and deleting bug reports during test execution. The Defect Service provides a unified API layer that allows TestBench to communicate with any supported backend without being tied to a specific tool.
 
@@ -17,7 +17,7 @@ At its core the service:
 - Translates those API calls into backend-specific operations.
 - Returns structured responses that TestBench can understand regardless of which backend is used.
 
-## Key Features
+## Features
 
 - **Pluggable clients** — swap the backend without touching TestBench configuration.
 - **Per-project configuration** — control fields, attributes, and sync commands can all be overridden per project.
@@ -27,6 +27,8 @@ At its core the service:
 - **Interactive setup wizard** — `init` and `configure` commands guide you through configuration interactively.
 
 ## Architecture
+
+The service runs a [Sanic](https://sanic.dev)-based HTTP server and delegates all domain logic to a configured `DefectClient` implementation.
 
 ```
 ┌──────────────────────────────────────┐
@@ -45,14 +47,12 @@ At its core the service:
      .jsonl files      Jira REST API
 ```
 
-The service is built on [Sanic](https://sanic.dev), a Python async web framework, and is designed to be fast and resource-efficient even when running alongside TestBench on the same machine.
-
 ## Supported Backends
 
 | Backend | Class | Description |
-|---|---|---|
+|---------|-------|-------------|
 | [**JSONL**](clients/jsonl-client.md) | `testbench_defect_service.clients.JsonlDefectClient` | Stores defects as newline-delimited JSON files on disk. No external dependencies. Ideal for local use and testing. |
-| [**Jira**](clients/jira-client.md)| `testbench_defect_service.clients.JiraDefectClient` | Full integration with Jira Cloud or Jira Data Center / Server. Requires the optional `[jira]` extra. |
+| [**Jira**](clients/jira-client.md) | `testbench_defect_service.clients.JiraDefectClient` | Full integration with Jira Cloud or Jira Data Center / Server. Requires the optional `[jira]` extra. |
 
 The backend is selected via the `client_class` configuration key and can be switched at any time by updating the config file and restarting the service.
 
@@ -61,5 +61,6 @@ The backend is selected via the `client_class` configuration key and can be swit
 - **New here?** Start with the [Installation](getting-started/installation.md) and [Quickstart](getting-started/quickstart.md) guides.
 - **Configuring the service?** See the [Configuration](configuration.md) page.
 - **Choosing a client?** Check the [Clients overview](clients/index.md), then dive into [JSONL](clients/jsonl-client.md) or [Jira](clients/jira-client.md).
-- **CLI reference?** See the [CLI reference](cli.md) page.
+- **Running as a Windows service?** See the [Windows service guide](windows-service-installation.md).
+- **CLI reference?** See the [CLI commands](cli.md) page.
 

@@ -1,11 +1,11 @@
 ---
 sidebar_position: 6
-title: CLI reference
+title: CLI Commands
 ---
 
-# CLI Reference
+# CLI Commands
 
-The TestBench Defect Service is controlled entirely from the command line. The main entry point is:
+The executable is `testbench-defect-service`. All commands support `--help` for detailed usage.
 
 ```bash
 testbench-defect-service [COMMAND] [OPTIONS]
@@ -13,7 +13,7 @@ testbench-defect-service [COMMAND] [OPTIONS]
 
 ---
 
-## Commands Overview
+## Commands overview
 
 | Command | Description |
 |---|---|
@@ -26,20 +26,25 @@ testbench-defect-service [COMMAND] [OPTIONS]
 
 ## `init`
 
-Creates a new `config.toml` interactively. The wizard walks you through all required settings and writes the result to disk.
+Create a new configuration file with an interactive wizard.
+
+The wizard guides you through:
+1. Service settings (host, port)
+2. Credential setup (username, password)
+3. Client selection (JSONL or Jira)
+4. Client-specific configuration
 
 ```bash
-testbench-defect-service init [OPTIONS]
+testbench-defect-service init [--path PATH]
 ```
 
 ### Options
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `--path PATH` | string | `config.toml` | Path where the configuration file should be written. |
-| `--help` | — | — | Show help and exit. |
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--path PATH` | Path to the configuration file to create | `config.toml` |
 
-### Example
+### Examples
 
 ```bash
 # Create config.toml in the current directory
@@ -49,18 +54,11 @@ testbench-defect-service init
 testbench-defect-service init --path /etc/defect-service/config.toml
 ```
 
-### What the wizard asks
-
-1. **Client selection** — choose JSONL or Jira.
-2. **Service settings** — host, port.
-3. **Client settings** — backend-specific options (e.g. `defects_path` for JSONL, `server_url` for Jira).
-4. **Credentials setup** — prompts to set a username and password immediately after file creation.
-
 ---
 
 ## `configure`
 
-Updates an existing configuration file. Can be run fully interactively (menu-driven) or targeted at a specific section with flags.
+Update an existing configuration file interactively.
 
 ```bash
 testbench-defect-service configure [OPTIONS]
@@ -68,42 +66,34 @@ testbench-defect-service configure [OPTIONS]
 
 ### Options
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `--path PATH` | string | `config.toml` | Path to the configuration file to update. |
-| `--full` | flag | — | Reconfigure all sections interactively. |
-| `--service-only` | flag | — | Update only the `[testbench-defect-service]` section. |
-| `--credentials-only` | flag | — | Update only the username/password. |
-| `--client-only` | flag | — | Update only the client configuration section. |
-| `--view` | flag | — | Print the current configuration to the console without modifying it. |
-| `--help` | — | — | Show help and exit. |
+| Option | Description |
+|--------|-------------|
+| `--path PATH` | Path to the configuration file to update (default: `config.toml`) |
+| `--full` | Run the full configuration wizard (skip the menu) |
+| `--service-only` | Configure service settings only (host, port, debug) |
+| `--credentials-only` | Configure credentials only (username, password) |
+| `--client-only` | Configure client settings only |
+| `--view` | View the current configuration |
 
 ### Examples
 
 ```bash
-# Interactive menu — choose what to update
+# Interactive menu (default)
 testbench-defect-service configure
 
-# Reconfigure everything
-testbench-defect-service configure --full
-
-# Only update service-level settings (host, port, debug …)
+# Update only service settings
 testbench-defect-service configure --service-only
 
-# View the current configuration
+# View current configuration
 testbench-defect-service configure --view
-
-# Operate on a config file at a custom path
-testbench-defect-service configure --path /etc/defect-service/config.toml --full
 ```
-
-> **Note:** `--full`, `--service-only`, `--credentials-only`, and `--client-only` are mutually exclusive.
 
 ---
 
 ## `set-credentials`
 
-Sets the service username and password. The password is hashed with bcrypt and stored in the config file — it is never stored in plain text.
+Set or update the HTTP Basic Auth credentials used to protect API endpoints.
+This command generates a secure password hash and salt and stores them in your configuration file.
 
 ```bash
 testbench-defect-service set-credentials [OPTIONS]
@@ -111,33 +101,31 @@ testbench-defect-service set-credentials [OPTIONS]
 
 ### Options
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `--config PATH` | string | `config.toml` | Path to the configuration file. |
-| `--username TEXT` | string | — | Username. If omitted, you will be prompted interactively. |
-| `--password TEXT` | string | — | Password. If omitted, you will be prompted interactively (input is hidden). |
-| `--help` | — | — | Show help and exit. |
+| Option | Description |
+|--------|-------------|
+| `--config PATH` | Path to the configuration file (default: `config.toml`) |
+| `--username TEXT` | Username (prompts interactively if not provided) |
+| `--password TEXT` | Password (prompts interactively if not provided) |
 
 ### Examples
 
 ```bash
-# Interactive prompts for both username and password
+# Interactive (prompts for credentials)
 testbench-defect-service set-credentials
 
-# Non-interactive (from a script)
+# Non-interactive
 testbench-defect-service set-credentials --username admin --password "s3cret!"
-
-# Update a config file at a custom path
-testbench-defect-service set-credentials --config /etc/defect-service/config.toml
 ```
 
-> **Security note:** Avoid passing passwords as command-line arguments in shared or audited environments, as they may appear in shell history. Prefer the interactive prompt or use an environment variable pipeline.
+:::warning Security
+Avoid passing passwords as command-line arguments in shared or audited environments, as they may appear in shell history. Prefer the interactive prompt or use an environment variable pipeline.
+:::
 
 ---
 
 ## `start`
 
-Starts the defect service. Reads the configuration file and launches the Sanic HTTP server.
+Start the defect service.
 
 ```bash
 testbench-defect-service start [OPTIONS]
@@ -145,74 +133,57 @@ testbench-defect-service start [OPTIONS]
 
 ### Options
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `--config PATH` | string | `config.toml` | Path to the configuration file. |
-| `--client-class TEXT` | string | — | Override `client_class` from the config file. Useful for testing. |
-| `--client-config PATH` | string | — | Override `client_config_path` from the config file. |
-| `--host HOST` | string | — | Override the `host` from the config file. |
-| `--port PORT` | integer | — | Override the `port` from the config file. |
-| `--dev` | flag | — | Enable Sanic development mode (auto-reload on file changes, extra debug output). |
-| `--ssl-cert PATH` | string | — | Path to a PEM certificate file. Enables HTTPS. |
-| `--ssl-key PATH` | string | — | Path to the PEM private key for the certificate. |
-| `--ssl-ca-cert PATH` | string | — | Path to a CA certificate for mutual TLS (mTLS). |
-| `--help` | — | — | Show help and exit. |
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--config PATH` | Path to the configuration file | `config.toml` |
+| `--client-class TEXT` | Client class name or module path (overrides config) | from config |
+| `--client-config PATH` | Path to client configuration file (overrides config) | from config |
+| `--host HOST` | Host to bind to | `127.0.0.1` |
+| `--port PORT` | Port to listen on | `8030` |
+| `--dev` | Run in development mode (debug + auto reload) | off |
+| `--ssl-cert PATH` | Path to SSL certificate file for HTTPS | — |
+| `--ssl-key PATH` | Path to SSL private key file for HTTPS | — |
+| `--ssl-ca-cert PATH` | Path to CA certificate file for client verification (mTLS) | — |
 
-### Priority Rules
+Command-line arguments take **precedence** over configuration file settings.
 
-CLI flags always override values from the configuration file. The resolution order is (highest priority last):
+:::info Built-in client class names
+When using `--client-class`, you can specify:
+- `JsonlDefectClient` — for JSONL file storage
+- `JiraDefectClient` — for Jira Cloud / Data Center
 
-1. Built-in defaults
-2. `config.toml` values
-3. CLI flags
+Or provide a custom client (e.g. `custom_client.py` or `custom_client.CustomClass`).
+:::
 
 ### Examples
 
 ```bash
-# Start with default config.toml in the current directory
+# Start with defaults
 testbench-defect-service start
 
-# Start with a specific config file
-testbench-defect-service start --config /etc/defect-service/config.toml
+# Development mode
+testbench-defect-service start --dev
 
 # Override host and port
 testbench-defect-service start --host 0.0.0.0 --port 9000
 
+# Use a different client
+testbench-defect-service start --client-class JiraDefectClient --client-config jira.toml
+
+# Use a custom client class
+testbench-defect-service start --client-class custom_client.CustomDefectClient
+
 # Start with HTTPS
-testbench-defect-service start --ssl-cert cert.pem --ssl-key key.pem
+testbench-defect-service start --ssl-cert certs/server.crt --ssl-key certs/server.key
 
 # Start with mutual TLS (mTLS)
-testbench-defect-service start --ssl-cert cert.pem --ssl-key key.pem --ssl-ca-cert ca.pem
-
-# Development mode (with auto-reload)
-testbench-defect-service start --dev
-
-# Use a different backend without changing config.toml
-testbench-defect-service start \
-  --client-class testbench_defect_service.clients.JiraDefectClient \
-  --client-config jira.toml
+testbench-defect-service start --ssl-cert certs/server.crt --ssl-key certs/server.key --ssl-ca-cert certs/ca.crt
 ```
 
-### Single-Process vs. Multi-Process
-
-By default the service runs in **multi-process mode** (one worker per CPU core), managed by Sanic's `AppLoader`.
-
-The service automatically switches to **single-process mode** when:
-- mTLS is enabled (`--ssl-ca-cert`), because `ssl.SSLContext` objects cannot be forked.
-
 ---
 
-## Global Options
 
-These options are available on every command:
-
-| Option | Description |
-|---|---|
-| `--help` | Show help for the command and exit. |
-
----
-
-## Getting Help
+## Getting help
 
 ```bash
 # General help

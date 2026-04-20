@@ -37,19 +37,19 @@ Or when installing from source:
 pip install -e ".[jira]"
 ```
 
-### Required Jira Permissions
+### Required Jira permissions
 
 The service account used by the Defect Service must hold the following Jira project permissions:
 
-#### Project & Users
+#### Project & users
 | Permission | Required |
-|---|---|
+|------------|----------|
 | **Browse Projects** | List and query projects |
 | **Browse Users** | Display assignees and reporters |
 
-#### Issue Management
+#### Issue management
 | Permission | Required |
-|---|---|
+|------------|----------|
 | **Create Issues** | Sync new defects to Jira |
 | **Edit Issues** | Update defect attributes |
 | **Delete Issues** | Delete defects (`readonly = false` only) |
@@ -57,7 +57,7 @@ The service account used by the Defect Service must hold the following Jira proj
 
 #### Attachments
 | Permission | Required |
-|---|---|
+|------------|----------|
 | **Create Attachments** | Sync attachments to defects |
 | **Delete Attachments** | Remove attachments (`readonly = false` only) |
 
@@ -74,6 +74,7 @@ The service account used by the Defect Service must hold the following Jira proj
 Add the following to your `config.toml` to enable the Jira client:
 
 ```toml
+# config.toml
 [testbench-defect-service]
 client_class       = "testbench_defect_service.clients.JiraDefectClient"
 client_config_path = "config.toml"
@@ -88,57 +89,57 @@ control_fields = ["priority", "status", "classification"]
 readonly       = false
 ```
 
-### Option Reference
 
-**Connection**
+### Connection settings
 
-| Key | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `name` | string | No | `"Jira"` | Display name shown in TestBench. Must match the name in the DMProxy properties file or during setup. |
-| `server_url` | string | **Yes** | — | Base URL of your Jira instance (no trailing slash). |
+| Option | Type | Description | Required | Default |
+|--------|------|-------------|----------|---------|
+| `name` | String | Display name shown in TestBench. Must match the name in the DMProxy properties file or during setup. | No | `"Jira"` |
+| `server_url` | String | Base URL of your Jira instance (no trailing slash). | **Yes** | — |
 
-**Authentication**
+### Authentication methods
 
-| Key | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `auth_type` | string | No | `"basic"` | Authentication method. One of `"basic"`, `"token"`, or `"oauth"`. |
-| `username` | string | No | — | Jira username for basic auth. Can also be set via `JIRA_USERNAME`. |
-| `password` | string | No | — | Jira API token for basic auth. Can also be set via `JIRA_PASSWORD`. |
-| `token` | string | No | — | Personal Access Token for token auth (Jira Data Center). Can also be set via `JIRA_BEARER_TOKEN`. |
-| `enable_shared_auth` | boolean | No | — | Use service account credentials for all projects instead of per-user auth. |
+| Option | Type | Description | Required | Default |
+|--------|------|-------------|----------|---------|
+| `auth_type` | String | Authentication method. One of `"basic"`, `"token"`, or `"oauth"`. | No | `"basic"` |
+| `username` | String | Jira username for basic auth. Can also be set via `JIRA_USERNAME`. | No | — |
+| `password` | String | Jira API token for basic auth. Can also be set via `JIRA_PASSWORD`. | No | — |
+| `token` | String | Personal Access Token for token auth (Jira Data Center). Can also be set via `JIRA_BEARER_TOKEN`. | No | — |
+| `enable_shared_auth` | Boolean | Use service account credentials for all projects instead of per-user auth. | No | — |
 
-**Query & Fields**
+### Query & fields
 
-| Key | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `defect_jql` | string | No | `"project = '{project}' AND issuetype in standardIssueTypes()"` | JQL query used to fetch defects. `{project}` is replaced with the project key at runtime. See [Example JQL Queries](jira-client#example-jql-queries)|
-| `attributes` | list | No | `["title", "status"]` | Jira fields to include in defect responses. |
-| `control_fields` | list | No | `["priority", "status", "classification"]` | Fields for which the client returns allowed values. See [Control Fields](jira-client#control-fields)|
+| Option | Type | Description | Required | Default |
+|--------|------|-------------|----------|---------|
+| `defect_jql` | String | JQL query used to fetch defects. `{project}` is replaced with the project key at runtime. See [Example JQL queries](#example-jql-queries). | No | `"project = '{project}' AND issuetype in standardIssueTypes()"` |
+| `attributes` | List | Jira fields to include in defect responses. | No | `["title", "status"]` |
+| `control_fields` | List | Fields for which the client returns allowed values. See [Control fields](#control-fields). | No | `["priority", "status", "classification"]` |
 
-**Behavior**
+### Behavior
 
-| Key | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `readonly` | boolean | No | `false` | When `true`, all write operations are rejected. |
-| `show_change_history` | boolean | No | — | Include change history in extended defect attributes. |
-| `supports_changes_timestamps` | boolean | No | `true` | Whether the client tracks modification timestamps. |
+| Option | Type | Description | Required | Default |
+|--------|------|-------------|----------|---------|
+| `readonly` | Boolean | When `true`, all write operations are rejected. | No | `false` |
+| `show_change_history` | Boolean | Include change history in extended defect attributes. | No | — |
+| `supports_changes_timestamps` | Boolean | Whether the client tracks modification timestamps. | No | `true` |
 
-**Advanced**
+### Advanced
 
-| Key | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `commands` | table | No | — | Pre/post sync commands. See [Configuration](../configuration.md#prepost-sync-commands). |
-| `projects` | table | No | `{}` | Per-project configuration overrides. See [Per-Project Overrides](jira-client#per-project-overrides) |
+| Option | Type | Description | Required | Default |
+|--------|------|-------------|----------|---------|
+| `commands` | Table | Pre/post sync commands. See [Configuration](../configuration.md#prepost-sync-commands). | No | — |
+| `projects` | Table | Per-project configuration overrides. See [Per-project overrides](#per-project-overrides). | No | `{}` |
 
 ---
 
 ## Authentication
 
-### Basic Auth (Jira Cloud)
+### Basic auth (Jira Cloud)
 
 Recommended for Jira Cloud. Uses your Atlassian account email and an API token.
 
 ```toml
+# config.toml
 [testbench-defect-service.client_config]
 auth_type  = "basic"
 username   = "your-email@company.com"
@@ -147,11 +148,12 @@ password  = "your-api-token"
 
 Generate an API token at `https://id.atlassian.com/manage-profile/security/api-tokens`.
 
-### Token Auth (Jira Data Center)
+### Token auth (Jira Data Center)
 
 Uses a Personal Access Token (PAT) generated in your Jira Data Center profile.
 
 ```toml
+# config.toml
 [testbench-defect-service.client_config]
 auth_type = "token"
 token     = "your-personal-access-token"
@@ -161,7 +163,7 @@ token     = "your-personal-access-token"
 Personal Access Tokens expire based on the duration set in your Jira Data Center profile. If the service stops authenticating unexpectedly, check whether the token has expired and generate a new one.
 :::
 
-### Environment Variables
+### Environment variables
 
 :::tip
 Prefer environment variables over hardcoding credentials in `config.toml` to avoid accidentally committing secrets to source control.
@@ -170,20 +172,20 @@ Prefer environment variables over hardcoding credentials in `config.toml` to avo
 To avoid storing credentials in the config file, use environment variables instead:
 
 | Variable | Used for |
-|---|---|
+|----------|----------|
 | `JIRA_USERNAME` | Username (basic auth) |
 | `JIRA_PASSWORD` | API token (basic auth) |
 | `JIRA_BEARER_TOKEN` | Personal Access Token (token auth, Jira Data Center) |
 
 ---
 
-## Project Mapping
+## Project mapping
 
 The service lists Jira projects as `"<Project Name> (<PROJECT_KEY>)"`. TestBench selects a project by this combined name.
 
 The `{project}` placeholder in `defect_jql` is replaced with the Jira **project key** (e.g. `MYPROJ`) at query time.
 
-### Example JQL Queries
+## Example JQL queries
 
 Fetch only bugs, ordered by creation date:
 ```toml
@@ -197,12 +199,12 @@ defect_jql = "project = '{project}' AND component = 'Backend' AND resolution = U
 
 ---
 
-## Control Fields
+## Control fields
 
 The Jira client automatically queries Jira metadata to populate allowed values for the following fields:
 
 | Field | Jira data source |
-|---|---|
+|-------|------------------|
 | `status` | Project workflow statuses |
 | `priority` | Global Jira priorities |
 | `classification` | Project issue types |
@@ -211,7 +213,7 @@ Additional fields listed in `control_fields` are resolved via the Jira field met
 
 ---
 
-## Per-Project Overrides
+## Per-project overrides
 
 Any top-level `client_config` option can be overridden per Jira project key:
 
@@ -232,7 +234,7 @@ The project key must match the Jira project key exactly (case-sensitive).
 The client automatically detects whether it is connected to Jira Cloud or Jira Data Center and adapts its behavior accordingly:
 
 | Feature | Jira Cloud | Jira Data Center |
-|---|---|---|
+|---------|------------|------------------|
 | Authentication | Basic (email + API token) | Token (PAT) or Basic |
 | Pagination | `nextPageToken` cursor | `startAt` offset |
 | Issue types endpoint | Standard | `issuetypes` endpoint (DC ≥ 8.4) |
@@ -240,10 +242,10 @@ The client automatically detects whether it is connected to Jira Cloud or Jira D
 
 ---
 
-## Known Limitations
+## Known limitations
 
 | Limitation | Details |
-|---|---|
+|------------|----------|
 | **Attachment sync** | Jira Data Center supports one-way attachment sync from TestBench to Jira only. |
 | **Sprint field** | The Sprint field cannot be reliably updated via the API and is not supported. |
 | **Jira Server (legacy)** | Only Jira Data Center and Jira Cloud are actively tested. Older Jira Server versions may work but are not officially supported. |
