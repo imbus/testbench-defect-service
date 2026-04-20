@@ -4,11 +4,6 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 ## Introduction
-
-[imbus TestBench](https://www.testbench.com/) can create and synchronise bug reports with external defect tracking systems, but requires a specific HTTP interface to do so. The **TestBench Defect Service** provides exactly that interface.
-
-It is a lightweight, self-hosted REST API you run alongside TestBench. TestBench talks to this service, and the service translates those calls into operations against your actual defect tracker.
-
 A lightweight REST API service for [imbus TestBench](https://www.testbench.com) that provides a unified interface for creating and synchronising defects with external defect tracking systems.
 
 ## Features
