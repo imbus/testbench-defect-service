@@ -17,7 +17,7 @@ Use these values when following the central guide:
 | `<servicePort>` | `8030` |
 | `<serviceInstallDir>` | Your installation directory, e.g. `C:\TestBenchDefectService` |
 
-:::note Executable path
+:::note[Executable path]
 - **Ready-to-use executable**: `C:\TestBenchDefectService\testbench-defect-service.exe`
 - **Python venv**: `C:\TestBenchDefectService\.venv\Scripts\testbench-defect-service.exe`
 

@@ -177,7 +177,7 @@ ssl_ca_cert = "certs/ca.crt"   # optional — enables mTLS
 
 Set both `ssl_cert` and `ssl_key` to enable HTTPS. Add `ssl_ca_cert` to require client certificates (mTLS).
 
-:::caution limitation
+:::warning[Limitation]
 When using mTLS (`ssl_ca_cert`), the service runs in single-process mode.
 :::
 

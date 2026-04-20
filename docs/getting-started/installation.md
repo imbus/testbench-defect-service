@@ -36,7 +36,7 @@ C:\TestBenchDefectService\
 C:\TestBenchDefectService\testbench-defect-service.exe --version
 ```
 
-:::tip Running as a Windows service
+:::tip[Running as a Windows service]
 Point NSSM or FireDaemon directly to `testbench-defect-service.exe` in the extracted folder. See the [Windows service guide](../windows-service-installation.md).
 :::
 
@@ -71,7 +71,7 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-:::tip Running as a Windows service
+:::tip[Running as a Windows service]
 With a venv, point NSSM or FireDaemon to `.venv\Scripts\testbench-defect-service.exe` (full absolute path). See the [Windows service guide](../windows-service-installation.md).
 :::
 
@@ -117,7 +117,7 @@ Verify installation:
 testbench-defect-service --version
 ```
 
-:::note Fully offline install
+:::note[Fully offline install]
 By default pip still fetches dependencies from PyPI. To install on a machine with no internet access:
 
 **On another machine which has internet access**, download the wheel and all its dependencies into a local folder:

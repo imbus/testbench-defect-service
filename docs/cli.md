@@ -117,7 +117,7 @@ testbench-defect-service set-credentials
 testbench-defect-service set-credentials --username admin --password "s3cret!"
 ```
 
-:::warning Security
+:::warning[Security]
 Avoid passing passwords as command-line arguments in shared or audited environments, as they may appear in shell history. Prefer the interactive prompt or use an environment variable pipeline.
 :::
 
@@ -147,7 +147,7 @@ testbench-defect-service start [OPTIONS]
 
 Command-line arguments take **precedence** over configuration file settings.
 
-:::info Built-in client class names
+:::info[Built-in client class names]
 When using `--client-class`, you can specify:
 - `JsonlDefectClient` — for JSONL file storage
 - `JiraDefectClient` — for Jira Cloud / Data Center
