@@ -1,9 +1,8 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "[0-9]+.[0-9]+.[0-9]+*"
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -71,12 +70,10 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Create GitHub Release
+      - name: Upload assets to release
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*
-          generate_release_notes: true
           fail_on_unmatched_files: true
-          prerelease: ${{ contains(github.ref_name, 'a') || contains(github.ref_name, 'b') || contains(github.ref_name, 'rc') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
