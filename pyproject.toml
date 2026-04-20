@@ -66,6 +66,9 @@ dev = [
 
 [project.urls]
 Home = "https://github.com/imbus/testbench-defect-service"
+Documentation = "https://imbus.github.io/testbench-ecosystem-documentation/testbench-defect-service/intro"
+Source = "https://github.com/imbus/testbench-defect-service"
+Changelog = "https://github.com/imbus/testbench-defect-service/blob/main/CHANGELOG.md"
 
 [project.scripts]
 testbench-defect-service = "testbench_defect_service.cli:cli"
