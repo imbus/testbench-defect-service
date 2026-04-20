@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# ruff: noqa: T201
 """
 Generate README.dist.md for PyPI by replacing relative docs/ links
 with their published equivalents on the documentation site.

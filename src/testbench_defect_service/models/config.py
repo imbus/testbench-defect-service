@@ -10,6 +10,29 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8030
 
 
+class ServerConfig(BaseModel):
+    """Sanic server configuration."""
+
+    single_process: bool = Field(
+        default=True,
+        description="Run server in single-process mode (required for Windows services and mTLS)",
+    )
+    keep_alive_timeout: int = Field(
+        default=5,
+        description=(
+            "Seconds an idle HTTP keep-alive connection is kept open waiting for the next request "
+            "before being closed. A shorter value reduces the number of open connections "
+            "that block clean shutdown."
+        ),
+        ge=1,
+        le=120,
+    )
+    run_kwargs: dict = Field(
+        default_factory=dict,
+        description="Additional keyword arguments passed verbatim to Sanic's run/prepare call.",
+    )
+
+
 class DefectServiceConfig(BaseModel):
     """Validated service config loaded from TOML config file."""
 
@@ -36,9 +59,6 @@ class DefectServiceConfig(BaseModel):
     debug: bool = Field(default=False, description="Enable debug mode for the service")
     password_hash: str | None = Field(default=None, description="Password hash for authentication")
     salt: str | None = Field(default=None, description="Salt used for password hashing")
-    logging: LoggingConfig = Field(
-        default_factory=LoggingConfig, description="Logging configuration for the service"
-    )
     ssl_cert: Path | None = Field(
         default=None,
         description="Path to SSL/TLS certificate file for HTTPS support (.crt or .pem)",
@@ -65,6 +85,13 @@ class DefectServiceConfig(BaseModel):
     forwarded_secret: str | None = Field(
         default=None,
         description="Secret token for validating Forwarded header (security measure)",
+    )
+    logging: LoggingConfig = Field(
+        default_factory=LoggingConfig, description="Logging configuration for the service"
+    )
+    server: ServerConfig = Field(
+        default_factory=lambda: ServerConfig(),  # noqa: PLW0108
+        description="Sanic server configuration",
     )
 
     @field_validator("client_config_path")

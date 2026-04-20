@@ -102,7 +102,7 @@ def get_client_class(client_type: str) -> str | None:
     if client_type == "custom":
         client_class: str | None = questionary.text(
             "Enter the full class path to your custom client class:",
-            default="CustomDefectClient.py",
+            default="custom_client.py",
         ).ask()
         if client_class is None:
             return None
@@ -188,7 +188,7 @@ def ask_for_separate_config(client_type: str, existing_path: Path | None = None)
     """Ask user if they want to use a separate configuration file.
 
     Args:
-        client_type: The type of client (jsonl, excel, jira, custom)
+        client_type: The type of client (jsonl, jira, custom)
         existing_path: Path to existing separate config file if any
 
     Returns:
@@ -281,10 +281,25 @@ def configure_credentials_only(
     click.echo("\n✅ Service credentials updated successfully!")
 
 
-def get_client_type(client: str) -> str | None:
-    """Infer client type from class name."""
-    for client_type, client_class in CLIENT_CLASSES.items():
-        if client in client_class or client_type in client.lower():
+def get_client_type(client_class: str) -> str | None:
+    """Infer client type from a client class path or name.
+
+    Matches in order of specificity per client type:
+    1. Exact full path (e.g. ``"testbench_defect_service.clients.JiraDefectClient"``)
+    2. Exact class name segment (e.g. ``"JiraDefectClient"``)
+    3. Exact client type keyword, case-insensitive (e.g. ``"jira"`` or ``"Jira"``)
+    """
+    if "." in client_class and not client_class.endswith(".py"):
+        class_name = client_class.rsplit(".", 1)[-1]
+    else:
+        class_name = client_class
+
+    for client_type, known_class in CLIENT_CLASSES.items():
+        if client_class == known_class:
+            return client_type
+        if class_name == known_class.rsplit(".", 1)[-1]:
+            return client_type
+        if class_name.lower() == client_type:
             return client_type
 
     return None
@@ -297,17 +312,12 @@ def configure_client_only(config_path: Path):
     service_config = load_service_config(config_path)
 
     client_class_path = service_config.client_class
-    if ".py" in client_class_path:
-        client = Path(client_class_path).stem
-    else:
-        client = client_class_path.split(".")[-1]
-    if client:
-        click.echo(f"Current client: {client}\n")
+    client_type = get_client_type(client_class_path) or "custom"
+    click.echo(f"Current client type: {client_type.capitalize()}\n")
 
     change_client_type = questionary.confirm(
         "Do you want to change the client type?", default=False
     ).ask()
-
     if change_client_type is None:
         click.echo("\nConfiguration cancelled.")
         return
@@ -318,22 +328,21 @@ def configure_client_only(config_path: Path):
             "Select client type:",
             choices=[
                 questionary.Choice("📄 JSONL Files", "jsonl"),
-                questionary.Choice("📊 Excel/CSV Files", "excel"),
                 questionary.Choice("🔗 Jira", "jira"),
                 questionary.Choice("⚙️  Custom Client", "custom"),
             ],
         ).ask()
+        if client_type is None:
+            click.echo("\nConfiguration cancelled.")
+            return
+
+    if client_type == "custom" and not change_client_type:
+        client_class = client_class_path
     else:
-        client_type = get_client_type(client) or "custom"
-
-    if client_type is None:
-        click.echo("\nConfiguration cancelled.")
-        return
-
-    client_class = get_client_class(client_type)
-    if client_class is None:
-        click.echo("\nConfiguration cancelled.")
-        return
+        client_class = get_client_class(client_type)
+        if client_class is None:
+            click.echo("\nConfiguration cancelled.")
+            return
 
     client_config = configure_client(client_type, client_class, service_config)
     if client_config is None:
@@ -541,7 +550,6 @@ def run_full_wizard(config_path: Path):  # noqa: C901, PLR0912, PLR0915
         "Where are your defects stored?",
         choices=[
             questionary.Choice("📄 JSONL Files (lightweight, file-based storage)", "jsonl"),
-            questionary.Choice("📊 Excel/CSV Files (spreadsheet-based storage)", "excel"),
             questionary.Choice("🔗 Jira (connect to Atlassian Jira)", "jira"),
             questionary.Choice("⚙️  Custom Client (your own implementation)", "custom"),
         ],
