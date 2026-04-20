@@ -1,0 +1,141 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "testbench-defect-service"
+authors = [{ name = "imbus AG", email = "support@imbus.de" }]
+readme = "README.md"
+license = { file = "LICENSE" }
+dynamic = ["version"]
+description = "A REST API service for the imbus testbench to manage defects."
+requires-python = ">=3.10,<3.15"
+keywords = [
+  "testbench",
+  "defect",
+  "testing",
+  "rest-api",
+  "jira",
+  "defect-management",
+  "test-automation",
+]
+classifiers = [
+  "Environment :: Console",
+  "Environment :: Web Environment",
+  "Framework :: AsyncIO",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+  "Topic :: Software Development :: Testing",
+  "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+  "sanic>=25.12,<26.0",
+  "sanic-ext>=25.12,<26.0",
+  "pydantic>=2.12.5,<3.0.0",
+  "click>=8.3.1,<9.0.0",
+  "tomli>=2.4.0,<3.0.0",
+  "tomli-w>=1.2.0,<2.0.0",
+  "python-dotenv>=1.2.2,<2.0.0",
+  "questionary>=2.1.1,<3.0.0",
+  "javaproperties>=0.8.2,<1.0.0",
+]
+
+[project.optional-dependencies]
+jira = ["jira>=3.10.5,<4.0.0", "beautifulsoup4>=4.14.3,<5.0.0"]
+dev = [
+  "ruff>=0.9.6",
+  "pre-commit>=4.1.0",
+  "invoke>=2.2.0",
+  "mypy>=1.15.0",
+  "flit>=3.10.1",
+  "wheel>=0.45.1",
+  "robotframework >= 5.0.1, < 8.0.0",
+  "robotframework-assertion-engine >= 3.0.3, < 4.0.0",
+  "robotframework-robocop>=5.8.1",
+  "robotframework-tidy>=4.16.0",
+  "requests>=2.32.3",
+  "pytest>=9.0.2",
+  "types-pyinstaller>=6.19.0",
+  "types-requests>=2.32.4",
+]
+
+[project.urls]
+Home = "https://github.com/imbus/testbench-defect-service"
+Documentation = "https://imbus.github.io/testbench-ecosystem-documentation/testbench-defect-service/intro"
+Source = "https://github.com/imbus/testbench-defect-service"
+Changelog = "https://github.com/imbus/testbench-defect-service/blob/main/CHANGELOG.md"
+
+[project.scripts]
+testbench-defect-service = "testbench_defect_service.cli:cli"
+
+[tool.mypy]
+python_version = "3.10"
+no_implicit_optional = true
+strict_optional = true
+warn_return_any = true
+warn_no_return = true
+warn_unreachable = true
+pretty = true
+files = ["src"]
+exclude = "tests/"
+
+[tool.ruff]
+fix = false
+target-version = "py310"
+line-length = 100
+exclude = ["__pycache__", ".venv", "tools", "model"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint]
+unfixable = []
+ignore = ["N815"]
+select = [
+  "E",
+  "F",
+  "W",
+  "C90",
+  "I",
+  "N",
+  "B",
+  "PYI",
+  "PL",
+  "PTH",
+  "UP",
+  "A",
+  "C4",
+  "DTZ",
+  "ISC",
+  "ICN",
+  "INP",
+  "PIE",
+  "T20",
+  "PYI",
+  "PT",
+  "RSE",
+  "RET",
+  "SIM",
+  "RUF",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/unit/**" = ["PLR2004"]
+
+[tool.pytest.ini_options]
+markers = ["unit: mark a test as a unit test"]
+
+[tool.robocop]
+exclude = ["ignore_me.robot"]
+
+[tool.robocop.lint]
+select = ["LEN04", "NAME02"]
+ignore = ["DOC01", "DOC02", "DOC03", "LEN04"]
+reports = ["rules_by_id", "scan_timer"]

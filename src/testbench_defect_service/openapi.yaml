@@ -1,0 +1,716 @@
+openapi: 3.0.3
+info:
+  title: API3 Defect Management API
+  version: 1.0.1
+  description: Complete OpenAPI specification for the API3 trait from Scala
+
+servers:
+  - url: /
+
+security:
+  - BasicAuth: []
+
+components:
+  securitySchemes:
+    BasicAuth:
+      type: http
+      scheme: basic
+
+  schemas:
+    Login:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+
+    DefectID:
+      type: string
+      description: Unique identifier of a defect
+
+    Defect:
+      type: object
+      required:
+        - status
+        - classification
+        - priority
+        - lastEdited
+        - principal
+      properties:
+        title:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        reporter:
+          type: string
+          nullable: true
+        status:
+          type: string
+        classification:
+          type: string
+        priority:
+          type: string
+        userDefinedFields:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserDefinedFieldProperties"
+        lastEdited:
+          type: string
+          format: date-time
+        references:
+          type: array
+          items:
+            type: string
+        principal:
+          $ref: "#/components/schemas/Login"
+
+    DefectWithID:
+      allOf:
+        - $ref: "#/components/schemas/Defect"
+        - type: object
+          required:
+            - id
+          properties:
+            id:
+              $ref: "#/components/schemas/DefectID"
+
+    DefectWithLocalPk:
+      allOf:
+        - $ref: "#/components/schemas/Defect"
+        - type: object
+          required:
+            - localPk
+          properties:
+            localPk:
+              type: string
+
+    KnownDefect:
+      allOf:
+        - $ref: "#/components/schemas/DefectWithID"
+        - type: object
+          required:
+            - localPk
+          properties:
+            localPk:
+              type: string
+
+    DefectWithAttributes:
+      allOf:
+        - $ref: "#/components/schemas/DefectWithID"
+        - type: object
+          required:
+            - attributes
+          properties:
+            attributes:
+              $ref: "#/components/schemas/ExtendedAttributes"
+
+    UserDefinedFieldProperties:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+          nullable: true
+        mustField:
+          type: boolean
+
+    UserDefinedAttribute:
+      type: object
+      required:
+        - name
+        - valueType
+      properties:
+        name:
+          type: string
+        valueType:
+          type: string
+          enum: [STRING, BOOLEAN]
+        mustField:
+          type: boolean
+        lastEdited:
+          type: string
+          format: date-time
+        stringValue:
+          type: string
+          nullable: true
+        booleanValue:
+          type: boolean
+
+    ExtendedAttributes:
+      type: object
+      additionalProperties:
+        type: string
+
+    Results:
+      type: object
+      required: [local, remote]
+      properties:
+        local:
+          $ref: "#/components/schemas/LocalSyncActions"
+        remote:
+          $ref: "#/components/schemas/RemoteSyncActions"
+
+    LocalSyncActions:
+      type: object
+      properties:
+        delete:
+          type: array
+          items: { $ref: "#/components/schemas/KnownDefect" }
+        update:
+          type: array
+          items: { $ref: "#/components/schemas/KnownDefect" }
+        create:
+          type: array
+          items: { $ref: "#/components/schemas/DefectWithID" }
+
+    RemoteSyncActions:
+      type: object
+      properties:
+        delete:
+          type: array
+          items: { $ref: "#/components/schemas/KnownDefect" }
+        update:
+          type: array
+          items: { $ref: "#/components/schemas/KnownDefect" }
+        create:
+          type: array
+          items: { $ref: "#/components/schemas/DefectWithLocalPk" }
+
+    SyncContext:
+      type: object
+      properties:
+        iTBProject:
+          type: string
+          description: ITB project name
+
+        lastSync:
+          type: string
+          format: date-time
+          nullable: true
+
+        statusAttribute:
+          type: string
+
+        statusSyncOption:
+          $ref: "#/components/schemas/DefectFieldSyncOption"
+
+        priorityAttribute:
+          type: string
+
+        prioritySyncOption:
+          $ref: "#/components/schemas/DefectFieldSyncOption"
+
+        classAttribute:
+          type: string
+
+        classSyncOption:
+          $ref: "#/components/schemas/DefectFieldSyncOption"
+
+        serverTime:
+          type: string
+          format: date-time
+          nullable: true
+
+        udaSyncOptions:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/DefectFieldSyncOption"
+
+        syncOption:
+          $ref: "#/components/schemas/DefectSyncOption"
+
+        importNewDefects:
+          type: boolean
+
+    Protocol:
+      type: object
+      properties:
+        successes:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: "#/components/schemas/ProtocolEntrySuccess"
+        warnings:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: "#/components/schemas/ProtocolEntryWarning"
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: "#/components/schemas/ProtocolEntryError"
+        generalWarnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProtocolEntryWarning"
+        generalErrors:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProtocolEntryError"
+
+    DefectSyncOption:
+      type: string
+      description: defect sync direction
+      enum:
+        - USE_SYNC_MASTER
+        - FORCE_PUBLISH
+        - FORCE_UPDATE
+
+    DefectFieldSyncOption:
+      type: string
+      description: defect field sync option
+      enum:
+        - ITB
+        - DMS
+        - TIMESTAMP
+
+    ProtocolCode:
+      type: string
+      description: protocol sync code
+      enum:
+        - READ_ACCESS_ERROR
+        - INSERT_ACCESS_ERROR
+        - INSERT_ERROR
+        - INSERT_SUCCESS
+        - PUBLISH_ACCESS_ERROR
+        - PUBLISH_ERROR
+        - PUBLISH_SUCCESS
+        - IMPORT_ERROR
+        - IMPORT_SUCCESS
+        - UPDATE_ERROR
+        - UPDATE_SUCCESS
+        - INVALID_FIELDS
+        - INVALID_ATTRIBUTES
+        - DEFECT_NOT_FOUND
+        - PROJECT_NOT_FOUND
+        - NO_DEFECT_FOUND
+        - NO_VALID_LICENSE
+        - NO_FREE_LICENSE
+        - LICENSE_EXPIRED
+        - LICENSE_PROBLEM
+        - INSERT_WARNING
+        - IMPORT_WARNING
+
+    ProtocolEntrySuccess:
+      type: object
+      properties:
+        code:
+          $ref: "#/components/schemas/ProtocolCode"
+        message:
+          type: string
+
+    ProtocolEntryWarning:
+      type: object
+      properties:
+        code:
+          $ref: "#/components/schemas/ProtocolCode"
+        message:
+          type: string
+
+    ProtocolEntryError:
+      type: object
+      properties:
+        code:
+          $ref: "#/components/schemas/ProtocolCode"
+        message:
+          type: string
+
+    ProtocolledDefectSet:
+      type: object
+      required:
+        - protocol
+        - value
+      properties:
+        value:
+          type: array
+          items:
+            $ref: "#/components/schemas/DefectWithID"
+        protocol:
+          $ref: "#/components/schemas/Protocol"
+
+    ProtocolledString:
+      type: object
+      required:
+        - protocol
+        - value
+      properties:
+        value:
+          type: string
+          nullable: true
+          description: ID of the newly created defect, if successful
+        protocol:
+          $ref: "#/components/schemas/Protocol"
+
+paths:
+  /check-login:
+    get:
+      summary: Check login credentials
+      parameters:
+        - name: project
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: Login valid or not
+          content:
+            application/json:
+              schema:
+                type: boolean
+
+  /settings:
+    get:
+      summary: Get defect management settings
+      security: []
+      responses:
+        "200":
+          description: Current settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  description:
+                    type: string
+                  readonly:
+                    type: boolean
+
+  /projects:
+    get:
+      summary: Get all projects
+      responses:
+        "200":
+          description: List of project IDs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+
+  /projects/control-fields:
+    get:
+      summary: Get control fields and values
+      parameters:
+        - name: project
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: Control fields
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: array
+                  items: { type: string }
+
+  /projects/{project}/defects:
+    post:
+      summary: Get all defects for a project
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncContext"
+      responses:
+        "200":
+          description: Protocolled list of defects
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProtocolledDefectSet"
+
+  /projects/{project}/defects/batch:
+    post:
+      summary: Get specific defects by ID
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - defectIds
+              properties:
+                defectIds:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/DefectID"
+                syncContext:
+                  $ref: "#/components/schemas/SyncContext"
+      responses:
+        "200":
+          description: Matching defects
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProtocolledDefectSet"
+
+  /projects/{project}/defects/create:
+    post:
+      summary: Create a new defect
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - defect
+              properties:
+                defect:
+                  $ref: "#/components/schemas/Defect"
+                syncContext:
+                  $ref: "#/components/schemas/SyncContext"
+      responses:
+        "200":
+          description: Created defect ID and protocol
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProtocolledString"
+
+  /projects/{project}/defects/{defectId}/update:
+    put:
+      summary: Update an existing defect
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: defectId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - defect
+              properties:
+                defect:
+                  $ref: "#/components/schemas/Defect"
+                syncContext:
+                  $ref: "#/components/schemas/SyncContext"
+
+      responses:
+        "200":
+          description: Updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Protocol"
+
+  /projects/{project}/defects/{defectId}/delete:
+    post:
+      summary: Delete a defect (via POST for body support)
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: defectId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - defect
+              properties:
+                defect:
+                  $ref: "#/components/schemas/Defect"
+                syncContext:
+                  $ref: "#/components/schemas/SyncContext"
+
+      responses:
+        "200":
+          description: Deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Protocol"
+
+  /projects/{project}/defects/{defectId}/extended:
+    post:
+      summary: Get extended defect with attributes
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema: { type: string }
+        - name: defectId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncContext"
+      responses:
+        "200":
+          description: Extended defect info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DefectWithAttributes"
+
+  /projects/udfs:
+    get:
+      summary: Get user-defined fields
+      parameters:
+        - name: project
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: List of user-defined attributes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/UserDefinedAttribute" }
+
+  /projects/{project}/sync/before:
+    post:
+      summary: Before sync
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - syncType
+              properties:
+                syncType:
+                  type: string
+                  nullable: true
+                syncContext:
+                  $ref: "#/components/schemas/SyncContext"
+      responses:
+        "200":
+          description: Protocol
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Protocol"
+
+  /projects/{project}/sync/after:
+    post:
+      summary: After sync
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - syncType
+              properties:
+                syncType:
+                  type: string
+                  nullable: true
+                syncContext:
+                  $ref: "#/components/schemas/SyncContext"
+
+      responses:
+        "200":
+          description: Protocol
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Protocol"
+
+  /supports-changes-timestamps:
+    get:
+      summary: Whether change timestamps are supported
+      responses:
+        "200":
+          description: True if supported
+          content:
+            application/json:
+              schema:
+                type: boolean
+
+  /projects/{project}/defects/correct:
+    post:
+      summary: Correct proposed defect changes
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Results"
+      responses:
+        "200":
+          description: Corrected changes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Results"
