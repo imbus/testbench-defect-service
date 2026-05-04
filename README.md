@@ -298,13 +298,13 @@ pip install "testbench-defect-service[jira]"
 client_class = "testbench_defect_service.clients.JiraDefectClient"
 
 [testbench-defect-service.client_config]
-name           = "Jira"
-server_url     = "https://your-company.atlassian.net"
-auth_type      = "basic"
-defect_jql     = "project = '{project}' AND issuetype in standardIssueTypes()"
-attributes     = ["title", "status", "priority"]
-control_fields = ["priority", "status", "classification"]
-readonly       = false
+name            = "Jira"
+server_url      = "https://your-company.atlassian.net"
+auth_type       = "basic"
+defect_jql      = "project = '{project}' AND issuetype in standardIssueTypes()"
+attributes      = ["title", "status", "priority"]
+rendered_fields = ["description"]
+readonly        = false
 ```
 
 #### Connection & Query options
@@ -315,7 +315,7 @@ readonly       = false
 | `auth_type` | No | `"basic"` | `"basic"`, `"token"`, or `"oauth"` |
 | `defect_jql` | No | `"project = '{project}' AND issuetype in standardIssueTypes()"` | JQL query; `{project}` is replaced with the project key at runtime |
 | `attributes` | No | `["title", "status"]` | Jira fields to include in defect responses |
-| `control_fields` | No | `["priority", "status", "classification"]` | Fields for which allowed values are returned |
+| `rendered_fields` | No | `[]` | Fields whose values are returned as rendered HTML (e.g. `["description"]`) |
 | `readonly` | No | `false` | Reject all write operations when `true` |
 
 #### Authentication

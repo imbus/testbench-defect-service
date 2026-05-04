@@ -79,13 +79,13 @@ client_class       = "testbench_defect_service.clients.JiraDefectClient"
 client_config_path = "config.toml"
 
 [testbench-defect-service.client_config]
-name           = "Jira"
-server_url     = "https://your-company.atlassian.net"
-auth_type      = "basic"
-defect_jql     = "project = '{project}' AND issuetype in standardIssueTypes()"
-attributes     = ["title", "status", "priority", "classification"]
-control_fields = ["priority", "status", "classification"]
-readonly       = false
+name            = "Jira"
+server_url      = "https://your-company.atlassian.net"
+auth_type       = "basic"
+defect_jql      = "project = '{project}' AND issuetype in standardIssueTypes()"
+attributes      = ["title", "status", "priority", "classification"]
+rendered_fields = ["description"]
+readonly        = false
 ```
 
 ### Option Reference
@@ -113,7 +113,7 @@ readonly       = false
 |---|---|---|---|---|
 | `defect_jql` | string | No | `"project = '{project}' AND issuetype in standardIssueTypes()"` | JQL query used to fetch defects. `{project}` is replaced with the project key at runtime. See [Example JQL Queries](jira-client#example-jql-queries)|
 | `attributes` | list | No | `["title", "status"]` | Jira fields to include in defect responses. |
-| `control_fields` | list | No | `["priority", "status", "classification"]` | Fields for which the client returns allowed values. See [Control Fields](jira-client#control-fields)|
+| `rendered_fields` | list | No | `[]` | Jira fields whose values are returned as rendered HTML (e.g. `["description"]`). |
 
 **Behavior**
 
@@ -199,15 +199,20 @@ defect_jql = "project = '{project}' AND component = 'Backend' AND resolution = U
 
 ## Control Fields
 
-The Jira client automatically queries Jira metadata to populate allowed values for the following fields:
+The Jira client automatically queries Jira metadata and returns allowed values for **all fields** that have a defined set of allowed values. No manual configuration is required.
 
-| Field | Jira data source |
+The following fields are always collected:
+
+| Field key | Jira data source |
 |---|---|
 | `status` | Project workflow statuses |
-| `priority` | Global Jira priorities |
-| `classification` | Project issue types |
+| `issuetype` | Project issue types |
 
-Additional fields listed in `control_fields` are resolved via the Jira field metadata API.
+All other fields (e.g. `priority`, custom select fields) are discovered automatically from the Jira field metadata API.
+
+:::note
+The field key previously named `classification` is now returned as `issuetype` to match the Jira API field name.
+:::
 
 ---
 
@@ -217,7 +222,8 @@ Any top-level `client_config` option can be overridden per Jira project key:
 
 ```toml
 [testbench-defect-service.client_config.projects.MYPROJ]
-readonly = true
+readonly        = true
+rendered_fields = ["description", "comment"]
 
 [testbench-defect-service.client_config.projects.MYPROJ.commands.presync]
 scheduled = "C:\\scripts\\myproj-pre.bat"
