@@ -7,15 +7,18 @@ from jira import JIRA, JIRAError
 from testbench_defect_service.clients.jira.html_to_jira import convert_html_to_jira_markup
 from testbench_defect_service.clients.jira.utils import FieldInfo
 from testbench_defect_service.log import logger
-from testbench_defect_service.models.defects import Defect
+from testbench_defect_service.models.defects import Defect, SyncContext
 
 
 class DefectToJiraMapper:
     def __init__(self, jira: JIRA):
         self.jira = jira
+        self.use_issuetypes_endpoint = (not self.jira._is_cloud) and (
+            self.jira._version >= (8, 4, 0)
+        )
 
     def map_defect_to_jira_issue(
-        self, defect: Defect, issue_metadata: dict[str, Any]
+        self, defect: Defect, issue_metadata: dict[str, Any], sync_context: SyncContext
     ) -> dict[str, Any]:
         """Convert a ``Defect`` model into Jira ``create_issue()`` fields (Cloud API).
 
@@ -25,14 +28,24 @@ class DefectToJiraMapper:
         """
         issue_type = self._get_issue_type(defect.classification, issue_metadata)
         allowed = self._extract_allowed_fields_cloud(issue_type)
-        return {"fields": self._build_issue_fields(defect, allowed)}
+        projects = issue_metadata.get("projects", [])[0]
+        issue_type = projects.get("issuetypes", [])[0]
+        fields = issue_type.get("fields", [])
+        if not projects:
+            raise ValueError("No projects found in issue metadata")
 
-    def map_defect_to_jira_data_center_issue(self, defect: Defect, fields: list) -> dict[str, Any]:
+        return {"fields": self._build_issue_fields(defect, allowed, fields, sync_context)}
+
+    def map_defect_to_jira_data_center_issue(
+        self, defect: Defect, fields: list, sync_context: SyncContext
+    ) -> dict[str, Any]:
         """Convert a ``Defect`` model into Jira ``create_issue()`` fields (Data Center API)."""
         allowed = [FieldInfo(key=f.fieldId, name=f.name, metadata=f.schema) for f in fields]
-        return {"fields": self._build_issue_fields(defect, allowed)}
+        return {"fields": self._build_issue_fields(defect, allowed, fields, sync_context)}
 
-    def _build_issue_fields(self, defect: Defect, allowed: list[FieldInfo]) -> dict[str, Any]:
+    def _build_issue_fields(
+        self, defect: Defect, allowed: list[FieldInfo], meta_fields, sync_context: SyncContext
+    ) -> dict[str, Any]:
         """Build the Jira issue *fields* dict from a ``Defect`` and *allowed* field list.
 
         Args:
@@ -57,8 +70,24 @@ class DefectToJiraMapper:
             allowed,
         )
 
-        self._set_field(fields, "priority", str(defect.priority), allowed)
-        self._set_field(fields, "issuetype", str(defect.classification), allowed)
+        self._set_field(
+            fields,
+            self.get_jira_field_key(sync_context.statusAttribute, meta_fields),
+            str(defect.priority),
+            allowed,
+        )
+        self._set_field(
+            fields,
+            self.get_jira_field_key(sync_context.priorityAttribute, meta_fields),
+            str(defect.priority),
+            allowed,
+        )
+        self._set_field(
+            fields,
+            self.get_jira_field_key(sync_context.classAttribute, meta_fields),
+            str(defect.classification),
+            allowed,
+        )
         if defect.reporter:
             self._set_field(
                 fields,
@@ -67,6 +96,21 @@ class DefectToJiraMapper:
                 allowed,
             )
         return {k: v for k, v in fields.items() if v is not None}
+
+    def get_jira_field_key(self, controll_field: str | None, meta_fields) -> str:
+        """Resolve a configured control field to an existing Jira field key."""
+        if not controll_field:
+            return ""
+        if not self.use_issuetypes_endpoint:
+            for _, field in meta_fields.items():
+                if field.get("name", None) == controll_field:
+                    return str(field.get("key", None))
+        for field in meta_fields:
+            name = getattr(field, "name", None)
+            if name == controll_field:
+                return str(getattr(field, "fieldId", None))
+
+        return controll_field
 
     def _set_field(
         self,

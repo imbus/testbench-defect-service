@@ -40,7 +40,7 @@ def extract_valuetype_from_issue_field(field: dict[str, Any]) -> ValueType:
 
 
 def create_defect_from_issue(
-    issue: Issue, fields: list[dict[str, Any]], jira_server_url: str
+    issue: Issue, fields: list[dict[str, Any]], jira_server_url: str, sync_context: SyncContext
 ) -> DefectWithID:
     """Convert a Jira *issue* into a ``DefectWithID`` model.
 
@@ -56,14 +56,65 @@ def create_defect_from_issue(
             issue, field_id="description", jira_server_url=jira_server_url
         ),
         reporter=_safe_display_name(issue.fields.creator),
-        status=_safe_field_name(issue.fields.status),
-        classification=_safe_field_name(issue.fields.issuetype),
-        priority=_safe_field_name(issue.fields.priority),
+        status=_get_control_field_value(sync_context.statusAttribute, issue.fields, fields),
+        classification=_get_control_field_value(sync_context.classAttribute, issue.fields, fields),
+        priority=_get_control_field_value(sync_context.priorityAttribute, issue.fields, fields),
         userDefinedFields=_extract_user_defined_fields(issue, fields),
         lastEdited=datetime.fromisoformat(jira_datetime_to_iso(issue.fields.updated)),
         references=_extract_references(issue),
         principal=Login(username="", password=""),
     )
+
+
+def _get_control_field_value(
+    controll_field: str | None, issue_fields: Any, meta_fields: Any
+) -> str:
+    """Return a readable value for *controll_field* if the key exists in *fields*."""
+    if not controll_field:
+        return ""
+
+    field_values = _to_field_dict(issue_fields)
+    key = _resolve_control_field_key(controll_field, field_values, meta_fields)
+    if key is None:
+        return ""
+    return _stringify_control_value(field_values.get(key))
+
+
+def _to_field_dict(fields: Any) -> dict[str, Any]:
+    """Convert Jira field container objects to a plain dictionary."""
+    if isinstance(fields, dict):
+        return fields
+    try:
+        values = vars(fields)
+    except TypeError:
+        return {}
+    return values if isinstance(values, dict) else {}
+
+
+def _resolve_control_field_key(
+    controll_field: str, field_values: dict[str, Any], meta_fields
+) -> str | None:
+    """Resolve a configured control field to an existing Jira field key."""
+    if controll_field in field_values:
+        return controll_field
+    for field in meta_fields:
+        if field.get("name", None) == controll_field:
+            return str(field.get("id", None))
+    return None
+
+
+def _stringify_control_value(value: Any) -> str:
+    """Normalize Jira field objects/dicts to string values."""
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        for nested_key in ("name", "value", "id"):
+            nested_value = value.get(nested_key)
+            if nested_value is not None:
+                return str(nested_value)
+    elif hasattr(value, "name") and value.name is not None:
+        return str(value.name)
+    return str(value)
 
 
 def _extract_user_defined_fields(
@@ -97,11 +148,6 @@ def _extract_user_defined_fields(
             )
         )
     return result
-
-
-def _safe_field_name(obj: Any) -> str:
-    """Return ``obj.name`` or ``""`` if *obj* is ``None``."""
-    return obj.name if obj else ""
 
 
 def _safe_display_name(obj: Any) -> str:
