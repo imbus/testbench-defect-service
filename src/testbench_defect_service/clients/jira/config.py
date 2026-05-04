@@ -20,7 +20,6 @@ class PhaseCommands(BaseModel):
 class JiraProjectConfig(BaseModel):
     defect_jql: str | None = Field(None, description="JQL query template for this project")
     attributes: list[str] | None = Field(None, description="Attributes for this project")
-    control_fields: list[str] | None = Field(None, description="Control fields for this project")
     readonly: bool | None = Field(None, description="Whether the project is read-only")
     commands: PhaseCommands | None = Field(None, description="Commands for this project")
     show_change_history: bool | None = Field(
@@ -176,10 +175,6 @@ class JiraDefectClientConfig(BaseModel):
     attributes: list[str] = Field(
         default_factory=lambda: ["title", "status"],
         description="Fields from Jira to display in the extended defect view.",
-    )
-    control_fields: list[str] = Field(
-        default=["priority", "status", "classification"],
-        description="Control fields for the Jira client",
     )
     readonly: bool = Field(default=False, description="Whether the client is read-only")
     show_change_history: bool | None = Field(
