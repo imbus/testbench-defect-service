@@ -144,7 +144,7 @@ class JiraClient:
             logger.error("Error fetching project statuses for '%s': %s", project_key, e)
             return []
 
-    def fetch_all_custom_fields(self, project: str | None) -> list[dict[str, Any]]:  # noqa: C901, PLR0911, PLR0912
+    def get_all_project_fields(self, project: str | None) -> list[dict[str, Any]]:  # noqa: C901, PLR0911, PLR0912
         if self.use_issuetypes_endpoint:
             if project:
                 fields_dict = {}
@@ -168,6 +168,13 @@ class JiraClient:
                             f"Error fetching issue fields for issue type {issue_type.id}: {e}"
                         )
                         return []
+                fields_dict["status"] = {
+                    "required": True,
+                    "name": "Status",
+                    "fieldId": "status",
+                    "id": "status",
+                }
+
                 return list(fields_dict.values())
             try:
                 return self.jira.fields()
@@ -196,8 +203,12 @@ class JiraClient:
                             fields[fid] = details
                     else:
                         fields[fid] = details
-
-            # Return only customfields
+            fields["status"] = {
+                "required": True,
+                "name": "Status",
+                "key": "status",
+                "hasDefaultValue": False,
+            }
             custom_fields = [{"id": fid, **details} for fid, details in fields.items()]
             logger.info("Found %d custom fields for project '%s'", len(custom_fields), project)
             return custom_fields

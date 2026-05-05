@@ -290,7 +290,7 @@ class JiraDefectClient(AbstractDefectClient):
                     protocol_code=ProtocolCode.NO_DEFECT_FOUND,
                     message=f"No issues found for project '{project}' using configured JQL.",
                 )
-            fields = self.jira_client.fetch_all_custom_fields(project=self.projects[project].key)
+            fields = self.jira_client.get_all_project_fields(project=self.projects[project].key)
             logger.debug("Processing %d issues for project '%s'", len(issues), project)
 
             for issue in issues:
@@ -356,7 +356,7 @@ class JiraDefectClient(AbstractDefectClient):
             return ProtocolledDefectSet(value=[], protocol=protocol)
 
         logger.info("Processing batch of %d defect IDs for project '%s'", len(defect_ids), project)
-        fields = self.jira_client.fetch_all_custom_fields(project=project_key)
+        fields = self.jira_client.get_all_project_fields(project=project_key)
         for defect_id in defect_ids:
             defect_identifier = defect_id.root
             if not defect_identifier:
@@ -659,7 +659,7 @@ class JiraDefectClient(AbstractDefectClient):
                 valueType=extract_valuetype_from_issue_field(field),
                 mustField=getattr(field, "required", None),
             )
-            for field in self.jira_client.fetch_all_custom_fields(project=project_key)
+            for field in self.jira_client.get_all_project_fields(project=project_key)
         ]
 
     def before_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
@@ -874,6 +874,10 @@ class JiraDefectClient(AbstractDefectClient):
         # Check missing mandatory fields
         for field in required_fields:
             if getattr(defect, field, None) in (None, ""):
+                logger.warning(
+                    "Defect validation failed: required field '%s' is missing or empty",
+                    field,
+                )
                 return False
 
         # Validate remaining custom control fields
