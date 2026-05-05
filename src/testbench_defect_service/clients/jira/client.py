@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from jira import JIRAError, Project
-from jira.resources import IssueType, Priority, Status
 from requests import ConnectTimeout
 from sanic import Forbidden, NotFound, ServerError, Unauthorized
 
@@ -179,52 +178,30 @@ class JiraDefectClient(AbstractDefectClient):
 
         control_fields: dict[str, list[str]] = {}
 
-        control_fields_name = self._get_config_value("control_fields", project=project).copy()
         if self.jira_client.use_issuetypes_endpoint:
-            self.extract_control_field_values_jdc(project_key, control_fields, control_fields_name)
+            self.extract_control_field_values_jdc(project_key, control_fields)
         else:
             for it in issue_types:
-                self._extract_control_field_values(project, control_fields_name, control_fields, it)
+                self._extract_control_field_values(control_fields, it)
 
-        if "classification" in control_fields_name:
-            self._add_class_issue_type_names(
-                control_fields_name, control_fields, issue_types, project_key
-            )
+        self._add_class_issue_type_names(control_fields, issue_types, project_key)
 
-        if "status" in control_fields_name:
-            self._add_control_field_statuses(
-                control_fields_name, projects, control_fields, project_key
-            )
-
-        if control_fields_name != []:
-            logger.warning(
-                (
-                    "Some configured control fields were not found in Jira "
-                    "metadata for project '%s'. Remaining fields: %s"
-                ),
-                project,
-                control_fields_name,
-            )
+        self._add_control_field_statuses(projects, control_fields, project_key)
 
         return control_fields
 
-    def extract_control_field_values_jdc(self, project_key, control_fields, control_fields_name):
+    def extract_control_field_values_jdc(self, project_key, control_fields):
         for field in self.jira_client.fetch_project_issue_fields(project_key):
-            if field.name in control_fields_name or field.fieldId in control_fields_name:
-                if not field.allowedValues:
-                    continue
-                control_field_values = []
-                for value in field.allowedValues:
-                    control_field_values.append(value.name)
-                control_fields[field.name] = control_field_values
-                if field.name in control_fields_name:
-                    control_fields_name.remove(field.name)
-                else:
-                    control_fields_name.remove(field.fieldId)
+            allowed_values = getattr(field, "allowedValues", None)
+            if not allowed_values:
+                continue
+            control_field_values = []
+            for value in field.allowedValues:
+                control_field_values.append(value.name)
+            control_fields[field.name] = control_field_values
 
     def _add_class_issue_type_names(
         self,
-        control_fields_name: Any,
         control_fields: dict[str, list[str]],
         issue_types: list[Any] | None = None,
         project_key: str | None = None,
@@ -239,12 +216,10 @@ class JiraDefectClient(AbstractDefectClient):
         else:
             for issue_type in issue_types or []:
                 control_field_values.append(str(issue_type["name"]))
-        control_fields["classification"] = control_field_values
-        control_fields_name.remove("classification")
+        control_fields["issuetype"] = control_field_values
 
     def _add_control_field_statuses(
         self,
-        control_fields_name: Any,
         projects: list,
         control_fields: dict[str, list[str]],
         project_key,
@@ -273,46 +248,42 @@ class JiraDefectClient(AbstractDefectClient):
                     control_field_values.append(str(status))
 
         control_fields["status"] = control_field_values
-        control_fields_name.remove("status")
 
     def _extract_control_field_values(
         self,
-        project: str | None,
-        control_fields_name: Any,
         control_fields: dict[str, list[str]],
         issue_type: dict,
     ):
         for _, field_content in issue_type.get("fields", {}).items():
             field_name = field_content.get("name", "")
-            field_id = field_content.get("key", "")
-            if field_name in control_fields_name or field_id in control_fields_name:
-                if field_content.get("allowedValues", {}):
-                    control_field_values = []
-                    for value in field_content.get("allowedValues", {}):
-                        control_field_values.append(value.get("name", ""))
+            if field_content.get("allowedValues", {}):
+                control_field_values = []
+                for value in field_content.get("allowedValues", {}):
+                    value_name = value.get("name", None)
+                    if not value_name:
+                        value_name = value.get("value", None)
+                    control_field_values.append(value_name)
 
-                    control_fields[field_name] = control_field_values
-                    if field_name in control_fields_name:
-                        control_fields_name.remove(field_name)
-                    else:
-                        control_fields_name.remove(field_id)
+                control_fields[field_name] = control_field_values
 
-                else:
-                    logger.warning(
-                        "Control field '%s' in project '%s' has no allowedValues; "
-                        "it may be of an incompatible type. Schema: %s",
-                        field_name,
-                        project,
-                        field_content.get("schema", {}),
-                    )
+            else:
+                pass
+                # logger.warning(
+                #     "Control field '%s' in project '%s' has no allowedValues; "
+                #     "it may be of an incompatible type. Schema: %s",
+                #     field_name,
+                #     project,
+                #     field_content.get("schema", {}),
+                # )
 
     def get_defects(self, project: str, sync_context: SyncContext) -> ProtocolledDefectSet:
         protocol = Protocol()
         defects: list[DefectWithID] = []
+        expand = "renderedFields"
         try:
             jql_query = str(self.config.defect_jql).format(project=self.projects[project].key)
             logger.debug("Fetching defects for project '%s' with JQL '%s'", project, jql_query)
-            issues = self.jira_client.fetch_issues_by_jql(jql_query)
+            issues = self.jira_client.fetch_issues_by_jql(jql_query, expand=expand)
             if not issues:
                 logger.info("No issues found for project '%s'", project)
                 protocol.add_general_error(
@@ -324,7 +295,14 @@ class JiraDefectClient(AbstractDefectClient):
 
             for issue in issues:
                 try:
-                    defects.append(create_defect_from_issue(issue, fields))
+                    defects.append(
+                        create_defect_from_issue(
+                            issue,
+                            fields,
+                            jira_server_url=self.config.server_url,
+                            sync_context=sync_context,
+                        )
+                    )
                 except (ValueError, KeyError, AttributeError, TypeError) as exc:
                     logger.error(
                         "Failed to convert issue '%s' to defect", getattr(issue, "key", "<unknown>")
@@ -361,6 +339,7 @@ class JiraDefectClient(AbstractDefectClient):
     ) -> ProtocolledDefectSet:
         protocol = Protocol()
         defects: list[DefectWithID] = []
+        expand = "renderedFields"
         try:
             project_key = self.projects[project].key
         except KeyError as exc:
@@ -383,7 +362,9 @@ class JiraDefectClient(AbstractDefectClient):
             if not defect_identifier:
                 continue
             try:
-                issue = self.jira_client.fetch_issue(str(defect_identifier), fields="*all")
+                issue = self.jira_client.fetch_issue(
+                    str(defect_identifier), fields="*all", expand=expand
+                )
                 if issue is None:
                     logger.warning("Issue with id '%s' not found", defect_identifier)
                     protocol.add_warning(
@@ -394,7 +375,12 @@ class JiraDefectClient(AbstractDefectClient):
                     continue
 
                 try:
-                    defect = create_defect_from_issue(issue, fields)
+                    defect = create_defect_from_issue(
+                        issue,
+                        fields,
+                        jira_server_url=self.config.server_url,
+                        sync_context=sync_context,
+                    )
                     defects.append(defect)
                 except (ValueError, KeyError, AttributeError, TypeError) as exc:
                     logger.error(
@@ -470,7 +456,7 @@ class JiraDefectClient(AbstractDefectClient):
             return ProtocolledString(value="", protocol=protocol)
 
         try:
-            issue = jira_client.create_issue(project_key, defect)
+            issue = jira_client.create_issue(project_key, defect, sync_context)
             issue_key = str(getattr(issue, "key", ""))
             logger.info("Successfully created issue '%s' in project '%s'", issue_key, project)
             protocol.add_success(
@@ -537,7 +523,7 @@ class JiraDefectClient(AbstractDefectClient):
                     "No matching issues found to update", protocol_code=ProtocolCode.NO_DEFECT_FOUND
                 )
             else:
-                jira_client.update_issue(project_key, issue, defect)
+                jira_client.update_issue(project_key, issue, defect, sync_context)
                 logger.info("Successfully updated issue '%s' in project '%s'", issue.key, project)
                 protocol.add_success(
                     issue.key,
@@ -611,7 +597,9 @@ class JiraDefectClient(AbstractDefectClient):
         try:
             project_key = self.projects[project].key
 
-            issue = self.jira_client.fetch_issue(defect_id, fields="*all", expand="changelog")
+            issue = self.jira_client.fetch_issue(
+                defect_id, fields="*all", expand="changelog,renderedFields"
+            )
             if issue is None:
                 logger.warning("Issue with id '%s' not found", defect_id)
                 raise NotFound(f"Issue with id '{defect_id}' not found in Jira")
@@ -626,7 +614,12 @@ class JiraDefectClient(AbstractDefectClient):
             ]
 
             try:
-                defect = create_defect_from_issue(issue, fields_list)
+                defect = create_defect_from_issue(
+                    issue,
+                    fields_list,
+                    jira_server_url=self.config.server_url,
+                    sync_context=sync_context,
+                )
                 return self._build_defect_with_attributes(
                     defect=defect,
                     project=project,
@@ -806,9 +799,6 @@ class JiraDefectClient(AbstractDefectClient):
         project: str,
     ) -> None:
         """Validate and filter create/update actions based on control fields."""
-        statuses = self.jira_client.jira.statuses()
-        priorities = self.jira_client.jira.priorities()
-        issue_types = self.jira_client.jira.issue_types()
         project_control_fields = self.get_control_fields(project)
 
         for action_name in ("create", "update"):
@@ -819,9 +809,6 @@ class JiraDefectClient(AbstractDefectClient):
                 if self.validate_defect(
                     defect,
                     project_control_fields,
-                    statuses,
-                    priorities,
-                    issue_types,
                 )
             ]
             rejected_count = len(action_items) - len(valid_items)
@@ -844,9 +831,6 @@ class JiraDefectClient(AbstractDefectClient):
         self,
         defect: Defect | DefectWithID,
         control_field: dict[str, list[str]],
-        statuses: list[Status],
-        priorities: list[Priority],
-        issue_types: list[IssueType],
     ) -> bool:
         """
         Validate a defect object used in create/update sync operations in Jira.
@@ -892,31 +876,10 @@ class JiraDefectClient(AbstractDefectClient):
             if getattr(defect, field, None) in (None, ""):
                 return False
 
-        # Validate status against Jira workflows
-        if getattr(defect, "status", None) not in {status.name for status in statuses}:
-            return False
-        control_field = {k: v for k, v in control_field.items() if k.lower() != "status"}
-
-        # Validate priority against Jira priorities
-        if getattr(defect, "priority", None) not in {priority.name for priority in priorities}:
-            return False
-        control_field = {
-            k: v
-            for k, v in control_field.items()
-            if k.lower() != "priorität" and k.lower() != "priority"
-        }
-
-        # Validate classification (issue type) against Jira issue types
-        if getattr(defect, "classification", None) not in {
-            issue_type.name for issue_type in issue_types
-        }:
-            return False
-        control_field = {k: v for k, v in control_field.items() if k.lower() != "classification"}
-
         # Validate remaining custom control fields
         for field, allowed_values in control_field.items():
             actual_value = getattr(defect, field, None)
-            if actual_value not in allowed_values:
+            if actual_value not in allowed_values and actual_value is not None:
                 logger.debug(
                     "Defect validation failed: field '%s' has value '%s' "
                     "which is not in allowed values: %s",
