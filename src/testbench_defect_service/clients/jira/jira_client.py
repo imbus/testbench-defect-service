@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import urllib3
 from jira import JIRA, Issue, JIRAError
 from jira.resources import Field, Project
 from sanic import NotFound
@@ -15,13 +16,15 @@ from testbench_defect_service.clients.jira.utils import (
     iso8601_to_unix_timestamp,
 )
 from testbench_defect_service.log import logger
-from testbench_defect_service.models.defects import Defect, Login
+from testbench_defect_service.models.defects import Defect, Login, SyncContext
 
 
 class JiraClient:
     def __init__(self, config: JiraDefectClientConfig, principal: Login | None = None):
         self.config = config
         self._options: dict[str, Any] = {"verify": self.config.ssl_verify}
+        if self.config.ssl_verify is False:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         if self.config.client_cert is not None:
             self._options["client_cert"] = self.config.client_cert
         if principal:
@@ -141,7 +144,7 @@ class JiraClient:
             logger.error("Error fetching project statuses for '%s': %s", project_key, e)
             return []
 
-    def fetch_all_custom_fields(self, project: str | None) -> list[dict[str, Any]]:  # noqa: C901, PLR0911, PLR0912
+    def get_all_project_fields(self, project: str | None) -> list[dict[str, Any]]:  # noqa: C901, PLR0911, PLR0912
         if self.use_issuetypes_endpoint:
             if project:
                 fields_dict = {}
@@ -165,6 +168,13 @@ class JiraClient:
                             f"Error fetching issue fields for issue type {issue_type.id}: {e}"
                         )
                         return []
+                fields_dict["status"] = {
+                    "required": True,
+                    "name": "Status",
+                    "fieldId": "status",
+                    "id": "status",
+                }
+
                 return list(fields_dict.values())
             try:
                 return self.jira.fields()
@@ -193,8 +203,12 @@ class JiraClient:
                             fields[fid] = details
                     else:
                         fields[fid] = details
-
-            # Return only customfields
+            fields["status"] = {
+                "required": True,
+                "name": "Status",
+                "key": "status",
+                "hasDefaultValue": False,
+            }
             custom_fields = [{"id": fid, **details} for fid, details in fields.items()]
             logger.info("Found %d custom fields for project '%s'", len(custom_fields), project)
             return custom_fields
@@ -283,16 +297,18 @@ class JiraClient:
             logger.warning("Error fetching issue '%s': %s", issue_id, e)
             return None
 
-    def create_issue(self, project_key: str, defect: Defect) -> Issue:
+    def create_issue(self, project_key: str, defect: Defect, sync_context: SyncContext) -> Issue:
         try:
             mapper = DefectToJiraMapper(self.jira)
             if self.use_issuetypes_endpoint:
                 project_fields = self.fetch_project_issue_fields(project_key=project_key)
-                issue_fields = mapper.map_defect_to_jira_data_center_issue(defect, project_fields)
+                issue_fields = mapper.map_defect_to_jira_data_center_issue(
+                    defect, project_fields, sync_context=sync_context
+                )
             else:
                 issue_metadata = self.fetch_issues_fields(project=project_key)
                 issue_fields = mapper.map_defect_to_jira_issue(
-                    defect=defect, issue_metadata=issue_metadata
+                    defect=defect, issue_metadata=issue_metadata, sync_context=sync_context
                 )
             issue_fields = issue_fields.get("fields", issue_fields)
             issue_fields["project"] = project_key
@@ -315,18 +331,20 @@ class JiraClient:
         issue.delete()
         logger.info("Successfully deleted issue '%s'", issue_key)
 
-    def update_issue(self, project_key: str, issue: Issue, defect: Defect) -> None:
+    def update_issue(
+        self, project_key: str, issue: Issue, defect: Defect, sync_context: SyncContext
+    ) -> None:
         try:
             mapper = DefectToJiraMapper(self.jira)
             if self.use_issuetypes_endpoint:
                 project_fields = self.fetch_project_issue_fields(project_key=project_key)
-                update_fields = mapper.map_defect_to_jira_data_center_issue(defect, project_fields)[
-                    "fields"
-                ]
+                update_fields = mapper.map_defect_to_jira_data_center_issue(
+                    defect, project_fields, sync_context=sync_context
+                )["fields"]
             else:
                 issue_metadata = self.fetch_issues_fields(project=project_key)
                 update_fields = mapper.map_defect_to_jira_issue(
-                    defect, issue_metadata=issue_metadata
+                    defect, issue_metadata=issue_metadata, sync_context=sync_context
                 )["fields"]
                 ensure_issuetype_format(update_fields, issue_metadata)
             update_fields.pop("attachment", None)

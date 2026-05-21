@@ -85,7 +85,6 @@ server_url     = "https://your-company.atlassian.net"
 auth_type      = "basic"
 defect_jql     = "project = '{project}' AND issuetype in standardIssueTypes()"
 attributes     = ["title", "status", "priority", "classification"]
-control_fields = ["priority", "status", "classification"]
 readonly       = false
 ```
 
@@ -113,7 +112,6 @@ readonly       = false
 |--------|------|-------------|----------|---------|
 | `defect_jql` | String | JQL query used to fetch defects. `{project}` is replaced with the project key at runtime. See [Example JQL queries](#example-jql-queries). | No | `"project = '{project}' AND issuetype in standardIssueTypes()"` |
 | `attributes` | List | Jira fields to include in defect responses. | No | `["title", "status"]` |
-| `control_fields` | List | Fields for which the client returns allowed values. See [Control fields](#control-fields). | No | `["priority", "status", "classification"]` |
 
 ### Behavior
 
@@ -206,10 +204,9 @@ The Jira client automatically queries Jira metadata to populate allowed values f
 | Field | Jira data source |
 |-------|------------------|
 | `status` | Project workflow statuses |
-| `priority` | Global Jira priorities |
-| `classification` | Project issue types |
+| `issuetype` | Project issue types |
 
-Additional fields listed in `control_fields` are resolved via the Jira field metadata API.
+All other fields (e.g. `priority`, custom select fields) are discovered automatically from the Jira field metadata API.
 
 ---
 
