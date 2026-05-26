@@ -79,18 +79,19 @@ class ExcelDefectClient(AbstractDefectClient):
         return control_fields
 
     def get_defects(self, project: str, sync_context: SyncContext) -> ProtocolledDefectSet:
-        del sync_context
-
         protocol = Protocol()
         try:
             defect_path = self._get_file_path(project=project)
             effective_config = self._get_effective_config(project)
-            df = self._get_dataframe(defect_path, effective_config, protocol)
+            df = self._get_dataframe(defect_path, effective_config, sync_context, protocol)
         except FileNotFoundError as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.PROJECT_NOT_FOUND)
             return ProtocolledDefectSet(value=[], protocol=protocol)
         except (OSError, ValueError) as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.READ_ACCESS_ERROR)
+            return ProtocolledDefectSet(value=[], protocol=protocol)
+
+        if protocol.generalErrors:
             return ProtocolledDefectSet(value=[], protocol=protocol)
 
         defects = self._build_defects_from_dataframe(df, effective_config, protocol)
@@ -114,14 +115,22 @@ class ExcelDefectClient(AbstractDefectClient):
         self,
         file_path: Path,
         config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
         protocol: Protocol | None = None,
     ) -> pd.DataFrame:
         max_age_seconds, max_size_bytes = self._get_buffer_limits(config)
 
         if max_age_seconds <= 0 or max_size_bytes <= 0:
-            return read_data_frame_from_file_path(file_path, config, protocol)
+            return read_data_frame_from_file_path(file_path, config, sync_context, protocol)
 
-        cache_key = file_path.as_posix()
+        cache_key = "|".join(
+            [
+                file_path.as_posix(),
+                sync_context.statusAttribute or "",
+                sync_context.priorityAttribute or "",
+                sync_context.classAttribute or "",
+            ]
+        )
         current_mtime = file_path.stat().st_mtime
 
         with self._buffer_lock:
@@ -136,7 +145,9 @@ class ExcelDefectClient(AbstractDefectClient):
                     file_path,
                 )
 
-        df = read_data_frame_from_file_path(file_path, config, protocol)
+        df = read_data_frame_from_file_path(file_path, config, sync_context, protocol)
+        if protocol is not None and protocol.generalErrors:
+            return df
         size_bytes = int(df.memory_usage(index=True, deep=True).sum())
         now = time.time()
 

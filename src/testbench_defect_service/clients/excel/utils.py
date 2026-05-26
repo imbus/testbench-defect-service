@@ -9,13 +9,36 @@ import xlrd
 
 from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig
 from testbench_defect_service.log import logger
-from testbench_defect_service.models.defects import Protocol, ProtocolCode
+from testbench_defect_service.models.defects import Protocol, ProtocolCode, SyncContext
 
 _REQUIRED_DATA_COLUMNS: tuple[str, ...] = ("id",)
 
 
-def get_column_mapping_for_config(config: ExcelDefectClientConfig) -> dict[int, list[str]]:
+def get_column_mapping_for_config(
+    config: ExcelDefectClientConfig, sync_context: SyncContext, protocol: Protocol | None = None
+) -> dict[int, list[str]] | None:
     column_mapping: dict[int, list[str]] = {}
+
+    status_column_no = None
+    priority_column_no = None
+    class_column_no = None
+
+    for control_field in config.control_fields:
+        if sync_context.statusAttribute == control_field.name:
+            status_column_no = control_field.column_number
+        if sync_context.priorityAttribute == control_field.name:
+            priority_column_no = control_field.column_number
+        if sync_context.classAttribute == control_field.name:
+            class_column_no = control_field.column_number
+
+    if _add_missing_control_field_errors(
+        sync_context,
+        protocol,
+        status_column_no=status_column_no,
+        priority_column_no=priority_column_no,
+        class_column_no=class_column_no,
+    ):
+        return None
 
     base_columns = {
         "id": config.id_column_no,
@@ -24,17 +47,55 @@ def get_column_mapping_for_config(config: ExcelDefectClientConfig) -> dict[int, 
         "reporter": config.discoverer_column_no,
         "lastEdited": config.lastedit_column_no,
         "description": config.description_column_no,
+        "status": status_column_no,
+        "classification": class_column_no,
+        "priority": priority_column_no,
     }
     for field_name, column_number in base_columns.items():
         _register_column(column_mapping, column_number, field_name)
-
-    for control_field in config.control_fields:
-        _register_column(column_mapping, control_field.column_number, control_field.name)
 
     for udf_config in config.udfs:
         _register_column(column_mapping, udf_config.column, udf_config.name)
 
     return column_mapping
+
+
+def _add_missing_control_field_errors(
+    sync_context: SyncContext,
+    protocol: Protocol | None,
+    *,
+    status_column_no: int | None,
+    priority_column_no: int | None,
+    class_column_no: int | None,
+) -> bool:
+    messages: list[str] = []
+    required_control_fields = (
+        ("status", sync_context.statusAttribute, status_column_no),
+        ("priority", sync_context.priorityAttribute, priority_column_no),
+        ("classification", sync_context.classAttribute, class_column_no),
+    )
+
+    for defect_field, attribute_name, column_number in required_control_fields:
+        if not attribute_name or column_number:
+            continue
+        messages.append(
+            f"Cannot import Excel defects: sync attribute '{attribute_name}' for "
+            f"'{defect_field}' is not configured in the Excel control fields."
+        )
+
+    if not messages:
+        return False
+
+    if protocol is None:
+        raise ValueError("\n".join(messages))
+
+    for message in messages:
+        logger.warning(message)
+        protocol.add_general_error(
+            message,
+            protocol_code=ProtocolCode.IMPORT_ERROR,
+        )
+    return True
 
 
 def _register_column(
@@ -92,6 +153,7 @@ def _validate_column_mapping(
 def read_data_frame_from_file_path(
     file_path: Path,
     config: ExcelDefectClientConfig,
+    sync_context: SyncContext,
     protocol: Protocol | None = None,
 ) -> pd.DataFrame:
     logger.debug(
@@ -102,7 +164,9 @@ def read_data_frame_from_file_path(
     start = time.monotonic()
 
     df = _load_dataframe(file_path, config, protocol)
-    column_mapping = get_column_mapping_for_config(config)
+    column_mapping = get_column_mapping_for_config(config, sync_context, protocol)
+    if column_mapping is None:
+        return cast(pd.DataFrame, df.iloc[0:0].copy())
     udf_names = {udf_cfg.name for udf_cfg in config.udfs}
     valid_mapping = _validate_column_mapping(
         column_mapping,
