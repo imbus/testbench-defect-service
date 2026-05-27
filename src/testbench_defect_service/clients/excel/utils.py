@@ -1,7 +1,8 @@
+import csv
 import math
 import time
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, NoReturn, cast
 
 import openpyxl
 import pandas as pd
@@ -12,6 +13,15 @@ from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import Protocol, ProtocolCode, SyncContext
 
 _REQUIRED_DATA_COLUMNS: tuple[str, ...] = ("id",)
+
+
+def read_header_columns_from_file_path(
+    file_path: Path,
+    config: ExcelDefectClientConfig,
+    protocol: Protocol | None = None,
+) -> dict[int, str]:
+    header_values = _load_header_values(file_path, config, protocol)
+    return dict(enumerate(header_values, start=1))
 
 
 def get_column_mapping_for_config(
@@ -187,6 +197,23 @@ def read_data_frame_from_file_path(
     return df
 
 
+def map_and_rename_columns(
+    sync_context: SyncContext,
+    effective_config: ExcelDefectClientConfig,
+    header: dict[int, str],
+    df: pd.DataFrame,
+) -> pd.DataFrame:
+    column_mapping = get_column_mapping_for_config(effective_config, sync_context)
+    if column_mapping is not None:
+        rename_map = {
+            logical_names[0]: header[idx + 1]
+            for idx, logical_names in column_mapping.items()
+            if logical_names and idx + 1 in header
+        }
+        df = df.rename(columns=rename_map)
+    return df
+
+
 def _validate_unique_constraints(
     df: pd.DataFrame,
     file_path: Path,
@@ -299,6 +326,149 @@ def _load_dataframe(
     return cast(pd.DataFrame, normalized_df)
 
 
+def _load_header_values(
+    file_path: Path,
+    config: ExcelDefectClientConfig,
+    protocol: Protocol | None = None,
+) -> list[str]:
+    suffix = file_path.suffix.lower()
+
+    if suffix == ".xlsx":
+        return _load_xlsx_header_values(file_path, config, protocol)
+
+    if suffix == ".xls":
+        return _load_xls_header_values(file_path, config, protocol)
+
+    if suffix in (".csv", ".tsv", ".txt"):
+        return _load_delimited_header_values(file_path, config)
+
+    raise ValueError(f"Unsupported file format: {file_path.suffix}")
+
+
+def _load_xlsx_header_values(
+    file_path: Path,
+    config: ExcelDefectClientConfig,
+    protocol: Protocol | None = None,
+) -> list[str]:
+    header_row_idx = max(config.defects_data_header_line - 1, 0)
+    sheet_name = resolve_visible_sheet_name(file_path, config, protocol)
+    try:
+        workbook = openpyxl.load_workbook(
+            file_path,
+            read_only=True,
+            data_only=True,
+            keep_links=False,
+        )
+    except KeyError as e:
+        raise ValueError(
+            f"File '{file_path}' does not appear to be a valid xlsx file (it may be corrupted or in"
+            "a different format): {e}"
+        ) from e
+    try:
+        worksheet = workbook[sheet_name]
+        header_row = next(
+            worksheet.iter_rows(
+                min_row=header_row_idx + 1,
+                max_row=header_row_idx + 1,
+                values_only=True,
+            ),
+            None,
+        )
+    finally:
+        workbook.close()
+
+    if header_row is None:
+        _raise_missing_header_row(file_path, config.defects_data_header_line)
+    return _normalize_header_values(header_row)
+
+
+def _load_xls_header_values(
+    file_path: Path,
+    config: ExcelDefectClientConfig,
+    protocol: Protocol | None = None,
+) -> list[str]:
+    header_row_idx = max(config.defects_data_header_line - 1, 0)
+    sheet_name = resolve_visible_sheet_name(file_path, config, protocol)
+    workbook = xlrd.open_workbook(str(file_path), on_demand=True)
+    try:
+        worksheet = workbook.sheet_by_name(sheet_name)
+        if header_row_idx >= worksheet.nrows:
+            _raise_missing_header_row(file_path, config.defects_data_header_line)
+        return _normalize_header_values(list(worksheet.row_values(header_row_idx)))
+    finally:
+        workbook.release_resources()
+
+
+def _load_delimited_header_values(
+    file_path: Path,
+    config: ExcelDefectClientConfig,
+) -> list[str]:
+    separator = "\t" if file_path.suffix.lower() == ".tsv" else (config.seperator or ",")
+    if len(separator) != 1:
+        raise ValueError(f"Unsupported separator '{separator}' for '{file_path.name}'.")
+
+    last_error: UnicodeDecodeError | None = None
+    for encoding in ("utf-8", "windows-1252"):
+        try:
+            return _read_delimited_header_values(
+                file_path,
+                separator,
+                encoding,
+                config.defects_data_header_line,
+            )
+        except UnicodeDecodeError as exc:
+            last_error = exc
+
+    if last_error is not None:
+        raise last_error
+
+    _raise_missing_header_row(file_path, config.defects_data_header_line)
+    return []  # type: ignore[unreachable]
+
+
+def _read_delimited_header_values(
+    file_path: Path,
+    separator: str,
+    encoding: str,
+    header_line: int,
+) -> list[str]:
+    header_row_idx = max(header_line - 1, 0)
+    with file_path.open("r", encoding=encoding, newline="") as handle:
+        reader = csv.reader(handle, delimiter=separator)
+        for row_index, row in enumerate(reader):
+            if row_index == header_row_idx:
+                return _normalize_header_values(row)
+    _raise_missing_header_row(file_path, header_line)
+    return []  # type: ignore[unreachable]
+
+
+def resolve_visible_sheet_name(
+    file_path: Path,
+    config: ExcelDefectClientConfig,
+    protocol: Protocol | None = None,
+) -> str:
+    visible_sheets = _get_visible_sheets(file_path)
+    if not visible_sheets:
+        raise ValueError(f"No visible worksheets found in '{file_path.name}'.")
+    return _resolve_sheet_name(
+        (config.worksheet_name or ""),
+        visible_sheets,
+        file_path.name,
+        protocol,
+    )
+
+
+def _raise_missing_header_row(file_path: Path, header_line: int) -> NoReturn:
+    raise ValueError(f"Header row {header_line} not found in '{file_path.name}'.")
+
+
+def _normalize_header_values(values: list[Any] | tuple[Any, ...]) -> list[str]:
+    header_values = [_coerce_cell_to_string(value) for value in values]
+    while header_values and header_values[-1] == "":
+        header_values.pop()
+    return header_values
+
+
 def _coerce_cell_to_string(value: Any) -> str:
     if value is None:
         return ""
@@ -312,12 +482,18 @@ def _coerce_cell_to_string(value: Any) -> str:
 def _get_visible_sheets(file_path: Path) -> list[str]:
     suffix = file_path.suffix.lower()
     if suffix == ".xlsx":
-        xlsx_workbook = openpyxl.load_workbook(
-            file_path,
-            read_only=True,
-            data_only=True,
-            keep_links=False,
-        )
+        try:
+            xlsx_workbook = openpyxl.load_workbook(
+                file_path,
+                read_only=True,
+                data_only=True,
+                keep_links=False,
+            )
+        except KeyError as e:
+            raise ValueError(
+                f"File '{file_path}' does not appear to be a valid xlsx file (it may be corrupted"
+                f"or in a different format): {e}"
+            ) from e
         try:
             return [
                 sheet.title for sheet in xlsx_workbook.worksheets if sheet.sheet_state == "visible"

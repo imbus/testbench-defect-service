@@ -10,7 +10,12 @@ from sanic.exceptions import NotFound
 
 from testbench_defect_service.clients.abstract_client import AbstractDefectClient
 from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig
-from testbench_defect_service.clients.excel.utils import read_data_frame_from_file_path
+from testbench_defect_service.clients.excel.utils import (
+    get_column_mapping_for_config,
+    read_data_frame_from_file_path,
+    read_header_columns_from_file_path,
+    resolve_visible_sheet_name,
+)
 from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import (
     Defect,
@@ -244,21 +249,136 @@ class ExcelDefectClient(AbstractDefectClient):
     def create_defect(
         self, project: str, defect: Defect, sync_context: SyncContext
     ) -> ProtocolledString:
-        del defect, sync_context
 
         protocol = Protocol()
+
         if self._get_config_value("readonly", project):
             protocol.add_error(
                 project,
                 "Excel client is configured as read-only.",
                 protocol_code=ProtocolCode.INSERT_ACCESS_ERROR,
             )
-        else:
-            protocol.add_general_error(
-                "Excel write operations are not implemented.",
-                protocol_code=ProtocolCode.INSERT_ERROR,
+            return ProtocolledString(value="", protocol=protocol)
+
+        try:
+            defect_path = self._get_file_path(project=project)
+            effective_config = self._get_effective_config(project)
+            header = read_header_columns_from_file_path(defect_path, effective_config)
+            df = self._get_dataframe(defect_path, effective_config, sync_context, protocol)
+        except FileNotFoundError as exc:
+            protocol.add_general_error(str(exc), protocol_code=ProtocolCode.PROJECT_NOT_FOUND)
+            return ProtocolledString(value="", protocol=protocol)
+        except (OSError, ValueError) as exc:
+            protocol.add_general_error(str(exc), protocol_code=ProtocolCode.READ_ACCESS_ERROR)
+            return ProtocolledString(value="", protocol=protocol)
+
+        if protocol.generalErrors:
+            return ProtocolledString(value="", protocol=protocol)
+
+        df_with_new_defect = self.add_defect_to_dataframe(defect, effective_config, df, protocol)
+        new_defect_id = str(df_with_new_defect.iloc[-1]["id"])
+
+        try:
+            self.write_defect_data_to_excel(
+                sync_context, defect_path, effective_config, header, df_with_new_defect
             )
-        return ProtocolledString(value="", protocol=protocol)
+        except (OSError, ValueError) as exc:
+            protocol.add_general_error(str(exc), protocol_code=ProtocolCode.INSERT_ERROR)
+            return ProtocolledString(value="", protocol=protocol)
+
+        protocol.add_success(
+            key=new_defect_id,
+            message=f"Defect '{new_defect_id}' created successfully in project '{project}'.",
+            protocol_code=ProtocolCode.INSERT_SUCCESS,
+        )
+        logger.info("Created Excel defect '%s' in project '%s'", new_defect_id, project)
+        return ProtocolledString(value=new_defect_id, protocol=protocol)
+
+    def write_defect_data_to_excel(
+        self,
+        sync_context: SyncContext,
+        defect_path: Path,
+        effective_config: ExcelDefectClientConfig,
+        header: dict[int, str],
+        df_with_new_defect: pd.DataFrame,
+    ):
+        column_positions = get_column_mapping_for_config(effective_config, sync_context)
+        if not column_positions:
+            return
+
+        sheet_name = resolve_visible_sheet_name(defect_path, effective_config)
+
+        with pd.ExcelWriter(defect_path, engine="openpyxl") as writer:
+            for col_idx, col_names in column_positions.items():
+                col_name = col_names[0]
+                if col_name not in df_with_new_defect.columns:
+                    continue
+                original_header = header.get(col_idx + 1, col_name)
+
+                # --- STEP 1: Write ONLY the Header ---
+                header_only_df = (
+                    df_with_new_defect[[col_name]]
+                    .iloc[0:0]
+                    .rename(columns={col_name: original_header})
+                )
+                header_only_df.to_excel(
+                    writer,
+                    sheet_name=sheet_name,
+                    startcol=col_idx,
+                    startrow=effective_config.defects_data_header_line - 1,
+                    index=False,
+                    header=True,
+                )
+
+                # --- STEP 2: Write ONLY the Values ---
+                df_with_new_defect[[col_name]].to_excel(
+                    writer,
+                    sheet_name=sheet_name,
+                    startcol=col_idx,
+                    startrow=effective_config.defects_data_starting_line - 1,
+                    index=False,
+                    header=False,
+                )
+
+    def add_defect_to_dataframe(
+        self,
+        defect: Defect,
+        effective_config: ExcelDefectClientConfig,
+        df: pd.DataFrame,
+        protocol: Protocol,
+    ) -> pd.DataFrame:
+        prefix = effective_config.id_prefix
+        numeric_ids = [
+            int(id_val.replace(prefix, ""))
+            for id_val in df["id"]
+            if id_val.startswith(prefix) and id_val[len(prefix) :].isdigit()
+        ]
+        max_int = (max(numeric_ids) if numeric_ids else 0) + 1
+
+        defect_info_data_frame = pd.DataFrame(
+            {
+                "id": [effective_config.id_prefix + str(max_int)],
+                "title": [defect.title],
+                "description": [defect.description],
+                "reporter": [defect.reporter],
+                "status": [defect.status],
+                "classification": [defect.classification],
+                "priority": [defect.priority],
+                "lastEdited": [self._format_last_edited(defect.lastEdited, effective_config)],
+                "references": [
+                    effective_config.references_seperator.join(
+                        defect.references if defect.references else []
+                    )
+                ],
+            }
+        )
+
+        if defect.userDefinedFields:
+            for udf in defect.userDefinedFields:
+                # TODO: check if is an udf which has to be stored
+                defect_info_data_frame[udf.name] = udf.value
+
+        return pd.concat([df, defect_info_data_frame], ignore_index=True)
 
     def update_defect(
         self, project: str, defect_id: str, defect: Defect, sync_context: SyncContext
@@ -525,6 +645,18 @@ class ExcelDefectClient(AbstractDefectClient):
                 removed,
                 self._buffer_size_bytes / (1024**2),
             )
+
+    def _format_last_edited(
+        self,
+        value: datetime | None,
+        config: ExcelDefectClientConfig,
+    ) -> str:
+        if value is None:
+            return ""
+        format_string = self._to_python_datetime_format(config.simple_date_format)
+        if format_string:
+            return value.strftime(format_string)
+        return value.isoformat()
 
     def _parse_last_edited(
         self,
