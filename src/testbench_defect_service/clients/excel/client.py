@@ -56,12 +56,14 @@ class ExcelDefectClient(AbstractDefectClient):
         self._start_buffer_cleanup_thread()
 
     def check_login(self, project: str | None) -> bool:
+        logger.debug("Checking login for project '%s'", project)
         if project is None:
             return self.config.excel_file_path.exists()
 
         try:
             self._get_file_path(project)
         except FileNotFoundError:
+            logger.debug("Login check failed: project '%s' not found", project)
             return False
         return True
 
@@ -74,13 +76,20 @@ class ExcelDefectClient(AbstractDefectClient):
 
     def get_projects(self) -> list[str]:
         if not self.config.excel_file_path.exists():
+            logger.debug(
+                "Excel base path '%s' does not exist; returning empty project list",
+                self.config.excel_file_path,
+            )
             return []
-        return sorted(p.name for p in self.config.excel_file_path.iterdir() if p.is_dir())
+        projects = sorted(p.name for p in self.config.excel_file_path.iterdir() if p.is_dir())
+        logger.debug("Found %d project(s) under '%s'", len(projects), self.config.excel_file_path)
+        return projects
 
     def get_control_fields(self, project: str | None) -> dict[str, list[str]]:
         control_fields = {}
         for field in self._get_config_value("control_fields", project) or []:
             control_fields[field.name] = field.values
+        logger.debug("Returning %d control field(s) for project '%s'", len(control_fields), project)
         return control_fields
 
     def get_defects(self, project: str, sync_context: SyncContext) -> ProtocolledDefectSet:
@@ -220,6 +229,7 @@ class ExcelDefectClient(AbstractDefectClient):
 
         for file in sorted(project_path.iterdir()):
             if file.is_file() and file.suffix.lower() == expected_file_suffix:
+                logger.debug("Resolved Excel file for project '%s': '%s'", project, file)
                 return file
         raise FileNotFoundError(
             f"No '{expected_file_suffix}' file found for project '{project}' in '{project_path}'."
@@ -228,6 +238,11 @@ class ExcelDefectClient(AbstractDefectClient):
     def get_defects_batch(
         self, project: str, defect_ids: list[DefectID], sync_context: SyncContext
     ) -> ProtocolledDefectSet:
+        logger.debug(
+            "Fetching batch of %d defect(s) by ID for project '%s'",
+            len(defect_ids),
+            project,
+        )
         defects_result = self.get_defects(project, sync_context)
         requested_ids = {
             str(getattr(defect_id, "root", defect_id))
@@ -251,7 +266,6 @@ class ExcelDefectClient(AbstractDefectClient):
     ) -> ProtocolledString:
 
         protocol = Protocol()
-
         if self._get_config_value("readonly", project):
             protocol.add_error(
                 project,
@@ -305,9 +319,9 @@ class ExcelDefectClient(AbstractDefectClient):
         column_positions = get_column_mapping_for_config(effective_config, sync_context)
         if not column_positions:
             return
-
         sheet_name = resolve_visible_sheet_name(defect_path, effective_config)
 
+        logger.debug("Writing defect data to '%s' on sheet '%s'", defect_path, sheet_name)
         with pd.ExcelWriter(defect_path, engine="openpyxl") as writer:
             for col_idx, col_names in column_positions.items():
                 col_name = col_names[0]
@@ -354,10 +368,19 @@ class ExcelDefectClient(AbstractDefectClient):
             if id_val.startswith(prefix) and id_val[len(prefix) :].isdigit()
         ]
         max_int = (max(numeric_ids) if numeric_ids else 0) + 1
+        logger.debug("Assigning new defect ID '%s%d' (prefix: '%s')", prefix, max_int, prefix)
+        defect_id = effective_config.id_prefix + str(max_int)
 
+        defect_info_data_frame = self.create_defect_data_frame(defect, effective_config, defect_id)
+
+        return pd.concat([df, defect_info_data_frame], ignore_index=True)
+
+    def create_defect_data_frame(
+        self, defect: Defect, effective_config: ExcelDefectClientConfig, defect_id: str
+    ):
         defect_info_data_frame = pd.DataFrame(
             {
-                "id": [effective_config.id_prefix + str(max_int)],
+                "id": [defect_id],
                 "title": [defect.title],
                 "description": [defect.description],
                 "reporter": [defect.reporter],
@@ -377,52 +400,126 @@ class ExcelDefectClient(AbstractDefectClient):
             for udf in defect.userDefinedFields:
                 # TODO: check if is an udf which has to be stored
                 defect_info_data_frame[udf.name] = udf.value
-
-        return pd.concat([df, defect_info_data_frame], ignore_index=True)
+        return defect_info_data_frame
 
     def update_defect(
         self, project: str, defect_id: str, defect: Defect, sync_context: SyncContext
     ) -> Protocol:
-        del defect_id, defect, sync_context
-
+        logger.debug("Updating defect '%s' in project '%s'", defect_id, project)
         protocol = Protocol()
         if self._get_config_value("readonly", project):
             protocol.add_error(
-                project,
+                defect_id,
                 "Excel client is configured as read-only.",
-                protocol_code=ProtocolCode.PUBLISH_ACCESS_ERROR,
+                protocol_code=ProtocolCode.INSERT_ACCESS_ERROR,
             )
             return protocol
 
-        protocol.add_general_error(
-            "Excel write operations are not implemented.",
-            protocol_code=ProtocolCode.PUBLISH_ERROR,
+        try:
+            defect_path = self._get_file_path(project=project)
+            effective_config = self._get_effective_config(project)
+            header = read_header_columns_from_file_path(defect_path, effective_config)
+            df = self._get_dataframe(defect_path, effective_config, sync_context, protocol)
+        except FileNotFoundError as exc:
+            protocol.add_general_error(str(exc), protocol_code=ProtocolCode.PROJECT_NOT_FOUND)
+            return protocol
+        except (OSError, ValueError) as exc:
+            protocol.add_general_error(str(exc), protocol_code=ProtocolCode.READ_ACCESS_ERROR)
+            return protocol
+
+        row_idx = df.index[df["id"] == defect_id]
+        if row_idx.empty:
+            protocol.add_error(
+                defect_id,
+                f"Defect '{defect_id}' not found in project '{project}'.",
+                protocol_code=ProtocolCode.DEFECT_NOT_FOUND,
+            )
+            logger.warning(
+                "Update failed: defect '%s' not found in project '%s'", defect_id, project
+            )
+            return protocol
+
+        new_row_df = self.create_defect_data_frame(defect, effective_config, defect_id)
+        new_row_df.index = row_idx
+        df.update(new_row_df)
+
+        try:
+            self.write_defect_data_to_excel(sync_context, defect_path, effective_config, header, df)
+        except (OSError, ValueError) as exc:
+            protocol.add_error(defect_id, str(exc), protocol_code=ProtocolCode.UPDATE_ERROR)
+            logger.error(
+                "Failed to update defect '%s' in project '%s': %s", defect_id, project, exc
+            )
+            return protocol
+
+        protocol.add_success(
+            key=defect_id,
+            message=f"Defect '{defect_id}' updated successfully in project '{project}'.",
+            protocol_code=ProtocolCode.UPDATE_SUCCESS,
         )
+        logger.info("Updated Excel defect '%s' in project '%s'", defect_id, project)
         return protocol
 
     def delete_defect(
         self, project: str, defect_id: str, defect: Defect, sync_context: SyncContext
     ) -> Protocol:
-        del defect_id, defect, sync_context
-
+        logger.debug("Deleting defect '%s' from project '%s'", defect_id, project)
         protocol = Protocol()
         if self._get_config_value("readonly", project):
             protocol.add_error(
-                project,
+                defect_id,
                 "Excel client is configured as read-only.",
-                protocol_code=ProtocolCode.PUBLISH_ACCESS_ERROR,
+                protocol_code=ProtocolCode.INSERT_ACCESS_ERROR,
             )
             return protocol
 
-        protocol.add_general_error(
-            "Excel write operations are not implemented.",
-            protocol_code=ProtocolCode.PUBLISH_ERROR,
+        try:
+            defect_path = self._get_file_path(project=project)
+            effective_config = self._get_effective_config(project)
+            header = read_header_columns_from_file_path(defect_path, effective_config)
+            df = self._get_dataframe(defect_path, effective_config, sync_context, protocol)
+        except FileNotFoundError as exc:
+            protocol.add_general_error(str(exc), protocol_code=ProtocolCode.PROJECT_NOT_FOUND)
+            return protocol
+        except (OSError, ValueError) as exc:
+            protocol.add_general_error(str(exc), protocol_code=ProtocolCode.READ_ACCESS_ERROR)
+            return protocol
+
+        row_idx = df.index[df["id"] == defect_id]
+        if row_idx.empty:
+            protocol.add_error(
+                defect_id,
+                f"Defect '{defect_id}' not found in project '{project}'.",
+                protocol_code=ProtocolCode.DEFECT_NOT_FOUND,
+            )
+            logger.warning(
+                "Delete failed: defect '%s' not found in project '%s'", defect_id, project
+            )
+            return protocol
+
+        df = df.drop(index=row_idx)
+
+        try:
+            self.write_defect_data_to_excel(sync_context, defect_path, effective_config, header, df)
+        except (OSError, ValueError) as exc:
+            protocol.add_general_error(str(exc), protocol_code=ProtocolCode.PUBLISH_ERROR)
+            logger.error(
+                "Failed to delete defect '%s' from project '%s': %s", defect_id, project, exc
+            )
+            return protocol
+
+        protocol.add_success(
+            key=defect_id,
+            message=f"Defect '{defect_id}' deleted successfully from project '{project}'.",
+            protocol_code=ProtocolCode.PUBLISH_SUCCESS,
         )
+        logger.info("Deleted Excel defect '%s' from project '%s'", defect_id, project)
         return protocol
 
     def get_defect_extended(
         self, project: str, defect_id: str, sync_context: SyncContext
     ) -> DefectWithAttributes:
+        logger.debug("Looking up extended defect '%s' in project '%s'", defect_id, project)
         defects = self.get_defects(project, sync_context)
         for defect in defects.value:
             if defect.id.root != defect_id:
@@ -463,6 +560,7 @@ class ExcelDefectClient(AbstractDefectClient):
         return udfs
 
     def before_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
+        logger.debug("before_sync called for project '%s' (sync_type: '%s')", project, sync_type)
         del sync_type, sync_context
 
         protocol = Protocol()
@@ -474,6 +572,7 @@ class ExcelDefectClient(AbstractDefectClient):
         return protocol
 
     def after_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
+        logger.debug("after_sync called for project '%s' (sync_type: '%s')", project, sync_type)
         del sync_type, sync_context
 
         protocol = Protocol()
@@ -530,11 +629,18 @@ class ExcelDefectClient(AbstractDefectClient):
 
         thread = threading.Thread(target=_cleanup_loop, name="excel-buffer-cleanup", daemon=True)
         thread.start()
+        logger.info(
+            "Started Excel buffer cleanup thread (interval: %.0f s, max age: %.0f s)",
+            interval_seconds,
+            max_age_seconds,
+        )
 
     def _get_effective_config(self, project: str | None) -> ExcelDefectClientConfig:
         if not project or project not in self.config.projects:
+            logger.debug("Using global config for project '%s'", project)
             return self.config
 
+        logger.debug("Merging project-specific config for project '%s'", project)
         merged_config = self.config.model_dump()
         merged_config.update(self.config.projects[project].model_dump(exclude_none=True))
         merged_config["projects"] = self.config.projects
