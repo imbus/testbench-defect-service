@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from testbench_defect_service.models.defects import DefectWithID
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:
@@ -164,6 +166,21 @@ def get_client_config_class(
         )
 
     return config_class
+
+
+def extract_static_attributes(defect: DefectWithID, attribute_fields: list[str]) -> dict[str, str]:
+    """Return a dict of attribute values from *defect* for the given *attribute_fields*."""
+    attributes: dict[str, str] = {}
+    for attr in attribute_fields:
+        value = getattr(defect, attr, None)
+        if value is not None:
+            attributes[attr] = str(value)
+            continue
+        for uda in getattr(defect, "userDefinedFields", None) or []:
+            if uda.name == attr:
+                attributes[attr] = str(uda.value)
+                break
+    return attributes
 
 
 def get_defect_client(app) -> AbstractDefectClient:

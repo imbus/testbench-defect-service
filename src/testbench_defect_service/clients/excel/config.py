@@ -230,6 +230,7 @@ class ProjectConfig(BaseModel):
             "defect.references.separator",
         ),
     )
+    attributes: list[str] | None = Field(None, description="Attributes for this project")
     id_prefix: str | None = Field(
         default=None,
         validation_alias=AliasChoices("id_prefix", "defect.id.prefix"),
@@ -330,6 +331,11 @@ class ExcelDefectClientConfig(BaseModel):
     )
     defect_id_digit_numbers: int = Field(
         validation_alias=AliasChoices("defect_id_digit_numbers", "defect.id.digitNumber"),
+    )
+
+    attributes: list[str] = Field(
+        default_factory=lambda: ["title", "status"],
+        description="Fields from Excel to display in the extended defect view.",
     )
 
     transitions: list[Transition] = Field(default_factory=list)

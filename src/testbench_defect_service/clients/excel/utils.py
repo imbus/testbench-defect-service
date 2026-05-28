@@ -1,8 +1,8 @@
 import csv
 import math
-import time
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, NoReturn, cast
+from typing import Any, NoReturn
 
 import openpyxl
 import pandas as pd
@@ -10,9 +10,12 @@ import xlrd
 
 from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig
 from testbench_defect_service.log import logger
-from testbench_defect_service.models.defects import Protocol, ProtocolCode, SyncContext
-
-_REQUIRED_DATA_COLUMNS: tuple[str, ...] = ("id",)
+from testbench_defect_service.models.defects import (
+    Defect,
+    Protocol,
+    ProtocolCode,
+    SyncContext,
+)
 
 
 def read_header_columns_from_file_path(
@@ -121,82 +124,6 @@ def _register_column(
         column_mapping[column_idx].append(field_name)
 
 
-def _validate_column_mapping(
-    column_mapping: dict[int, list[str]],
-    total_columns: int,
-    udf_names: set[str],
-    protocol: Protocol | None = None,
-) -> dict[int, list[str]]:
-    valid_mapping: dict[int, list[str]] = {}
-    for idx, names in column_mapping.items():
-        primary_name = names[0]
-        if idx < total_columns:
-            if len(names) > 1:
-                logger.warning(
-                    "Column index %d is mapped to multiple fields (%s).",
-                    idx + 1,
-                    ", ".join(f"'{name}'" for name in names),
-                )
-            valid_mapping[idx] = names
-            continue
-
-        if primary_name in _REQUIRED_DATA_COLUMNS:
-            raise ValueError(
-                f"Required column '{primary_name}' (index {idx + 1}) not found in the file."
-            )
-
-        kind = "UDF" if primary_name in udf_names else "Optional"
-        warning_message = (
-            f"{kind} column '{primary_name}' (index {idx + 1}) is not present in the file "
-            f"({total_columns} columns)."
-        )
-        logger.warning(warning_message)
-        if protocol is not None:
-            protocol.add_general_warning(
-                warning_message,
-                protocol_code=ProtocolCode.IMPORT_WARNING,
-            )
-
-    return valid_mapping
-
-
-def read_data_frame_from_file_path(
-    file_path: Path,
-    config: ExcelDefectClientConfig,
-    sync_context: SyncContext,
-    protocol: Protocol | None = None,
-) -> pd.DataFrame:
-    logger.debug(
-        "Reading file: %s (%.2f MiB)",
-        file_path,
-        file_path.stat().st_size / (1024**2),
-    )
-    start = time.monotonic()
-
-    df = _load_dataframe(file_path, config, protocol)
-    column_mapping = get_column_mapping_for_config(config, sync_context, protocol)
-    if column_mapping is None:
-        return cast(pd.DataFrame, df.iloc[0:0].copy())
-    udf_names = {udf_cfg.name for udf_cfg in config.udfs}
-    valid_mapping = _validate_column_mapping(
-        column_mapping,
-        len(df.columns),
-        udf_names,
-        protocol,
-    )
-    df = _apply_column_mapping(df, valid_mapping)
-    _validate_required_column_values(df, file_path, config)
-    _validate_unique_constraints(df, file_path, config)
-
-    bytes_used = df.memory_usage(index=True, deep=True).sum()
-    logger.debug(
-        "Read dataframe in %.3fs (%.2f MiB)",
-        time.monotonic() - start,
-        bytes_used / (1024**2),
-    )
-    return df
-
-
 def map_and_rename_columns(
     sync_context: SyncContext,
     effective_config: ExcelDefectClientConfig,
@@ -212,118 +139,6 @@ def map_and_rename_columns(
         }
         df = df.rename(columns=rename_map)
     return df
-
-
-def _validate_unique_constraints(
-    df: pd.DataFrame,
-    file_path: Path,
-    config: ExcelDefectClientConfig,
-) -> None:
-    first_data_file_row = config.defects_data_starting_line
-    max_displayed_rows = 10
-
-    errors: list[str] = []
-    if "id" in df.columns:
-        duplicated_mask = df.duplicated(subset=["id"], keep=False)
-        duplicate_ids = df.loc[duplicated_mask, ["id"]].drop_duplicates()
-        for _, duplicate_row in duplicate_ids.iterrows():
-            duplicate_id = duplicate_row["id"]
-            indices = df.index[df["id"] == duplicate_id].tolist()
-            displayed = [str(first_data_file_row + idx) for idx in indices[:max_displayed_rows]]
-            overflow = len(indices) - max_displayed_rows
-            suffix = f" (and {overflow} more)" if overflow > 0 else ""
-            errors.append(
-                f"  - duplicate id {duplicate_id!r} at rows {', '.join(displayed)}{suffix}"
-            )
-
-    if errors:
-        raise ValueError(f"Uniqueness constraints violated in '{file_path}':\n" + "\n".join(errors))
-
-
-def _validate_required_column_values(
-    df: pd.DataFrame,
-    file_path: Path,
-    config: ExcelDefectClientConfig,
-) -> None:
-    first_data_file_row = config.defects_data_starting_line
-    errors: list[str] = []
-
-    for col in _REQUIRED_DATA_COLUMNS:
-        if col not in df.columns:
-            errors.append(f"  - '{col}': column is not configured or could not be found.")
-            continue
-        blank_indices = df.index[df[col].str.strip() == ""].tolist()
-        if not blank_indices:
-            continue
-        displayed = [str(first_data_file_row + idx) for idx in blank_indices[:10]]
-        overflow = len(blank_indices) - 10
-        suffix = f" (and {overflow} more)" if overflow > 0 else ""
-        row_label = "row" if len(blank_indices) == 1 else "rows"
-        errors.append(f"  - '{col}': empty at {row_label} {', '.join(displayed)}{suffix}")
-
-    if errors:
-        raise ValueError(
-            f"Required columns contain empty values in '{file_path}':\n" + "\n".join(errors)
-        )
-
-
-def _apply_column_mapping(
-    df: pd.DataFrame,
-    valid_mapping: dict[int, list[str]],
-) -> pd.DataFrame:
-    ordered_indices = sorted(valid_mapping.keys())
-    mapped_df = df.iloc[:, ordered_indices].copy()
-    mapped_df.columns = pd.Index([valid_mapping[idx][0] for idx in ordered_indices])
-
-    for names in valid_mapping.values():
-        for alias in names[1:]:
-            mapped_df[alias] = mapped_df[names[0]]
-
-    return cast(pd.DataFrame, mapped_df)
-
-
-def _load_dataframe(
-    file_path: Path,
-    config: ExcelDefectClientConfig,
-    protocol: Protocol | None = None,
-) -> pd.DataFrame:
-    header_row_idx = max(config.defects_data_header_line - 1, 0)
-    data_row_idx = max(config.defects_data_starting_line - 1, header_row_idx + 1)
-    read_params: dict[str, Any] = {
-        "header": header_row_idx,
-        "dtype": object,
-        "skiprows": list(range(header_row_idx + 1, data_row_idx)),
-    }
-
-    if file_path.suffix.lower() in (".xls", ".xlsx"):
-        try:
-            visible_sheets = _get_visible_sheets(file_path)
-        except Exception as exc:
-            raise ValueError(f"Could not open Excel file '{file_path.name}': {exc}") from exc
-
-        if not visible_sheets:
-            raise ValueError(f"No visible worksheets found in '{file_path.name}'.")
-
-        sheet_name = _resolve_sheet_name(
-            (config.worksheet_name or ""),
-            visible_sheets,
-            file_path.name,
-            protocol,
-        )
-        engine: Literal["openpyxl", "xlrd"]
-        engine = "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
-        df = pd.read_excel(file_path, sheet_name=sheet_name, engine=engine, **read_params)
-    elif file_path.suffix.lower() in (".csv", ".tsv", ".txt"):
-        separator = "\t" if file_path.suffix.lower() == ".tsv" else config.seperator
-        try:
-            df = pd.read_csv(file_path, sep=separator, **read_params)
-        except UnicodeDecodeError:
-            df = pd.read_csv(file_path, sep=separator, encoding="windows-1252", **read_params)
-    else:
-        raise ValueError(f"Unsupported file format: {file_path.suffix}")
-
-    normalized_df = df.fillna("").apply(lambda column: column.map(_coerce_cell_to_string))
-    return cast(pd.DataFrame, normalized_df)
 
 
 def _load_header_values(
@@ -447,10 +262,10 @@ def resolve_visible_sheet_name(
     config: ExcelDefectClientConfig,
     protocol: Protocol | None = None,
 ) -> str:
-    visible_sheets = _get_visible_sheets(file_path)
+    visible_sheets = get_visible_sheets(file_path)
     if not visible_sheets:
         raise ValueError(f"No visible worksheets found in '{file_path.name}'.")
-    return _resolve_sheet_name(
+    return resolve_sheet_name(
         (config.worksheet_name or ""),
         visible_sheets,
         file_path.name,
@@ -463,13 +278,13 @@ def _raise_missing_header_row(file_path: Path, header_line: int) -> NoReturn:
 
 
 def _normalize_header_values(values: list[Any] | tuple[Any, ...]) -> list[str]:
-    header_values = [_coerce_cell_to_string(value) for value in values]
+    header_values = [coerce_cell_to_string(value) for value in values]
     while header_values and header_values[-1] == "":
         header_values.pop()
     return header_values
 
 
-def _coerce_cell_to_string(value: Any) -> str:
+def coerce_cell_to_string(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, float) and math.isnan(value):
@@ -479,7 +294,7 @@ def _coerce_cell_to_string(value: Any) -> str:
     return str(value).strip()
 
 
-def _get_visible_sheets(file_path: Path) -> list[str]:
+def get_visible_sheets(file_path: Path) -> list[str]:
     suffix = file_path.suffix.lower()
     if suffix == ".xlsx":
         try:
@@ -511,7 +326,7 @@ def _get_visible_sheets(file_path: Path) -> list[str]:
     raise ValueError(f"Unsupported Excel file format: '{suffix}'.")
 
 
-def _resolve_sheet_name(
+def resolve_sheet_name(
     configured_sheet_name: str | None,
     visible_sheets: list[str],
     file_name: str,
@@ -533,3 +348,129 @@ def _resolve_sheet_name(
             protocol_code=ProtocolCode.IMPORT_WARNING,
         )
     return visible_sheets[0]
+
+
+def add_defect_to_dataframe(
+    defect: Defect,
+    effective_config: ExcelDefectClientConfig,
+    df: pd.DataFrame,
+    protocol: Protocol,
+) -> pd.DataFrame:
+    prefix = effective_config.id_prefix
+    numeric_ids = [
+        int(id_val.replace(prefix, ""))
+        for id_val in df["id"]
+        if id_val.startswith(prefix) and id_val[len(prefix) :].isdigit()
+    ]
+    max_int = (max(numeric_ids) if numeric_ids else 0) + 1
+    logger.debug("Assigning new defect ID '%s%d' (prefix: '%s')", prefix, max_int, prefix)
+    defect_id = effective_config.id_prefix + str(max_int)
+
+    defect_info_data_frame = create_defect_data_frame(defect, effective_config, defect_id)
+
+    return pd.concat([df, defect_info_data_frame], ignore_index=True)
+
+
+def create_defect_data_frame(
+    defect: Defect, effective_config: ExcelDefectClientConfig, defect_id: str
+):
+    defect_info_data_frame = pd.DataFrame(
+        {
+            "id": [defect_id],
+            "title": [defect.title],
+            "description": [defect.description],
+            "reporter": [defect.reporter],
+            "status": [defect.status],
+            "classification": [defect.classification],
+            "priority": [defect.priority],
+            "lastEdited": [_format_last_edited(defect.lastEdited, effective_config)],
+            "references": [
+                effective_config.references_seperator.join(
+                    defect.references if defect.references else []
+                )
+            ],
+        }
+    )
+
+    if defect.userDefinedFields:
+        for udf in defect.userDefinedFields:
+            # TODO: check if is an udf which has to be stored
+            defect_info_data_frame[udf.name] = udf.value
+    return defect_info_data_frame
+
+
+def _format_last_edited(
+    value: datetime | None,
+    config: ExcelDefectClientConfig,
+) -> str:
+    if value is None:
+        return ""
+    format_string = to_python_datetime_format(config.simple_date_format)
+    if format_string:
+        return value.strftime(format_string)
+    return value.isoformat()
+
+
+def to_python_datetime_format(simple_date_format: str | None) -> str | None:
+    if not simple_date_format:
+        return None
+
+    python_format = simple_date_format
+    python_format = python_format.replace("yyyy", "%Y")
+    python_format = python_format.replace("yy", "%y")
+    python_format = python_format.replace("dd", "%d")
+    python_format = python_format.replace("HH", "%H")
+    python_format = python_format.replace("hh", "%I")
+    python_format = python_format.replace("ss", "%S")
+    python_format = python_format.replace("MM", "%m")
+    if "HH" in simple_date_format or "hh" in simple_date_format:
+        python_format = python_format.replace("mm", "%M")
+    else:
+        python_format = python_format.replace("mm", "%m")
+    return python_format
+
+
+def row_value(row: pd.Series, field_name: str) -> str:
+    if field_name not in row.index:
+        return ""
+    value = row[field_name]
+    return "" if value is None else str(value).strip()
+
+
+def optional_row_value(row: pd.Series, field_name: str) -> str | None:
+    value = row_value(row, field_name)
+    return value or None
+
+
+def split_references(raw_value: str, config: ExcelDefectClientConfig) -> list[str]:
+    separator = config.references_seperator or ";"
+    if not raw_value:
+        return []
+    return [part.strip() for part in raw_value.split(separator) if part.strip()]
+
+
+def parse_boolean_udf_value(
+    raw_value: str,
+    true_value: str | None,
+    false_value: str | None,
+) -> bool | None:
+    normalized = raw_value.strip().lower()
+    normalized_true = (true_value or "true").strip().lower()
+    normalized_false = (false_value or "false").strip().lower()
+
+    if normalized == normalized_true:
+        return True
+    if normalized == normalized_false:
+        return False
+    return None
+
+
+def add_general_warning_once(
+    protocol: Protocol,
+    message: str,
+    protocol_code: ProtocolCode,
+) -> None:
+    existing_warnings = protocol.generalWarnings or []
+    if any(entry.message == message and entry.code == protocol_code for entry in existing_warnings):
+        return
+    protocol.add_general_warning(message, protocol_code=protocol_code)
