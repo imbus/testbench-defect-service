@@ -24,10 +24,10 @@ from testbench_defect_service.clients.excel.utils import (
     split_references,
     to_python_datetime_format,
 )
-from testbench_defect_service.clients.utils import extract_static_attributes
 from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import (
     Defect,
+    DefectFieldSyncOption,
     DefectID,
     DefectWithAttributes,
     DefectWithID,
@@ -117,7 +117,7 @@ class ExcelDefectClient(AbstractDefectClient):
         if protocol.generalErrors:
             return ProtocolledDefectSet(value=[], protocol=protocol)
 
-        defects = self._build_defects_from_dataframe(df, effective_config, protocol)
+        defects = self._build_defects_from_dataframe(df, effective_config, sync_context, protocol)
         if not defects:
             protocol.add_general_warning(
                 f"No defects were found in '{defect_path.name}' for project '{project}'.",
@@ -434,18 +434,34 @@ class ExcelDefectClient(AbstractDefectClient):
     def get_defect_extended(
         self, project: str, defect_id: str, sync_context: SyncContext
     ) -> DefectWithAttributes:
-        defect = self.get_defects_batch(project, [DefectID(root=defect_id)], sync_context).value[0]
-        return self._build_defect_with_attributes(defect, project, sync_context)
+        try:
+            defect_path = self._get_file_path(project=project)
+            effective_config = self._get_effective_config(project)
+            df = self._get_dataframe(defect_path, effective_config, sync_context)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError from exc
+        except (OSError, ValueError) as exc:
+            raise Exception from exc
+
+        single_defect_df = df.loc[df["id"] == defect_id]
+        defect = self._build_defects_from_dataframe(
+            single_defect_df, effective_config, sync_context
+        )[0]
+
+        return self._build_defect_with_attributes(defect, project, single_defect_df)
 
     def _build_defect_with_attributes(
         self,
         defect: DefectWithID,
         project: str,
-        sync_context: SyncContext,
+        df: pd.DataFrame,
     ) -> DefectWithAttributes:
         data = defect.model_dump()
         attribute_fields = self._get_config_value("attributes", project=project) or []
-        attributes = extract_static_attributes(defect, attribute_fields)
+        attributes = {}
+        for col in df.columns:
+            if col in attribute_fields:
+                attributes.update({col: df[col].iloc[0]})
 
         data["attributes"] = ExtendedAttributes(**attributes)
         return DefectWithAttributes.model_validate(data)
@@ -567,7 +583,8 @@ class ExcelDefectClient(AbstractDefectClient):
         self,
         df: pd.DataFrame,
         config: ExcelDefectClientConfig,
-        protocol: Protocol,
+        sync_context: SyncContext,
+        protocol: Protocol | None = None,
     ) -> list[DefectWithID]:
         defects: list[DefectWithID] = []
         first_data_row = config.defects_data_starting_line
@@ -576,15 +593,16 @@ class ExcelDefectClient(AbstractDefectClient):
             row_number = first_data_row + row_offset
             defect_id = row_value(row, "id")
             if not defect_id:
-                protocol.add_error(
-                    key=str(row_number),
-                    message=f"Skipping row {row_number}: missing defect id.",
-                    protocol_code=ProtocolCode.IMPORT_ERROR,
-                )
+                if protocol:
+                    protocol.add_error(
+                        key=str(row_number),
+                        message=f"Skipping row {row_number}: missing defect id.",
+                        protocol_code=ProtocolCode.IMPORT_ERROR,
+                    )
                 continue
 
             try:
-                defects.append(self._build_defect_from_row(row, config, protocol))
+                defects.append(self._build_defect_from_row(row, config, sync_context, protocol))
             except Exception as exc:
                 logger.warning(
                     "Skipping invalid Excel defect '%s' at row %d: %s",
@@ -592,11 +610,12 @@ class ExcelDefectClient(AbstractDefectClient):
                     row_number,
                     exc,
                 )
-                protocol.add_error(
-                    key=defect_id,
-                    message=f"Skipping defect '{defect_id}' at row {row_number}: {exc}",
-                    protocol_code=ProtocolCode.IMPORT_ERROR,
-                )
+                if protocol:
+                    protocol.add_error(
+                        key=defect_id,
+                        message=f"Skipping defect '{defect_id}' at row {row_number}: {exc}",
+                        protocol_code=ProtocolCode.IMPORT_ERROR,
+                    )
 
         return defects
 
@@ -604,7 +623,8 @@ class ExcelDefectClient(AbstractDefectClient):
         self,
         row: pd.Series,
         config: ExcelDefectClientConfig,
-        protocol: Protocol,
+        sync_context: SyncContext,
+        protocol: Protocol | None = None,
     ) -> DefectWithID:
         defect_id = row_value(row, "id")
         return DefectWithID(
@@ -615,7 +635,9 @@ class ExcelDefectClient(AbstractDefectClient):
             status=row_value(row, "status"),
             classification=row_value(row, "classification"),
             priority=row_value(row, "priority"),
-            userDefinedFields=self._build_user_defined_fields(row, config),
+            userDefinedFields=self._build_user_defined_fields(
+                row, config, sync_context.udaSyncOptions or {}
+            ),
             lastEdited=self._parse_last_edited(
                 row_value(row, "lastEdited"),
                 config,
@@ -630,9 +652,12 @@ class ExcelDefectClient(AbstractDefectClient):
         self,
         row: pd.Series,
         config: ExcelDefectClientConfig,
+        sync_options: dict[str, DefectFieldSyncOption],
     ) -> list[UserDefinedFieldProperties]:
         result: list[UserDefinedFieldProperties] = []
         for udf in config.udfs:
+            if udf.name not in sync_options:
+                continue
             has_column_value = udf.name in row.index
             value = row_value(row, udf.name) if has_column_value else udf.value
             if not has_column_value and value is None:
@@ -674,14 +699,15 @@ class ExcelDefectClient(AbstractDefectClient):
         raw_value: str,
         config: ExcelDefectClientConfig,
         defect_id: str,
-        protocol: Protocol,
+        protocol: Protocol | None = None,
     ) -> datetime:
         if not raw_value:
-            protocol.add_warning(
-                key=defect_id,
-                message="Missing lastEdited value; using the current UTC timestamp.",
-                protocol_code=ProtocolCode.IMPORT_WARNING,
-            )
+            if protocol:
+                protocol.add_warning(
+                    key=defect_id,
+                    message="Missing lastEdited value; using the current UTC timestamp.",
+                    protocol_code=ProtocolCode.IMPORT_WARNING,
+                )
             return datetime.now(timezone.utc)
 
         format_string = to_python_datetime_format(config.simple_date_format)
@@ -703,7 +729,7 @@ class ExcelDefectClient(AbstractDefectClient):
 
         parsed_fallback = pd.to_datetime(raw_value, errors="coerce", utc=False)
         if not pd.isna(parsed_fallback):
-            if format_mismatch_detected:
+            if format_mismatch_detected and protocol:
                 add_general_warning_once(
                     protocol,
                     (
@@ -717,9 +743,12 @@ class ExcelDefectClient(AbstractDefectClient):
                 parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
             return parsed_dt.astimezone(timezone.utc)
 
-        protocol.add_warning(
-            key=defect_id,
-            message=(f"Invalid lastEdited value '{raw_value}'; using the current UTC timestamp."),
-            protocol_code=ProtocolCode.IMPORT_WARNING,
-        )
+        if protocol:
+            protocol.add_warning(
+                key=defect_id,
+                message=(
+                    f"Invalid lastEdited value '{raw_value}'; using the current UTC timestamp."
+                ),
+                protocol_code=ProtocolCode.IMPORT_WARNING,
+            )
         return datetime.now(timezone.utc)

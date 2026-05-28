@@ -396,6 +396,7 @@ def create_defect_data_frame(
         for udf in defect.userDefinedFields:
             # TODO: check if is an udf which has to be stored
             defect_info_data_frame[udf.name] = udf.value
+
     return defect_info_data_frame
 
 

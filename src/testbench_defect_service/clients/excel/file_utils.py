@@ -13,7 +13,7 @@ from testbench_defect_service.clients.excel.utils import (
     resolve_visible_sheet_name,
 )
 from testbench_defect_service.log import logger
-from testbench_defect_service.models.defects import Protocol, ProtocolCode, SyncContext
+from testbench_defect_service.models.defects import Protocol, ProtocolCode, SyncContext, ValueType
 
 _REQUIRED_DATA_COLUMNS: tuple[str, ...] = ("id",)
 
@@ -42,6 +42,9 @@ def read_data_frame_from_file_path(
         udf_names,
         protocol,
     )
+
+    map_boolean_values(config, df)
+
     df = _apply_column_mapping(df, valid_mapping)
     _validate_required_column_values(df, file_path, config)
     _validate_unique_constraints(df, file_path, config)
@@ -53,6 +56,14 @@ def read_data_frame_from_file_path(
         bytes_used / (1024**2),
     )
     return df
+
+
+def map_boolean_values(config, df):
+    for udf in config.udfs:
+        if udf.type == ValueType.BOOLEAN:
+            df[udf.name] = df[udf.name].map(
+                lambda v, t=udf.trueValue: "true" if v == t else "false"
+            )
 
 
 def _validate_column_mapping(
@@ -225,6 +236,18 @@ def write_defect_data_to_excel(
             if col_name not in df_with_new_defect.columns:
                 continue
             original_header = header.get(col_idx + 1, col_name)
+
+            for udf in effective_config.udfs:
+                if udf.name == col_name and udf.type == ValueType.BOOLEAN:
+                    true_val: str | None = udf.trueValue
+                    false_val: str | None = udf.falseValue
+
+                    def _map_bool(
+                        v: str, tv: str | None = true_val, fv: str | None = false_val
+                    ) -> str | None:
+                        return tv if v == "true" else fv
+
+                    df_with_new_defect[col_name] = df_with_new_defect[col_name].map(_map_bool)
 
             # --- STEP 1: Write ONLY the Header ---
             header_only_df = (

@@ -334,7 +334,7 @@ class ExcelDefectClientConfig(BaseModel):
     )
 
     attributes: list[str] = Field(
-        default_factory=lambda: ["title", "status"],
+        default_factory=lambda: ["title", "status", "isOpen"],
         description="Fields from Excel to display in the extended defect view.",
     )
 
