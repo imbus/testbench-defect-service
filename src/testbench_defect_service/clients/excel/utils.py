@@ -366,14 +366,15 @@ def add_defect_to_dataframe(
     logger.debug("Assigning new defect ID '%s%d' (prefix: '%s')", prefix, max_int, prefix)
     defect_id = effective_config.id_prefix + str(max_int)
 
-    defect_info_data_frame = create_defect_data_frame(defect, effective_config, defect_id)
+    defect_info_data_frame = create_defect_data_frame(defect, effective_config, defect_id, protocol)
 
     return pd.concat([df, defect_info_data_frame], ignore_index=True)
 
 
 def create_defect_data_frame(
-    defect: Defect, effective_config: ExcelDefectClientConfig, defect_id: str
+    defect: Defect, effective_config: ExcelDefectClientConfig, defect_id: str, protocol: Protocol
 ):
+
     defect_info_data_frame = pd.DataFrame(
         {
             "id": [defect_id],
@@ -475,3 +476,63 @@ def add_general_warning_once(
     if any(entry.message == message and entry.code == protocol_code for entry in existing_warnings):
         return
     protocol.add_general_warning(message, protocol_code=protocol_code)
+
+
+def validate_control_fields(
+    defect: Defect,
+    config: ExcelDefectClientConfig,
+    sync_context: SyncContext,
+    protocol: Protocol,
+) -> bool:
+    field_map: dict[str | None, str] = {
+        sync_context.statusAttribute: defect.status,
+        sync_context.priorityAttribute: defect.priority,
+        sync_context.classAttribute: defect.classification,
+    }
+    required_attributes = {name for name in field_map if name is not None}
+    validated: set[str] = set()
+
+    for control_field in config.control_fields:
+        if control_field.name not in field_map:
+            continue
+        value = field_map[control_field.name]
+        if value not in control_field.values:
+            protocol.add_error(
+                key=control_field.name,
+                message=(
+                    f"Value '{value}' is not a valid option for control field "
+                    f"'{control_field.name}'. Allowed values: {control_field.values}."
+                ),
+                protocol_code=ProtocolCode.UPDATE_ERROR,
+            )
+            return False
+        validated.add(control_field.name)
+
+    return validated == required_attributes
+
+
+def check_defect_transitions(
+    defect: Defect,
+    df: pd.DataFrame,
+    effective_config: ExcelDefectClientConfig,
+    protocol: Protocol,
+) -> bool:
+    if effective_config.transitions:
+        for transition in effective_config.transitions:
+            if (
+                transition.from_state == df["status"].values[0]
+                and transition.to_state == defect.status
+            ):
+                return True
+        current_status = df["status"].values[0]
+        protocol.add_warning(
+            key=defect.status,
+            message=(
+                f"No valid transition from '{current_status}' to '{defect.status}' is configured."
+            ),
+            protocol_code=ProtocolCode.UPDATE_ERROR,
+        )
+
+        return False
+
+    return True

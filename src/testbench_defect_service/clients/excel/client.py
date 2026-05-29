@@ -16,6 +16,7 @@ from testbench_defect_service.clients.excel.file_utils import (
 from testbench_defect_service.clients.excel.utils import (
     add_defect_to_dataframe,
     add_general_warning_once,
+    check_defect_transitions,
     create_defect_data_frame,
     optional_row_value,
     parse_boolean_udf_value,
@@ -23,6 +24,7 @@ from testbench_defect_service.clients.excel.utils import (
     row_value,
     split_references,
     to_python_datetime_format,
+    validate_control_fields,
 )
 from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import (
@@ -270,7 +272,7 @@ class ExcelDefectClient(AbstractDefectClient):
 
         return ProtocolledDefectSet(value=defects, protocol=defects_result.protocol)
 
-    def create_defect(
+    def create_defect(  # noqa: PLR0911
         self, project: str, defect: Defect, sync_context: SyncContext
     ) -> ProtocolledString:
 
@@ -283,9 +285,12 @@ class ExcelDefectClient(AbstractDefectClient):
             )
             return ProtocolledString(value="", protocol=protocol)
 
+        effective_config = self._get_effective_config(project)
+        if not validate_control_fields(defect, effective_config, sync_context, protocol):
+            return ProtocolledString(value="", protocol=protocol)
+
         try:
             defect_path = self._get_file_path(project=project)
-            effective_config = self._get_effective_config(project)
             header = read_header_columns_from_file_path(defect_path, effective_config)
             df = self._get_dataframe(defect_path, effective_config, sync_context, protocol)
         except FileNotFoundError as exc:
@@ -317,11 +322,12 @@ class ExcelDefectClient(AbstractDefectClient):
         logger.info("Created Excel defect '%s' in project '%s'", new_defect_id, project)
         return ProtocolledString(value=new_defect_id, protocol=protocol)
 
-    def update_defect(
+    def update_defect(  # noqa: PLR0911
         self, project: str, defect_id: str, defect: Defect, sync_context: SyncContext
     ) -> Protocol:
         logger.debug("Updating defect '%s' in project '%s'", defect_id, project)
         protocol = Protocol()
+
         if self._get_config_value("readonly", project):
             protocol.add_error(
                 defect_id,
@@ -330,9 +336,12 @@ class ExcelDefectClient(AbstractDefectClient):
             )
             return protocol
 
+        effective_config = self._get_effective_config(project)
+        if not validate_control_fields(defect, effective_config, sync_context, protocol):
+            return protocol
+
         try:
             defect_path = self._get_file_path(project=project)
-            effective_config = self._get_effective_config(project)
             header = read_header_columns_from_file_path(defect_path, effective_config)
             df = self._get_dataframe(defect_path, effective_config, sync_context, protocol)
         except FileNotFoundError as exc:
@@ -354,7 +363,9 @@ class ExcelDefectClient(AbstractDefectClient):
             )
             return protocol
 
-        new_row_df = create_defect_data_frame(defect, effective_config, defect_id)
+        if not check_defect_transitions(defect, df, effective_config, protocol):
+            return protocol
+        new_row_df = create_defect_data_frame(defect, effective_config, defect_id, protocol)
         new_row_df.index = row_idx
         df.update(new_row_df)
 
@@ -374,34 +385,6 @@ class ExcelDefectClient(AbstractDefectClient):
         )
         logger.info("Updated Excel defect '%s' in project '%s'", defect_id, project)
         return protocol
-
-    def validate_transitions(
-        self,
-        defect: Defect,
-        df: pd.DataFrame,
-        effective_config: ExcelDefectClientConfig,
-        protocol: Protocol,
-    ) -> bool:
-        if effective_config.transitions:
-            for transition in effective_config.transitions:
-                if (
-                    transition.from_state == df["status"].values[0]
-                    and transition.to_state == defect.status
-                ):
-                    return True
-            current_status = df["status"].values[0]
-            protocol.add_warning(
-                key=defect.status,
-                message=(
-                    f"No valid transition from '{current_status}' to '{defect.status}' "
-                    "is configured."
-                ),
-                protocol_code=ProtocolCode.UPDATE_ERROR,
-            )
-
-            return False
-
-        return True
 
     def delete_defect(
         self, project: str, defect_id: str, defect: Defect, sync_context: SyncContext
