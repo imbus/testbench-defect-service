@@ -375,6 +375,34 @@ class ExcelDefectClient(AbstractDefectClient):
         logger.info("Updated Excel defect '%s' in project '%s'", defect_id, project)
         return protocol
 
+    def validate_transitions(
+        self,
+        defect: Defect,
+        df: pd.DataFrame,
+        effective_config: ExcelDefectClientConfig,
+        protocol: Protocol,
+    ) -> bool:
+        if effective_config.transitions:
+            for transition in effective_config.transitions:
+                if (
+                    transition.from_state == df["status"].values[0]
+                    and transition.to_state == defect.status
+                ):
+                    return True
+            current_status = df["status"].values[0]
+            protocol.add_warning(
+                key=defect.status,
+                message=(
+                    f"No valid transition from '{current_status}' to '{defect.status}' "
+                    "is configured."
+                ),
+                protocol_code=ProtocolCode.UPDATE_ERROR,
+            )
+
+            return False
+
+        return True
+
     def delete_defect(
         self, project: str, defect_id: str, defect: Defect, sync_context: SyncContext
     ) -> Protocol:
