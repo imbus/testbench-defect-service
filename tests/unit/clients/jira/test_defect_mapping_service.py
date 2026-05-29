@@ -11,7 +11,19 @@ from jira import JIRAError
 
 from testbench_defect_service.clients.jira.defect_mapping_service import DefectToJiraMapper
 from testbench_defect_service.clients.jira.utils import FieldInfo
-from testbench_defect_service.models.defects import Defect, Login, UserDefinedFieldProperties
+from testbench_defect_service.models.defects import (
+    Defect,
+    Login,
+    SyncContext,
+    UserDefinedFieldProperties,
+)
+
+_SYNC_CONTEXT = SyncContext(
+    iTBProject=None,
+    statusAttribute="status",
+    priorityAttribute="priority",
+    classAttribute="issuetype",
+)
 
 
 def _make_defect(**overrides) -> Defect:
@@ -95,45 +107,59 @@ def dc_old_mapper() -> DefectToJiraMapper:
 class TestMapDefectToJiraIssue:
     def test_returns_fields_key(self, cloud_mapper):
         defect = _make_defect()
-        result = cloud_mapper.map_defect_to_jira_issue(defect, _minimal_issue_metadata())
+        result = cloud_mapper.map_defect_to_jira_issue(
+            defect, _minimal_issue_metadata(), _SYNC_CONTEXT
+        )
         assert "fields" in result
 
     def test_summary_and_description_mapped(self, cloud_mapper):
         defect = _make_defect(title="My Summary", description="My Desc")
-        result = cloud_mapper.map_defect_to_jira_issue(defect, _minimal_issue_metadata())
+        result = cloud_mapper.map_defect_to_jira_issue(
+            defect, _minimal_issue_metadata(), _SYNC_CONTEXT
+        )
         assert result["fields"]["summary"] == "My Summary"
         assert result["fields"]["description"] == "My Desc"
 
     def test_priority_mapped_as_name_dict(self, cloud_mapper):
         defect = _make_defect(priority="High")
-        result = cloud_mapper.map_defect_to_jira_issue(defect, _minimal_issue_metadata())
+        result = cloud_mapper.map_defect_to_jira_issue(
+            defect, _minimal_issue_metadata(), _SYNC_CONTEXT
+        )
         assert result["fields"]["priority"] == {"name": "High"}
 
     def test_issuetype_mapped_as_name_dict(self, cloud_mapper):
         defect = _make_defect(classification="Bug")
-        result = cloud_mapper.map_defect_to_jira_issue(defect, _minimal_issue_metadata())
+        result = cloud_mapper.map_defect_to_jira_issue(
+            defect, _minimal_issue_metadata(), _SYNC_CONTEXT
+        )
         assert result["fields"]["issuetype"] == {"name": "Bug"}
 
     def test_reporter_looked_up_when_present(self, cloud_mapper):
         cloud_mapper.jira.search_users.return_value = [Mock(accountId="acc-1")]
         defect = _make_defect(reporter="john")
-        result = cloud_mapper.map_defect_to_jira_issue(defect, _minimal_issue_metadata())
+        result = cloud_mapper.map_defect_to_jira_issue(
+            defect, _minimal_issue_metadata(), _SYNC_CONTEXT
+        )
         assert result["fields"]["reporter"] == {"id": "acc-1"}
 
     def test_no_reporter_field_when_reporter_none(self, cloud_mapper):
         defect = _make_defect(reporter=None)
-        result = cloud_mapper.map_defect_to_jira_issue(defect, _minimal_issue_metadata())
+        result = cloud_mapper.map_defect_to_jira_issue(
+            defect, _minimal_issue_metadata(), _SYNC_CONTEXT
+        )
         assert "reporter" not in result["fields"]
 
     def test_raises_when_no_projects(self, cloud_mapper):
         defect = _make_defect()
         with pytest.raises(ValueError, match="No projects found"):
-            cloud_mapper.map_defect_to_jira_issue(defect, {"projects": []})
+            cloud_mapper.map_defect_to_jira_issue(defect, {"projects": []}, _SYNC_CONTEXT)
 
     def test_raises_when_classification_missing(self, cloud_mapper):
         defect = _make_defect(classification="Unknown")
         with pytest.raises(ValueError, match="Issue type 'Unknown' not found"):
-            cloud_mapper.map_defect_to_jira_issue(defect, _minimal_issue_metadata("Bug"))
+            cloud_mapper.map_defect_to_jira_issue(
+                defect, _minimal_issue_metadata("Bug"), _SYNC_CONTEXT
+            )
 
 
 @pytest.mark.unit
@@ -151,19 +177,19 @@ class TestMapDefectToJiraDataCenterIssue:
             self._make_dc_field("summary", "Summary"),
             self._make_dc_field("description", "Description"),
         ]
-        result = dc_mapper.map_defect_to_jira_data_center_issue(defect, fields)
+        result = dc_mapper.map_defect_to_jira_data_center_issue(defect, fields, _SYNC_CONTEXT)
         assert "fields" in result
 
     def test_summary_mapped(self, dc_mapper):
         defect = _make_defect(title="DC Summary")
         fields = [self._make_dc_field("summary", "Summary")]
-        result = dc_mapper.map_defect_to_jira_data_center_issue(defect, fields)
+        result = dc_mapper.map_defect_to_jira_data_center_issue(defect, fields, _SYNC_CONTEXT)
         assert result["fields"]["summary"] == "DC Summary"
 
     def test_unknown_fields_ignored(self, dc_mapper):
         defect = _make_defect()
         fields = [self._make_dc_field("summary", "Summary")]
-        result = dc_mapper.map_defect_to_jira_data_center_issue(defect, fields)
+        result = dc_mapper.map_defect_to_jira_data_center_issue(defect, fields, _SYNC_CONTEXT)
         assert "description" not in result["fields"]
 
 
@@ -447,18 +473,18 @@ class TestBuildIssueFields:
         udfs = [UserDefinedFieldProperties(name="My Label", value="foo")]
         defect = _make_defect(userDefinedFields=udfs)
         allowed = [_allowed("customfield_01", "My Label", "string")]
-        result = cloud_mapper._build_issue_fields(defect, allowed)
+        result = cloud_mapper._build_issue_fields(defect, allowed, {}, _SYNC_CONTEXT)
         assert result.get("customfield_01") == "foo"
 
     def test_user_defined_field_with_none_value_skipped(self, cloud_mapper):
         udfs = [UserDefinedFieldProperties(name="Empty", value=None)]
         defect = _make_defect(userDefinedFields=udfs)
         allowed = [_allowed("customfield_02", "Empty", "string")]
-        result = cloud_mapper._build_issue_fields(defect, allowed)
+        result = cloud_mapper._build_issue_fields(defect, allowed, {}, _SYNC_CONTEXT)
         assert "customfield_02" not in result
 
     def test_none_values_stripped_from_result(self, cloud_mapper):
         defect = _make_defect(description=None)
         allowed = [_allowed("summary", "Summary", "string")]
-        result = cloud_mapper._build_issue_fields(defect, allowed)
+        result = cloud_mapper._build_issue_fields(defect, allowed, {}, _SYNC_CONTEXT)
         assert all(v is not None for v in result.values())

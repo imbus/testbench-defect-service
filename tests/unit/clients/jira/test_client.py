@@ -51,7 +51,6 @@ def mock_jira_config():
             server_url="https://test.atlassian.net",
             auth_type="basic",
             attributes=["title", "status", "priority"],
-            control_fields=["status", "priority", "classification"],
             readonly=False,
             show_change_history=True,
         )
@@ -286,7 +285,6 @@ class TestGetControlFields:
         }
 
         mock_jira_client_instance.jira_client.fetch_issues_fields = Mock(return_value=meta)
-        mock_jira_client_instance.config.control_fields = ["Severity"]
 
         result = mock_jira_client_instance.get_control_fields("Test Project (TEST)")
 
@@ -310,7 +308,6 @@ class TestGetControlFields:
         }
 
         mock_jira_client_instance.jira_client.fetch_issues_fields = Mock(return_value=meta)
-        mock_jira_client_instance.config.control_fields = ["classification"]
 
         with patch.object(
             mock_jira_client_instance, "_add_class_issue_type_names"
@@ -331,7 +328,6 @@ class TestGetControlFields:
         }
 
         mock_jira_client_instance.jira_client.fetch_issues_fields = Mock(return_value=meta)
-        mock_jira_client_instance.config.control_fields = ["status"]
 
         with patch.object(
             mock_jira_client_instance, "_add_control_field_statuses"
@@ -362,7 +358,6 @@ class TestGetControlFields:
         }
 
         mock_jira_client_instance.jira_client.fetch_issues_fields = Mock(return_value=meta)
-        mock_jira_client_instance.config.control_fields = ["Description"]
 
         result = mock_jira_client_instance.get_control_fields("Test Project (TEST)")
 
@@ -387,7 +382,6 @@ class TestGetControlFields:
         }
 
         mock_jira_client_instance.jira_client.fetch_issues_fields = Mock(return_value=meta)
-        mock_jira_client_instance.config.control_fields = ["Severity"]
 
         result = mock_jira_client_instance.get_control_fields("Test Project (TEST)")
         assert isinstance(result, dict)
@@ -424,7 +418,6 @@ class TestGetControlFields:
         }
 
         mock_jira_client_instance.jira_client.fetch_issues_fields = Mock(return_value=meta)
-        mock_jira_client_instance.config.control_fields = ["Severity", "Priority"]
 
         result = mock_jira_client_instance.get_control_fields("Test Project (TEST)")
 
@@ -440,18 +433,14 @@ class TestGetControlFields:
             return_value=["Defined", "Done", "In Progress", "Rejected"]
         )
 
-        control_fields_name = ["status"]
-        projects = [{"id": "10001", "key": "TEST"}]
         control_fields: dict[str, list[str]] = {}
+        projects = [{"id": "10001", "key": "TEST"}]
 
-        mock_jira_client_instance._add_control_field_statuses(
-            control_fields_name, projects, control_fields, "TEST"
-        )
+        mock_jira_client_instance._add_control_field_statuses(projects, control_fields, "TEST")
 
         mock_jira_client_instance.jira_client.fetch_project_statuses.assert_called_once_with("TEST")
         assert "status" in control_fields
         assert control_fields["status"] == ["Defined", "Done", "In Progress", "Rejected"]
-        assert "status" not in control_fields_name
 
     def test_add_control_field_statuses_fallback_to_global(self, mock_jira_client_instance):
         """Test _add_control_field_statuses falls back to global statuses() when project endpoint
@@ -472,18 +461,14 @@ class TestGetControlFields:
             return_value=[mock_status_scoped, mock_status_scoped_2]
         )
 
-        control_fields_name = ["status"]
-        projects = [{"id": "10001", "key": "TEST"}]
         control_fields: dict[str, list[str]] = {}
+        projects = [{"id": "10001", "key": "TEST"}]
 
-        mock_jira_client_instance._add_control_field_statuses(
-            control_fields_name, projects, control_fields, "TEST"
-        )
+        mock_jira_client_instance._add_control_field_statuses(projects, control_fields, "TEST")
 
         assert "status" in control_fields
         assert "Open" in control_fields["status"]
         assert "Closed" in control_fields["status"]
-        assert "status" not in control_fields_name
 
     def test_control_fields_with_status_calls_add_statuses(self, mock_jira_client_instance):
         """Test get_control_fields calls _add_control_field_statuses with project_key."""
@@ -498,16 +483,14 @@ class TestGetControlFields:
         }
 
         mock_jira_client_instance.jira_client.fetch_issues_fields = Mock(return_value=meta)
-        mock_jira_client_instance.config.control_fields = ["status"]
 
         with patch.object(
             mock_jira_client_instance, "_add_control_field_statuses"
         ) as mock_add_status:
             mock_jira_client_instance.get_control_fields("Test Project (TEST)")
             mock_add_status.assert_called_once_with(
-                ["status"],
                 [{"id": "10001", "key": "TEST", "issuetypes": [{"name": "Bug", "fields": {}}]}],
-                {},
+                {"issuetype": ["Bug"]},
                 "TEST",
             )
 
@@ -531,7 +514,7 @@ class TestGetDefects:
     def test_returns_defects_for_valid_project(self, mock_jira_client_instance, sync_context):
         mock_issue = self._setup()
         mock_jira_client_instance.jira_client.fetch_issues_by_jql.return_value = [mock_issue]
-        mock_jira_client_instance.jira_client.fetch_all_custom_fields.return_value = []
+        mock_jira_client_instance.jira_client.get_all_project_fields.return_value = []
 
         with patch("testbench_defect_service.clients.jira.client.create_defect_from_issue") as m:
             m.return_value = _make_defect_with_id()
@@ -545,7 +528,7 @@ class TestGetDefects:
     ):
         mock_issue = self._setup()
         mock_jira_client_instance.jira_client.fetch_issues_by_jql.return_value = [mock_issue]
-        mock_jira_client_instance.jira_client.fetch_all_custom_fields.return_value = []
+        mock_jira_client_instance.jira_client.get_all_project_fields.return_value = []
 
         with patch(
             "testbench_defect_service.clients.jira.client.create_defect_from_issue",
@@ -563,7 +546,7 @@ class TestGetDefects:
 
     def test_adds_general_error_when_no_issues_found(self, mock_jira_client_instance, sync_context):
         mock_jira_client_instance.jira_client.fetch_issues_by_jql.return_value = []
-        mock_jira_client_instance.jira_client.fetch_all_custom_fields.return_value = []
+        mock_jira_client_instance.jira_client.get_all_project_fields.return_value = []
 
         result = mock_jira_client_instance.get_defects("Test Project (TEST)", sync_context)
         assert result.protocol.generalErrors
@@ -575,7 +558,7 @@ class TestGetDefectsBatch:
         mock_issue = Mock()
         mock_issue.key = "TEST-1"
         mock_jira_client_instance.jira_client.fetch_issue.return_value = mock_issue
-        mock_jira_client_instance.jira_client.fetch_all_custom_fields.return_value = []
+        mock_jira_client_instance.jira_client.get_all_project_fields.return_value = []
 
         with patch("testbench_defect_service.clients.jira.client.create_defect_from_issue") as m:
             m.return_value = _make_defect_with_id()
@@ -587,7 +570,7 @@ class TestGetDefectsBatch:
 
     def test_adds_warning_when_issue_not_found(self, mock_jira_client_instance, sync_context):
         mock_jira_client_instance.jira_client.fetch_issue.return_value = None
-        mock_jira_client_instance.jira_client.fetch_all_custom_fields.return_value = []
+        mock_jira_client_instance.jira_client.get_all_project_fields.return_value = []
 
         result = mock_jira_client_instance.get_defects_batch(
             "Test Project (TEST)", [DefectID(root="MISSING-1")], sync_context
@@ -601,9 +584,9 @@ class TestGetDefectsBatch:
         assert result.protocol.generalErrors
 
     def test_skips_empty_defect_ids(self, mock_jira_client_instance, sync_context):
-        mock_jira_client_instance.jira_client.fetch_all_custom_fields.return_value = []
+        mock_jira_client_instance.jira_client.get_all_project_fields.return_value = []
         result = mock_jira_client_instance.get_defects_batch(
-            "Test Project (TEST)", [None], sync_context
+            "Test Project (TEST)", [DefectID(root="")], sync_context
         )
         mock_jira_client_instance.jira_client.fetch_issue.assert_not_called()
         assert result.value == []
@@ -612,7 +595,7 @@ class TestGetDefectsBatch:
         mock_issue = Mock()
         mock_issue.key = "TEST-1"
         mock_jira_client_instance.jira_client.fetch_issue.return_value = mock_issue
-        mock_jira_client_instance.jira_client.fetch_all_custom_fields.return_value = []
+        mock_jira_client_instance.jira_client.get_all_project_fields.return_value = []
 
         with patch(
             "testbench_defect_service.clients.jira.client.create_defect_from_issue",
@@ -630,14 +613,11 @@ class TestCreateDefect:
         defect = _make_defect()
         mock_issue = Mock()
         mock_issue.key = "TEST-99"
-        with patch("testbench_defect_service.clients.jira.client.JiraClient") as mock_jira:
-            per_user = Mock()
-            per_user.create_issue.return_value = mock_issue
-            mock_jira.return_value = per_user
+        mock_jira_client_instance.jira_client.create_issue.return_value = mock_issue
 
-            result = mock_jira_client_instance.create_defect(
-                "Test Project (TEST)", defect, sync_context
-            )
+        result = mock_jira_client_instance.create_defect(
+            "Test Project (TEST)", defect, sync_context
+        )
         assert result.value == "TEST-99"
         assert result.protocol.successes
 
@@ -683,7 +663,10 @@ class TestCreateDefect:
 
         assert result.value == "TEST-1"
 
-    def test_uses_per_user_auth_by_default(self, mock_jira_client_instance, sync_context):
+    def test_uses_per_user_auth_when_disabled(self, mock_jira_client_instance, sync_context):
+        mock_jira_client_instance.config.projects["Test Project (TEST)"] = JiraProjectConfig(
+            enable_shared_auth=False
+        )
         defect = _make_defect()
         with patch("testbench_defect_service.clients.jira.client.JiraClient") as mock_jira:
             per_user_client = Mock()
@@ -868,7 +851,7 @@ class TestGetDefectExtended:
 @pytest.mark.unit
 class TestGetUserDefinedAttributes:
     def test_returns_user_defined_attributes(self, mock_jira_client_instance):
-        mock_jira_client_instance.jira_client.fetch_all_custom_fields.return_value = [
+        mock_jira_client_instance.jira_client.get_all_project_fields.return_value = [
             {"name": "Environment", "schema": {"type": "string"}},
             {"name": "Team", "schema": {"type": "string"}},
         ]
@@ -878,16 +861,20 @@ class TestGetUserDefinedAttributes:
         assert "Environment" in names
         assert "Team" in names
 
-    def test_raises_not_found_when_no_project(self, mock_jira_client_instance):
-        with pytest.raises(NotFound):
-            mock_jira_client_instance.get_user_defined_attributes(None)
+    def test_no_project_returns_global_attributes(self, mock_jira_client_instance):
+        mock_jira_client_instance.jira_client.get_all_project_fields.return_value = []
+        result = mock_jira_client_instance.get_user_defined_attributes(None)
+        mock_jira_client_instance.jira_client.get_all_project_fields.assert_called_once_with(
+            project=None
+        )
+        assert result == []
 
     def test_raises_not_found_for_unknown_project(self, mock_jira_client_instance):
         with pytest.raises(NotFound):
             mock_jira_client_instance.get_user_defined_attributes("Unknown Project")
 
     def test_returns_empty_list_when_no_custom_fields(self, mock_jira_client_instance):
-        mock_jira_client_instance.jira_client.fetch_all_custom_fields.return_value = []
+        mock_jira_client_instance.jira_client.get_all_project_fields.return_value = []
         result = mock_jira_client_instance.get_user_defined_attributes("Test Project (TEST)")
         assert result == []
 
@@ -982,7 +969,12 @@ class TestCorrectSyncResults:
             local=LocalSyncActions(create=[invalid], update=[], delete=[]),
             remote=None,
         )
-        result = mock_jira_client_instance.correct_sync_results("Test Project (TEST)", body)
+        with patch.object(
+            mock_jira_client_instance,
+            "get_control_fields",
+            return_value={"classification": ["Bug", "Task"]},
+        ):
+            result = mock_jira_client_instance.correct_sync_results("Test Project (TEST)", body)
         assert result.local.create == []
 
     def test_none_local_and_remote_handled(self, mock_jira_client_instance):
@@ -1053,7 +1045,7 @@ class TestBuildDefectWithAttributes:
         result = mock_jira_client_instance._build_defect_with_attributes(
             defect=sample_defect_with_id,
             project="Test Project (TEST)",
-            changelog=None,
+            issue=Mock(),
             fields=fields,
             sync_context=sync_context,
         )
@@ -1081,11 +1073,13 @@ class TestBuildDefectWithAttributes:
             "testbench_defect_service.clients.jira.client.extract_changelog_attributes"
         ) as mock_extract:
             mock_extract.return_value = None
+            mock_issue = Mock()
+            mock_issue.changelog = mock_changelog
 
             result = mock_jira_client_instance._build_defect_with_attributes(
                 defect=sample_defect_with_id,
                 project="Test Project (TEST)",
-                changelog=mock_changelog,
+                issue=mock_issue,
                 fields=fields,
                 sync_context=sync_context,
             )
@@ -1102,7 +1096,7 @@ class TestBuildDefectWithAttributes:
         result = mock_jira_client_instance._build_defect_with_attributes(
             defect=sample_defect_with_id,
             project="Test Project (TEST)",
-            changelog=None,
+            issue=Mock(),
             fields=[],
             sync_context=sync_context,
         )
@@ -1285,9 +1279,6 @@ class TestValidateDefect:
         result = mock_jira_client_instance.validate_defect(
             defect=sample_defect,
             control_field=control_fields,
-            statuses=[mock_status],
-            priorities=[mock_priority],
-            issue_types=[mock_issue_type],
         )
 
         assert result is True
@@ -1307,9 +1298,6 @@ class TestValidateDefect:
         result = mock_jira_client_instance.validate_defect(
             defect=defect,
             control_field={},
-            statuses=[],
-            priorities=[],
-            issue_types=[],
         )
 
         assert result is False
@@ -1330,72 +1318,33 @@ class TestValidateDefect:
         result = mock_jira_client_instance.validate_defect(
             defect=defect,
             control_field={},
-            statuses=[],
-            priorities=[],
-            issue_types=[],
         )
 
         assert result is False
 
     def test_validate_defect_invalid_status(self, mock_jira_client_instance, sample_defect):
-        """Test validation fails when status is not in Jira statuses."""
-        mock_status = Mock()
-        mock_status.name = "Closed"
-
-        mock_priority = Mock()
-        mock_priority.name = "High"
-
-        mock_issue_type = Mock()
-        mock_issue_type.name = "Bug"
-
+        """Test validation fails when status is not in control field allowed values."""
         result = mock_jira_client_instance.validate_defect(
             defect=sample_defect,
-            control_field={},
-            statuses=[mock_status],
-            priorities=[mock_priority],
-            issue_types=[mock_issue_type],
+            control_field={"status": ["Closed", "Resolved"]},
         )
 
         assert result is False
 
     def test_validate_defect_invalid_priority(self, mock_jira_client_instance, sample_defect):
-        """Test validation fails when priority is not in Jira priorities."""
-        mock_status = Mock()
-        mock_status.name = "Open"
-
-        mock_priority = Mock()
-        mock_priority.name = "Low"
-
-        mock_issue_type = Mock()
-        mock_issue_type.name = "Bug"
-
+        """Test validation fails when priority is not in control field allowed values."""
         result = mock_jira_client_instance.validate_defect(
             defect=sample_defect,
-            control_field={},
-            statuses=[mock_status],
-            priorities=[mock_priority],
-            issue_types=[mock_issue_type],
+            control_field={"priority": ["Low", "Medium"]},
         )
 
         assert result is False
 
     def test_validate_defect_invalid_classification(self, mock_jira_client_instance, sample_defect):
-        """Test validation fails when classification is not in Jira issue types."""
-        mock_status = Mock()
-        mock_status.name = "Open"
-
-        mock_priority = Mock()
-        mock_priority.name = "High"
-
-        mock_issue_type = Mock()
-        mock_issue_type.name = "Story"
-
+        """Test validation fails when classification is not in control field allowed values."""
         result = mock_jira_client_instance.validate_defect(
             defect=sample_defect,
-            control_field={},
-            statuses=[mock_status],
-            priorities=[mock_issue_type],
-            issue_types=[mock_issue_type],
+            control_field={"classification": ["Story", "Task"]},
         )
 
         assert result is False
@@ -1429,9 +1378,6 @@ class TestValidateDefect:
         result = mock_jira_client_instance.validate_defect(
             defect=defect,
             control_field=control_fields,
-            statuses=[mock_status],
-            priorities=[mock_priority],
-            issue_types=[mock_issue_type],
         )
 
         assert result is False
@@ -1452,9 +1398,6 @@ class TestValidateDefect:
         result = mock_jira_client_instance.validate_defect(
             defect=sample_defect_with_id,
             control_field={},
-            statuses=[mock_status],
-            priorities=[mock_priority],
-            issue_types=[mock_issue_type],
         )
 
         assert result is True
@@ -1606,16 +1549,14 @@ class TestAddClassIssueTypeNames:
         """Test populating classification from issue-type list (Cloud/non-issuetypes endpoint)."""
         mock_jira_client_instance.jira_client.use_issuetypes_endpoint = False
 
-        control_fields_name = ["classification", "priority"]
         control_fields: dict = {}
         issue_types = [{"name": "Bug"}, {"name": "Task"}, {"name": "Story"}]
 
         mock_jira_client_instance._add_class_issue_type_names(
-            control_fields_name, control_fields, issue_types=issue_types
+            control_fields, issue_types=issue_types
         )
 
-        assert control_fields["classification"] == ["Bug", "Task", "Story"]
-        assert "classification" not in control_fields_name
+        assert control_fields["issuetype"] == ["Bug", "Task", "Story"]
 
     def test_add_class_issue_type_names_jdc_mode(self, mock_jira_client_instance):
         """Test populating classification from project_issue_types (Data Center endpoint)."""
@@ -1629,15 +1570,11 @@ class TestAddClassIssueTypeNames:
             return_value=[mock_it1, mock_it2]
         )
 
-        control_fields_name = ["classification"]
         control_fields: dict = {}
 
-        mock_jira_client_instance._add_class_issue_type_names(
-            control_fields_name, control_fields, project_key="TEST"
-        )
+        mock_jira_client_instance._add_class_issue_type_names(control_fields, project_key="TEST")
 
-        assert control_fields["classification"] == ["Bug", "Task"]
-        assert "classification" not in control_fields_name
+        assert control_fields["issuetype"] == ["Bug", "Task"]
         mock_jira_client_instance.jira_client.jira.project_issue_types.assert_called_once_with(
             "TEST", maxResults=100
         )
@@ -1646,15 +1583,11 @@ class TestAddClassIssueTypeNames:
         """Test with empty issue types list."""
         mock_jira_client_instance.jira_client.use_issuetypes_endpoint = False
 
-        control_fields_name = ["classification"]
         control_fields: dict = {}
 
-        mock_jira_client_instance._add_class_issue_type_names(
-            control_fields_name, control_fields, issue_types=[]
-        )
+        mock_jira_client_instance._add_class_issue_type_names(control_fields, issue_types=[])
 
-        assert control_fields["classification"] == []
-        assert "classification" not in control_fields_name
+        assert control_fields["issuetype"] == []
 
 
 @pytest.mark.unit
@@ -1674,23 +1607,14 @@ class TestExtractControlFieldValuesJdc:
             return_value=[mock_field]
         )
 
-        control_fields_name = ["Severity"]
         control_fields: dict = {}
 
-        mock_jira_client_instance.extract_control_field_values_jdc(
-            "TEST", control_fields, control_fields_name
-        )
+        mock_jira_client_instance.extract_control_field_values_jdc("TEST", control_fields)
 
         assert control_fields["Severity"] == ["Critical", "Major", "Minor"]
-        assert "Severity" not in control_fields_name
 
     def test_extracts_matching_fields_by_id(self, mock_jira_client_instance):
-        """Test that fields matching by fieldId are extracted.
-
-        Note: the source removes from control_fields_name by field.name, so the caller
-        must include the field name (not just the fieldId) in control_fields_name when
-        the match happens via fieldId.
-        """
+        """Test that fields matching by fieldId are extracted."""
         av1, av2 = Mock(), Mock()
         av1.name, av2.name = "High", "Low"
         mock_field = Mock()
@@ -1702,49 +1626,37 @@ class TestExtractControlFieldValuesJdc:
             return_value=[mock_field]
         )
 
-        # Include both fieldId and field name so removal by name succeeds
-        control_fields_name = ["customfield_10001", "Severity"]
         control_fields: dict = {}
 
-        mock_jira_client_instance.extract_control_field_values_jdc(
-            "TEST", control_fields, control_fields_name
-        )
+        mock_jira_client_instance.extract_control_field_values_jdc("TEST", control_fields)
 
         assert "Severity" in control_fields
         assert control_fields["Severity"] == ["High", "Low"]
-        assert "Severity" not in control_fields_name
 
     def test_skips_non_matching_fields(self, mock_jira_client_instance):
-        """Test that unrelated fields are ignored."""
+        """Test that fields without allowedValues are ignored."""
         mock_field = Mock()
         mock_field.name = "UnrelatedField"
         mock_field.fieldId = "customfield_99999"
-        mock_field.allowedValues = [Mock(name="X")]
+        mock_field.allowedValues = None  # No allowed values → should be skipped
 
         mock_jira_client_instance.jira_client.fetch_project_issue_fields = Mock(
             return_value=[mock_field]
         )
 
-        control_fields_name = ["Severity"]
         control_fields: dict = {}
 
-        mock_jira_client_instance.extract_control_field_values_jdc(
-            "TEST", control_fields, control_fields_name
-        )
+        mock_jira_client_instance.extract_control_field_values_jdc("TEST", control_fields)
 
         assert control_fields == {}
-        assert "Severity" in control_fields_name  # unchanged
 
     def test_empty_field_list(self, mock_jira_client_instance):
         """Test with no project issue fields returned."""
         mock_jira_client_instance.jira_client.fetch_project_issue_fields = Mock(return_value=[])
 
-        control_fields_name = ["Severity"]
         control_fields: dict = {}
 
-        mock_jira_client_instance.extract_control_field_values_jdc(
-            "TEST", control_fields, control_fields_name
-        )
+        mock_jira_client_instance.extract_control_field_values_jdc("TEST", control_fields)
 
         assert control_fields == {}
 

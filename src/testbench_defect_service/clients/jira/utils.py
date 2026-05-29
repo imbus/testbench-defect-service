@@ -55,7 +55,7 @@ def create_defect_from_issue(
         status=_get_control_field_value(sync_context.statusAttribute, issue.fields, fields),
         classification=_get_control_field_value(sync_context.classAttribute, issue.fields, fields),
         priority=_get_control_field_value(sync_context.priorityAttribute, issue.fields, fields),
-        userDefinedFields=_extract_user_defined_fields(issue, fields),
+        userDefinedFields=_extract_user_defined_fields(issue, fields, sync_context),
         lastEdited=datetime.fromisoformat(jira_datetime_to_iso(issue.fields.updated)),
         references=_extract_references(issue),
         principal=Login(username="", password=""),
@@ -114,11 +114,15 @@ def _stringify_control_value(value: Any) -> str:
 
 
 def _extract_user_defined_fields(
-    issue: Issue, fields: list[dict[str, Any]]
+    issue: Issue,
+    fields: list[dict[str, Any]],
+    sync_context: SyncContext,
 ) -> list[UserDefinedFieldProperties]:
     """Build user-defined field properties from *issue*."""
     result: list[UserDefinedFieldProperties] = []
     for field in fields:
+        if not sync_context.udaSyncOptions or field["name"] not in sync_context.udaSyncOptions:
+            continue
         value = getattr(issue.fields, field["id"], None)
         if "<jira.resources.PropertyHolder object at" in str(
             value
@@ -251,9 +255,37 @@ def extract_changelog_attributes(
                 attributes[key] = f"{item.fromString} → {item.toString}"
 
 
-def extract_static_attributes(defect: DefectWithID, attribute_fields: list[str]) -> dict[str, str]:
+def extract_static_attributes(  # noqa: C901
+    defect: DefectWithID,
+    attribute_fields: list[str],
+    issue: Issue,
+    fields: list[dict[Any, Any]],
+) -> dict[str, str]:
     """Return a dict of attribute values from *defect* for the given *attribute_fields*."""
     attributes: dict[str, str] = {}
+    for field in fields:
+        if field["name"] not in attribute_fields:
+            continue
+        value = getattr(issue.fields, field["id"], None)
+        if "<jira.resources.PropertyHolder object at" in str(
+            value
+        ) or "com.atlassian.greenhopper" in str(value):
+            continue
+
+        if "<JIRA" in str(value):
+            if isinstance(value, list):
+                formatted_value = []
+                for elem in value:
+                    formatted_value.append(str(elem))
+                value = formatted_value
+            elif isinstance(value, jira.resources.TimeTracking):
+                value = value.timeSpent if hasattr(value, "timeSpent") else None
+
+        if isinstance(value, list) and all(isinstance(v, str) for v in value):
+            value = ", ".join(value)
+
+        attributes[field["name"]] = str(value) if value is not None else ""
+
     for attr in attribute_fields:
         value = getattr(defect, attr, None)
         if value is not None:
