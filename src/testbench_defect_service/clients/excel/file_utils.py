@@ -230,9 +230,12 @@ def write_defect_data_to_excel(
     sheet_name = resolve_visible_sheet_name(defect_path, config)
 
     logger.debug("Writing defect data to '%s' on sheet '%s'", defect_path, sheet_name)
-    with pd.ExcelWriter(
-        defect_path, engine="openpyxl", mode="a", if_sheet_exists="overlay"
-    ) as writer:
+    is_existing_xlsx = defect_path.exists() and defect_path.suffix.lower() == ".xlsx"
+    writer_kwargs: dict[str, Any] = {"engine": "openpyxl"}
+    if is_existing_xlsx:
+        writer_kwargs["mode"] = "a"
+        writer_kwargs["if_sheet_exists"] = "overlay"
+    with pd.ExcelWriter(defect_path, **writer_kwargs) as writer:
         for col_idx, col_names in column_positions.items():
             col_name = col_names[0]
             if col_name not in df_with_new_defect.columns:
