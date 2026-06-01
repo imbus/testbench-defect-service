@@ -93,9 +93,14 @@ strict_optional = true
 warn_return_any = true
 warn_no_return = true
 warn_unreachable = true
+ignore_missing_imports = true
 pretty = true
 files = ["src"]
 exclude = "tests/"
+
+[[tool.mypy.overrides]]
+module = ["testbench_defect_service", "testbench_defect_service.*"]
+ignore_missing_imports = true
 
 [tool.ruff]
 fix = false
