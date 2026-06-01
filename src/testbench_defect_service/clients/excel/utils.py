@@ -126,11 +126,11 @@ def _register_column(
 
 def map_and_rename_columns(
     sync_context: SyncContext,
-    effective_config: ExcelDefectClientConfig,
+    config: ExcelDefectClientConfig,
     header: dict[int, str],
     df: pd.DataFrame,
 ) -> pd.DataFrame:
-    column_mapping = get_column_mapping_for_config(effective_config, sync_context)
+    column_mapping = get_column_mapping_for_config(config, sync_context)
     if column_mapping is not None:
         rename_map = {
             logical_names[0]: header[idx + 1]
@@ -352,11 +352,11 @@ def resolve_sheet_name(
 
 def add_defect_to_dataframe(
     defect: Defect,
-    effective_config: ExcelDefectClientConfig,
+    config: ExcelDefectClientConfig,
     df: pd.DataFrame,
     protocol: Protocol,
 ) -> pd.DataFrame:
-    prefix = effective_config.id_prefix
+    prefix = config.id_prefix
     numeric_ids = [
         int(id_val.replace(prefix, ""))
         for id_val in df["id"]
@@ -364,15 +364,15 @@ def add_defect_to_dataframe(
     ]
     max_int = (max(numeric_ids) if numeric_ids else 0) + 1
     logger.debug("Assigning new defect ID '%s%d' (prefix: '%s')", prefix, max_int, prefix)
-    defect_id = effective_config.id_prefix + str(max_int)
+    defect_id = config.id_prefix + str(max_int)
 
-    defect_info_data_frame = create_defect_data_frame(defect, effective_config, defect_id, protocol)
+    defect_info_data_frame = create_defect_data_frame(defect, config, defect_id, protocol)
 
     return pd.concat([df, defect_info_data_frame], ignore_index=True)
 
 
 def create_defect_data_frame(
-    defect: Defect, effective_config: ExcelDefectClientConfig, defect_id: str, protocol: Protocol
+    defect: Defect, config: ExcelDefectClientConfig, defect_id: str, protocol: Protocol
 ):
 
     defect_info_data_frame = pd.DataFrame(
@@ -384,11 +384,9 @@ def create_defect_data_frame(
             "status": [defect.status],
             "classification": [defect.classification],
             "priority": [defect.priority],
-            "lastEdited": [_format_last_edited(defect.lastEdited, effective_config)],
+            "lastEdited": [_format_last_edited(defect.lastEdited, config)],
             "references": [
-                effective_config.references_seperator.join(
-                    defect.references if defect.references else []
-                )
+                config.references_seperator.join(defect.references if defect.references else [])
             ],
         }
     )
@@ -514,11 +512,11 @@ def validate_control_fields(
 def check_defect_transitions(
     defect: Defect,
     df: pd.DataFrame,
-    effective_config: ExcelDefectClientConfig,
+    config: ExcelDefectClientConfig,
     protocol: Protocol,
 ) -> bool:
-    if effective_config.transitions:
-        for transition in effective_config.transitions:
+    if config.transitions:
+        for transition in config.transitions:
             if (
                 transition.from_state == df["status"].values[0]
                 and transition.to_state == defect.status

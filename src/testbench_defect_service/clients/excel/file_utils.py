@@ -220,14 +220,14 @@ def _load_dataframe(
 def write_defect_data_to_excel(
     sync_context: SyncContext,
     defect_path: Path,
-    effective_config: ExcelDefectClientConfig,
+    config: ExcelDefectClientConfig,
     header: dict[int, str],
     df_with_new_defect: pd.DataFrame,
 ):
-    column_positions = get_column_mapping_for_config(effective_config, sync_context)
+    column_positions = get_column_mapping_for_config(config, sync_context)
     if not column_positions:
         return
-    sheet_name = resolve_visible_sheet_name(defect_path, effective_config)
+    sheet_name = resolve_visible_sheet_name(defect_path, config)
 
     logger.debug("Writing defect data to '%s' on sheet '%s'", defect_path, sheet_name)
     with pd.ExcelWriter(defect_path, engine="openpyxl") as writer:
@@ -237,7 +237,7 @@ def write_defect_data_to_excel(
                 continue
             original_header = header.get(col_idx + 1, col_name)
 
-            for udf in effective_config.udfs:
+            for udf in config.udfs:
                 if udf.name == col_name and udf.type == ValueType.BOOLEAN:
                     true_val: str | None = udf.trueValue
                     false_val: str | None = udf.falseValue
@@ -257,7 +257,7 @@ def write_defect_data_to_excel(
                 writer,
                 sheet_name=sheet_name,
                 startcol=col_idx,
-                startrow=effective_config.defects_data_header_line - 1,
+                startrow=config.defects_data_header_line - 1,
                 index=False,
                 header=True,
             )
@@ -267,7 +267,7 @@ def write_defect_data_to_excel(
                 writer,
                 sheet_name=sheet_name,
                 startcol=col_idx,
-                startrow=effective_config.defects_data_starting_line - 1,
+                startrow=config.defects_data_starting_line - 1,
                 index=False,
                 header=False,
             )
