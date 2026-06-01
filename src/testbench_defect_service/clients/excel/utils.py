@@ -393,7 +393,6 @@ def create_defect_data_frame(
 
     if defect.userDefinedFields:
         for udf in defect.userDefinedFields:
-            # TODO: check if is an udf which has to be stored
             defect_info_data_frame[udf.name] = udf.value
 
     return defect_info_data_frame
@@ -515,6 +514,9 @@ def check_defect_transitions(
     config: ExcelDefectClientConfig,
     protocol: Protocol,
 ) -> bool:
+    if defect.status == df["status"].values[0]:
+        return True
+
     if config.transitions:
         for transition in config.transitions:
             if (
