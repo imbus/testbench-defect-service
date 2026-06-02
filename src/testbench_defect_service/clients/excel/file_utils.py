@@ -2,6 +2,7 @@ import time
 from pathlib import Path
 from typing import Any, Literal, cast
 
+import numpy as np
 import pandas as pd
 
 from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig
@@ -46,8 +47,15 @@ def read_data_frame_from_file_path(
     map_boolean_values(config, df)
 
     df = _apply_column_mapping(df, valid_mapping)
-    _validate_required_column_values(df, file_path, config)
-    _validate_unique_constraints(df, file_path, config)
+
+    try:
+        _validate_required_column_values(df, file_path, config)
+        _validate_unique_constraints(df, file_path, config)
+    except ValueError:
+        logger.error(
+            f"Data validation failed for file: '{file_path}'. Check required columns "
+            "and unique constraints."
+        )
 
     bytes_used = df.memory_usage(index=True, deep=True).sum()
     logger.debug(
@@ -61,9 +69,12 @@ def read_data_frame_from_file_path(
 def map_boolean_values(config, df):
     for udf in config.udfs:
         if udf.type == ValueType.BOOLEAN:
-            df[udf.name] = df[udf.name].map(
-                lambda v, t=udf.trueValue: "true" if v == t else "false"
-            )
+            try:
+                df[udf.name] = df[udf.name].map(
+                    lambda v, t=udf.trueValue: "true" if v == t else "false"
+                )
+            except KeyError:
+                logger.warning(f"{udf.name} not in the dataframe")
 
 
 def _validate_column_mapping(
@@ -276,3 +287,66 @@ def write_defect_data_to_excel(
                 index=False,
                 header=False,
             )
+
+
+def write_defect_data_to_csv(
+    sync_context: SyncContext,
+    defect_path: Path,
+    config: ExcelDefectClientConfig,
+    header: dict[int, str],
+    df_with_new_defect: pd.DataFrame,
+):
+    column_positions = get_column_mapping_for_config(config, sync_context)
+    if not column_positions:
+        return
+
+    logger.debug("Overlaying defect data to CSV '%s'", defect_path)
+
+    is_existing_csv = defect_path.exists() and defect_path.suffix.lower() == ".csv"
+    grid_df = pd.read_csv(defect_path, header=None) if is_existing_csv else pd.DataFrame()
+
+    header_row_idx = config.defects_data_header_line - 1
+    start_row_idx = config.defects_data_starting_line - 1
+    num_new_rows = len(df_with_new_defect)
+    required_rows = max(header_row_idx + 1, start_row_idx + num_new_rows)
+
+    # Expand grid rows if necessary
+    if len(grid_df) < required_rows:
+        padding = pd.DataFrame(
+            np.nan, index=range(len(grid_df), required_rows), columns=grid_df.columns
+        )
+        # Using concat to add the required empty rows to the bottom
+        grid_df = pd.concat([grid_df, padding], ignore_index=True)
+
+    for col_idx, col_names in column_positions.items():
+        col_name = col_names[0]
+        if col_name not in df_with_new_defect.columns:
+            continue
+
+        original_header = header.get(col_idx + 1, col_name)
+
+        # Apply UDF boolean mappings
+        for udf in config.udfs:
+            if udf.name == col_name and udf.type == ValueType.BOOLEAN:
+                true_val: str | None = udf.trueValue
+                false_val: str | None = udf.falseValue
+
+                def _map_bool(
+                    v: str, tv: str | None = true_val, fv: str | None = false_val
+                ) -> str | None:
+                    return tv if str(v).lower() == "true" else fv
+
+                df_with_new_defect[col_name] = df_with_new_defect[col_name].map(_map_bool)
+
+        while col_idx >= len(grid_df.columns):
+            grid_df[len(grid_df.columns)] = np.nan
+
+        # Overlay the Header at the specific coordinate
+        grid_df.iat[header_row_idx, col_idx] = original_header
+        grid_df.iloc[start_row_idx : start_row_idx + num_new_rows, col_idx] = df_with_new_defect[
+            col_name
+        ].values
+
+    grid_df.to_csv(
+        defect_path, mode="w", index=False, header=False, na_rep="", sep=config.seperator
+    )

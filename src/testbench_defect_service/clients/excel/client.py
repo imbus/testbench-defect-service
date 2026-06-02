@@ -11,6 +11,7 @@ from testbench_defect_service.clients.abstract_client import AbstractDefectClien
 from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig
 from testbench_defect_service.clients.excel.file_utils import (
     read_data_frame_from_file_path,
+    write_defect_data_to_csv,
     write_defect_data_to_excel,
 )
 from testbench_defect_service.clients.excel.utils import (
@@ -307,9 +308,14 @@ class ExcelDefectClient(AbstractDefectClient):
         new_defect_id = str(df_with_new_defect.iloc[-1]["id"])
 
         try:
-            write_defect_data_to_excel(
-                sync_context, defect_path, effective_config, header, df_with_new_defect
-            )
+            if effective_config.file_type in [".xlsx", ".xls"]:
+                write_defect_data_to_excel(
+                    sync_context, defect_path, effective_config, header, df_with_new_defect
+                )
+            if effective_config.file_type in [".csv", ".txt"]:
+                write_defect_data_to_csv(
+                    sync_context, defect_path, effective_config, header, df_with_new_defect
+                )
         except (OSError, ValueError) as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.INSERT_ERROR)
             return ProtocolledString(value="", protocol=protocol)
@@ -370,7 +376,10 @@ class ExcelDefectClient(AbstractDefectClient):
         df.update(new_row_df)
 
         try:
-            write_defect_data_to_excel(sync_context, defect_path, effective_config, header, df)
+            if effective_config.file_type in [".xlsx", ".xls"]:
+                write_defect_data_to_excel(sync_context, defect_path, effective_config, header, df)
+            if effective_config.file_type in [".csv", ".txt"]:
+                write_defect_data_to_csv(sync_context, defect_path, effective_config, header, df)
         except (OSError, ValueError) as exc:
             protocol.add_error(defect_id, str(exc), protocol_code=ProtocolCode.UPDATE_ERROR)
             logger.error(
@@ -426,7 +435,10 @@ class ExcelDefectClient(AbstractDefectClient):
         df = df.drop(index=row_idx)
 
         try:
-            write_defect_data_to_excel(sync_context, defect_path, effective_config, header, df)
+            if effective_config.file_type in [".xlsx", ".xls"]:
+                write_defect_data_to_excel(sync_context, defect_path, effective_config, header, df)
+            if effective_config.file_type in [".csv", ".txt"]:
+                write_defect_data_to_csv(sync_context, defect_path, effective_config, header, df)
         except (OSError, ValueError) as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.PUBLISH_ERROR)
             logger.error(
