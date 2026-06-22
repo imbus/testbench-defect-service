@@ -589,24 +589,42 @@ class JiraClient:
             logger.warning("Unable to retrieve accountId for user '%s': %s", user, e)
             raise ValueError(f"User '{user}' not found or invalid") from e
 
-    def fetch_project_issue_fields(self, project_key: str) -> list[Field]:
+    def fetch_project_issue_fields(self, project_key: str) -> list[Field]:  # noqa: C901
         fields_dict: dict[str, Field] = {}
 
         try:
             if self.use_issuetypes_endpoint:
                 logger.debug("_fetch_project_issue_fields: Use issuetypes endpoint")
-                issue_types = self.jira.project_issue_types(project_key, maxResults=100)
-                for issue_type in issue_types:
-                    try:
-                        fields_list = self.jira.project_issue_fields(
-                            project_key, issue_type=issue_type.id, maxResults=100
-                        )
-                        for field in fields_list:
-                            fields_dict[field.fieldId] = field
-                    except Exception as e:
-                        logger.warning(
-                            f"Error fetching issue fields for issue type {issue_type.id}: {e}"
-                        )
+                try:
+                    issue_types = self.jira.project_issue_types(project_key, maxResults=100)
+                    for issue_type in issue_types:
+                        try:
+                            fields_list = self.jira.project_issue_fields(
+                                project_key, issue_type=issue_type.id, maxResults=100
+                            )
+                            for field in fields_list:
+                                fields_dict[field.fieldId] = field
+                        except Exception as e:
+                            logger.warning(
+                                f"Error fetching issue fields for issue type {issue_type.id}: {e}"
+                            )
+                except JIRAError as e:
+                    # Fallback to createmeta endpoint if issuetypes endpoint fails (e.g., 400 error)
+                    logger.debug(
+                        f"project_issue_types endpoint failed for project {project_key} "
+                        f"(status {e.status_code}): {e}. Falling back to createmeta endpoint."
+                    )
+                    createmeta = self.jira.createmeta(
+                        project_key, expand="projects.issuetypes.fields"
+                    )
+                    issue_types = createmeta["projects"][0]["issuetypes"]
+                    for issue_type in issue_types:
+                        for field_id, field_data in issue_type["fields"].items():
+                            fields_dict[field_id] = Field(
+                                options=self.jira._options,
+                                session=self.jira._session,
+                                raw=field_data,
+                            )
             else:
                 logger.debug("_fetch_project_issue_fields: Use createmeta endpoint")
                 createmeta = self.jira.createmeta(project_key, expand="projects.issuetypes.fields")
