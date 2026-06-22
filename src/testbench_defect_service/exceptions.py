@@ -55,6 +55,7 @@ class AppErrorHandler(ErrorHandler):
 
 async def handle_jira_error(request: Request, exception: JIRAError):
     status_code = getattr(exception, "status_code", None)
+    error_text = getattr(exception, "text", None) or str(exception)
     sanic_exc: SanicException
     if status_code == Unauthorized.status_code:
         sanic_exc = Unauthorized(
@@ -67,7 +68,10 @@ async def handle_jira_error(request: Request, exception: JIRAError):
     elif status_code == NotFound.status_code:
         sanic_exc = NotFound("Jira resource not found (404).")
     else:
-        sanic_exc = ServerError(f"Jira service error ({status_code})")
+        error_message = f"Jira service error ({status_code})"
+        if error_text:
+            error_message = f"{error_message}: {error_text}"
+        sanic_exc = ServerError(error_message)
     sanic_exc.__cause__ = exception
     sanic_exc.__suppress_context__ = True
     return request.app.error_handler.default(request, sanic_exc)
