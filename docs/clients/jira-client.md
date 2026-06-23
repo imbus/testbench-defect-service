@@ -239,6 +239,11 @@ The client automatically detects whether it is connected to Jira Cloud or Jira D
 
 ---
 
+## Tips & Troubleshooting
+- If you are able to successfully select a project, but the synchronization and/or field mapping process throws an error, please verify that your integrated Jira user account has been granted the Create Issues permission within that specific Jira project.
+
+---
+
 ## Known limitations
 
 | Limitation | Details |
