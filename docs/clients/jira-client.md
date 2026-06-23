@@ -96,6 +96,15 @@ readonly       = false
 | `name` | String | Display name shown in TestBench. Must match the name in the DMProxy properties file or during setup. | No | `"Jira"` |
 | `server_url` | String | Base URL of your Jira instance (no trailing slash). | **Yes** | — |
 
+### Network & SSL settings
+| Option | Type | Description | Required | Default |
+|--------|------|-------------|----------|---------|
+| `proxy_url` | String | Proxy URL (leave empty if no proxy is needed). | No |
+| `verify_ssl` | Boolean | Enable SSL certificate verification for the Jira HTTPS connection. Set to `false` only in development/test environments with self-signed certificates when providing a CA cert file is not possible. Can also be set via `JIRA_VERIFY_SSL`. | No |
+| `ssl_ca_cert_path` | String | Path to a CA certificate or bundle file (`.pem`/.`crt`) used to verify the Jira server's SSL certificate. Can also be set via `JIRA_SSL_CA_CERT_PATH`. | No |
+| `client_cert_path` | String | Path to client certificate file for mutual TLS authentication (`.pem` or `.crt`). Can also be set via `JIRA_CLIENT_CERT_PATH`. | No |
+| `client_key_path` | String | Path to client private key file for mutual TLS authentication (`.key` or `.pem`). Only needed when the key is stored separately from the certificate. Can also be set via `JIRA_CLIENT_KEY_PATH`. | No |
+
 ### Authentication methods
 
 | Option | Type | Description | Required | Default |
