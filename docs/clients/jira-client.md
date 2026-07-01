@@ -67,6 +67,14 @@ The service account used by the Defect Service must hold the following Jira proj
  When `readonly = true` is set, the service does not exercise any write permissions. Browse Projects and Browse Users are still required for read operations.
 :::
 
+### Jira scoped API token scopes (Jira Cloud)
+
+When you use a **scoped** Jira API token (instead of a classic API token), grant at least:
+
+- **`read:jira-work`** — required for project and issue data (projects, issue search, issue fields, changelogs, versions, boards/sprints).
+- **`read:jira-user`** — required for user/account information used by Jira APIs.
+- **`write:jira-work`** —  required for field metadata calls.
+
 ---
 
 ## Configuration
