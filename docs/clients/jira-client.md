@@ -67,6 +67,14 @@ The service account used by the Defect Service must hold the following Jira proj
  When `readonly = true` is set, the service does not exercise any write permissions. Browse Projects and Browse Users are still required for read operations.
 :::
 
+### Jira scoped API token scopes (Jira Cloud)
+
+When you use a **scoped** Jira API token (instead of a classic API token), grant at least:
+
+- **`read:jira-work`** — required for project and issue data (projects, issue search, issue fields, changelogs, versions, boards/sprints).
+- **`read:jira-user`** — required for user/account information used by Jira APIs.
+- **`write:jira-work`** —  required for field metadata calls.
+
 ---
 
 ## Configuration
@@ -236,6 +244,11 @@ The client automatically detects whether it is connected to Jira Cloud or Jira D
 | Pagination | `nextPageToken` cursor | `startAt` offset |
 | Issue types endpoint | Standard | `issuetypes` endpoint (DC ≥ 8.4) |
 | API base path | `/rest/api/3/` | `/rest/api/2/` |
+
+---
+
+## Tips & Troubleshooting
+- If you are able to successfully select a project, but the synchronization and/or field mapping process throws an error, please verify that your integrated Jira user account has been granted the Create Issues permission within that specific Jira project.
 
 ---
 
