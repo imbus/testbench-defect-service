@@ -197,7 +197,19 @@ class JiraDefectClient(AbstractDefectClient):
                 continue
             control_field_values = []
             for value in field.allowedValues:
-                control_field_values.append(value.name)
+                value_name = None
+                if hasattr(value, "get"):  # dict-like object
+                    value_name = value.get("name")
+                    if not value_name:
+                        value_name = value.get("value")
+                elif hasattr(value, "name"):  # has name attribute
+                    value_name = value.name
+                elif hasattr(value, "value"):  # has value attribute
+                    value_name = value.value
+                else:  # fallback to string representation
+                    value_name = str(value)
+                if value_name:
+                    control_field_values.append(value_name)
             control_fields[field.name] = control_field_values
 
     def _add_class_issue_type_names(
