@@ -89,39 +89,6 @@ class JiraClient:
             return self._connect()
         raise NotImplementedError(f"Unsupported auth_type {self.config.auth_type}")
 
-    # def _connect_old(self) -> JIRA:
-    #     logger.debug("Connecting with shared credentials (auth_type=%s)", self.config.auth_type)
-    #     if self.config.auth_type == "basic":
-    #         return JIRA(
-    #             server=self.config.server_url,
-    #             options=self._options,
-    #             basic_auth=(self.config.username or "", self.config.password or ""),
-    #             max_retries=self.config.max_retries,
-    #             timeout=self.config.timeout,
-    #         )
-    #     if self.config.auth_type == "token":
-    #         return JIRA(
-    #             server=self.config.server_url,
-    #             options=self._options,
-    #             token_auth=self.config.token,
-    #             max_retries=self.config.max_retries,
-    #             timeout=self.config.timeout,
-    #         )
-    #     if self.config.auth_type == "oauth1":
-    #         return JIRA(
-    #             server=self.config.server_url,
-    #             options=self._options,
-    #             oauth={
-    #                 "access_token": self.config.oauth1_access_token,
-    #                 "access_token_secret": self.config.oauth1_access_token_secret,
-    #                 "consumer_key": self.config.oauth1_consumer_key,
-    #                 "key_cert": self.config.oauth1_key_cert,
-    #             },
-    #             max_retries=self.config.max_retries,
-    #             timeout=self.config.timeout,
-    #         )
-    #     raise NotImplementedError(f"Unsupported auth_type {self.config.auth_type}")
-
     def _connect(self) -> JIRA:
         """Connect to Jira using the configured authentication.
 
@@ -141,6 +108,9 @@ class JiraClient:
         - A 401 on DC basic auth means wrong credentials, not a scoped token.
         """
         try:
+            if self.config.auth_type == "oauth2":
+                return self._connect_via_gateway()
+
             jira = self._create_jira_instance(self.config.server_url)
         except NotImplementedError:
             raise
@@ -224,6 +194,14 @@ class JiraClient:
                     "consumer_key": self.config.oauth1_consumer_key,
                     "key_cert": self.config.oauth1_key_cert,
                 },
+                max_retries=self.config.max_retries,
+                timeout=self.config.timeout,
+            )
+        if self.config.auth_type == "oauth2":
+            return JIRA(
+                server=server,
+                options=options,
+                token_auth=self.config.token,
                 max_retries=self.config.max_retries,
                 timeout=self.config.timeout,
             )

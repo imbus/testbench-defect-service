@@ -52,6 +52,9 @@ class JiraDefectClient(AbstractDefectClient):
         if self._jira_client is None:
             try:
                 self._jira_client = JiraClient(self.config)
+            except ConnectionError as exc:
+                logger.error("Jira connection/authentication failed: %s", exc)
+                raise Unauthorized(str(exc)) from exc
             except ConnectTimeout:
                 logger.error(
                     "Connection timeout: could not reach Jira server at %s", self.config.server_url
@@ -279,14 +282,12 @@ class JiraDefectClient(AbstractDefectClient):
                 control_fields[field_name] = control_field_values
 
             else:
-                pass
-                # logger.warning(
-                #     "Control field '%s' in project '%s' has no allowedValues; "
-                #     "it may be of an incompatible type. Schema: %s",
-                #     field_name,
-                #     project,
-                #     field_content.get("schema", {}),
-                # )
+                logger.warning(
+                    "Control field '%s' has no allowedValues; "
+                    "it may be of an incompatible type. Schema: %s",
+                    field_name,
+                    field_content.get("schema", {}),
+                )
 
     def get_defects(self, project: str, sync_context: SyncContext) -> ProtocolledDefectSet:
         protocol = Protocol()

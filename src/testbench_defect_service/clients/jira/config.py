@@ -39,7 +39,7 @@ class JiraDefectClientConfig(BaseModel):
     server_url: str = Field(
         ..., description="Jira server URL (e.g., https://your-domain.atlassian.net)"
     )
-    auth_type: Literal["basic", "token", "oauth1"] = Field(
+    auth_type: Literal["basic", "token", "oauth1", "oauth2"] = Field(
         "basic",
         description=(
             "Authentication type: basic (Cloud), token (Self-Hosted), or oauth1 (OAuth 1.0a)"
@@ -325,4 +325,6 @@ class JiraDefectClientConfig(BaseModel):
             self._validate_token_auth()
         elif self.auth_type == "oauth1":
             self._validate_oauth1()
+        elif self.auth_type == "oauth2":
+            self._validate_token_auth()
         return self
