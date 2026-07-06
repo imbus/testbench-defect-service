@@ -167,7 +167,7 @@ class JiraClient:
             "Authentication failed (HTTP 401). Please check your credentials."
         )
 
-    def _create_jira_instance(self, server: str) -> JIRA:
+    def _create_jira_instance(self, server: str, token_override: str | None = None) -> JIRA:
         """Create a JIRA instance against *server* using the configured auth."""
         logger.debug(
             "Creating JIRA instance for '%s' (auth_type='%s')", server, self.config.auth_type
@@ -203,10 +203,11 @@ class JiraClient:
                 timeout=self.config.timeout,
             )
         if self.config.auth_type == "oauth2":
+            token = token_override or self.config.token
             return JIRA(
                 server=server,
                 options=options,
-                token_auth=self.config.token,
+                token_auth=token,
                 max_retries=self.config.max_retries,
                 timeout=self.config.timeout,
             )
@@ -267,8 +268,23 @@ class JiraClient:
                 client_secret=self.config.oauth2_client_secret,
                 expires_at=self.config.oauth2_expires_at,
             )
+            try:
+                initial_oauth2_token = get_valid_jira_token_sync(
+                    fallback_token=self.config.oauth2_access_token or self.config.token,
+                    is_first_call=True,
+                )
+            except JiraAuthExpiredError as exc:
+                raise ConnectionError(
+                    "Jira OAuth2 authorization expired while establishing the initial connection. "
+                    "Please re-authenticate."
+                ) from exc
+        else:
+            initial_oauth2_token = None
 
-        jira = self._create_jira_instance(gateway_url)
+        jira = self._create_jira_instance(gateway_url, token_override=initial_oauth2_token)
+        if self.config.auth_type == "oauth2":
+            self._patch_session_for_oauth2_token(jira._session)
+
         if not self._verify_connection(jira):
             raise ConnectionError(
                 f"Authentication failed against the Atlassian gateway '{gateway_url}'. "
@@ -278,8 +294,6 @@ class JiraClient:
         self._uses_gateway = True
         self._gateway_url = gateway_url
         self._patch_session_for_gateway(jira._session, gateway_url)
-        if self.config.auth_type == "oauth2":
-            self._patch_session_for_oauth2_token(jira._session)
 
         return jira
 

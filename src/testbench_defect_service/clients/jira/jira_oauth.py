@@ -157,26 +157,33 @@ def _refresh_jira_token_sync() -> dict[str, object]:
     return data
 
 
-def get_valid_jira_token_sync(fallback_token: str | None = None) -> str:
+def get_valid_jira_token_sync(
+    fallback_token: str | None = None, is_first_call: bool = False
+) -> str:
     """Returns a valid access token for synchronous callers.
 
     If refresh credentials are not configured, the provided fallback token is used.
     """
     expires_at = float(str(token_store.get("expires_at", 0)))
-
     access_token = str(token_store.get("access_token", ""))
+
     if fallback_token and (_is_placeholder(access_token) or not access_token):
         access_token = fallback_token
 
-    if time.time() < (expires_at - 300) and access_token:
+    if time.time() < (expires_at - 300) and access_token and not is_first_call:
         return access_token
 
     with refresh_lock_sync:
+        _load_token_store_from_disk()
+
+        expires_at = float(str(token_store.get("expires_at", 0)))
         access_token = str(token_store.get("access_token", ""))
+
         if fallback_token and (_is_placeholder(access_token) or not access_token):
             access_token = fallback_token
 
-        if time.time() < (expires_at - 300) and access_token:
+        # Check one more time in case the disk load yielded a fresh, valid token
+        if time.time() < (expires_at - 300) and access_token and not is_first_call:
             return access_token
 
         refresh_token = str(token_store.get("refresh_token", ""))
