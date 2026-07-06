@@ -58,7 +58,7 @@ def create_defect_from_issue(
         userDefinedFields=_extract_user_defined_fields(issue, fields, sync_context),
         lastEdited=datetime.fromisoformat(jira_datetime_to_iso(issue.fields.updated)),
         # TODO: reaktivate them
-        # references=_extract_references(issue),
+        references=_extract_references(issue),
         principal=Login(username="", password=""),
     )
 

@@ -13,6 +13,11 @@ from sanic import NotFound
 
 from testbench_defect_service.clients.jira.config import JiraDefectClientConfig
 from testbench_defect_service.clients.jira.defect_mapping_service import DefectToJiraMapper
+from testbench_defect_service.clients.jira.jira_oauth import (
+    JiraAuthExpiredError,
+    configure_oauth2_runtime,
+    get_valid_jira_token_sync,
+)
 from testbench_defect_service.clients.jira.utils import (
     ensure_issuetype_format,
     iso8601_to_unix_timestamp,
@@ -254,6 +259,15 @@ class JiraClient:
             f"Connecting to Jira via Atlassian gateway (scoped API token mode): {gateway_url}"
         )
 
+        if self.config.auth_type == "oauth2":
+            configure_oauth2_runtime(
+                access_token=self.config.oauth2_access_token or self.config.token,
+                refresh_token=self.config.oauth2_refresh_token,
+                client_id=self.config.oauth2_client_id,
+                client_secret=self.config.oauth2_client_secret,
+                expires_at=self.config.oauth2_expires_at,
+            )
+
         jira = self._create_jira_instance(gateway_url)
         if not self._verify_connection(jira):
             raise ConnectionError(
@@ -264,6 +278,8 @@ class JiraClient:
         self._uses_gateway = True
         self._gateway_url = gateway_url
         self._patch_session_for_gateway(jira._session, gateway_url)
+        if self.config.auth_type == "oauth2":
+            self._patch_session_for_oauth2_token(jira._session)
 
         return jira
 
@@ -287,6 +303,25 @@ class JiraClient:
             return original_send(request, **kwargs)
 
         session.send = _rewriting_send
+
+    def _patch_session_for_oauth2_token(self, session: Any) -> None:
+        """Inject a valid OAuth2 bearer token into every Jira HTTP request."""
+        original_send = session.send
+        configured_token = self.config.token
+
+        def _oauth2_send(request: Any, **kwargs: Any) -> Any:
+            try:
+                token = get_valid_jira_token_sync(fallback_token=configured_token)
+            except JiraAuthExpiredError as exc:
+                raise ConnectionError(
+                    "Jira OAuth2 authorization expired. Please re-authenticate."
+                ) from exc
+
+            if token:
+                request.headers["Authorization"] = f"Bearer {token}"
+            return original_send(request, **kwargs)
+
+        session.send = _oauth2_send
 
     def _fetch_cloud_id(self) -> str | None:
         """Fetch the Atlassian Cloud ID for this Jira instance.

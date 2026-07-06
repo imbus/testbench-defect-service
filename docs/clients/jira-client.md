@@ -108,10 +108,11 @@ readonly       = false
 
 | Option | Type | Description | Required | Default |
 |--------|------|-------------|----------|---------|
-| `auth_type` | String | Authentication method. One of `"basic"`, `"token"`, or `"oauth"`. | No | `"basic"` |
+| `auth_type` | String | Authentication method. One of `"basic"`, `"token"`, `"oauth"`, or `"oauth2"`. | No | `"basic"` |
 | `username` | String | Jira username for basic auth. Can also be set via `JIRA_USERNAME`. | No | — |
 | `password` | String | Jira API token for basic auth. Can also be set via `JIRA_PASSWORD`. | No | — |
 | `token` | String | Personal Access Token for token auth (Jira Data Center). Can also be set via `JIRA_BEARER_TOKEN`. | No | — |
+| `oauth2_token` | String | OAuth 2.0 access token for `oauth2` auth (Jira Cloud). Can also be set via `JIRA_OAUTH2_TOKEN`. | No | — |
 | `enable_shared_auth` | Boolean | Use service account credentials for all projects instead of per-user auth. | No | — |
 
 ### Query & fields
@@ -169,6 +170,95 @@ token     = "your-personal-access-token"
 Personal Access Tokens expire based on the duration set in your Jira Data Center profile. If the service stops authenticating unexpectedly, check whether the token has expired and generate a new one.
 :::
 
+### OAuth 2.0 (3LO) auth (Jira Cloud)
+
+Uses an OAuth 2.0 access token obtained via the Atlassian 3-Legged OAuth (3LO) flow. This is recommended when your Atlassian app is registered in the [Atlassian developer console](https://developer.atlassian.com/console/myapps/) and you need delegated user access.
+
+```toml
+# config.toml
+[testbench-defect-service.client_config]
+auth_type    = "oauth2"
+oauth2_token = "your-oauth2-access-token"
+```
+
+#### How to obtain an OAuth 2.0 access token
+
+**Step 1 — Direct the user to the Atlassian authorization URL**
+
+Send the user to the following URL in a browser (GET request). You can construct it manually or copy it from **Authorization → OAuth 2.0 (3LO) → Configure** in the developer console:
+
+```
+https://auth.atlassian.com/authorize?
+  audience=api.atlassian.com&
+  client_id=YOUR_CLIENT_ID&
+  scope=REQUESTED_SCOPE_ONE%20REQUESTED_SCOPE_TWO&
+  redirect_uri=https://YOUR_APP_CALLBACK_URL&
+  state=defect-service&
+  response_type=code&
+  prompt=consent
+```
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `audience` | Yes | Always `api.atlassian.com`. |
+| `client_id` | Yes | **Client ID** from your app's **Settings** in the developer console. |
+| `scope` | Yes | Space-separated list of scopes (URL-encoded as `%20`). Only choose scopes already added to your app. See [Required scopes](#required-oauth-scopes) below. |
+| `redirect_uri` | Yes | Callback URL configured in **Authorization** for your app. |
+| `state` | Yes (security) | An opaque string to prevent CSRF, e.g. `defect-service`. |
+| `response_type` | Yes | Must be `code`. |
+| `prompt` | Yes | Must be `consent` to show the access-grant screen. |
+
+If the user grants access, Atlassian redirects to `redirect_uri` with an `?code=...` query parameter.
+
+**Step 2 — Exchange the authorization code for an access token**
+
+```bash
+curl --request POST \
+  --url 'https://auth.atlassian.com/oauth/token' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "grant_type": "authorization_code",
+    "client_id": "YOUR_CLIENT_ID",
+    "client_secret": "YOUR_CLIENT_SECRET",
+    "code": "YOUR_AUTHORIZATION_CODE",
+    "redirect_uri": "https://YOUR_APP_CALLBACK_URL"
+  }'
+```
+
+A successful response returns:
+
+```json
+{
+  "access_token": "<string>",
+  "expires_in": 3600,
+  "scope": "<string>"
+}
+```
+
+Set `oauth2_token` (or `JIRA_OAUTH2_TOKEN`) to the returned `access_token` value.
+
+:::note
+OAuth 2.0 access tokens expire (typically after 1 hour). You must re-run the exchange flow and update the token before it expires.
+:::
+
+#### Required OAuth scopes
+
+The minimum scopes needed by the Defect Service:
+
+| Scope | Purpose |
+|-------|---------|
+| `read:jira-work` | Read projects, issues, fields, changelogs |
+| `read:jira-user` | Read user/account information |
+| `write:jira-work` | Create and update issues, field metadata |
+
+For `readonly = true` deployments, `write:jira-work` can be omitted.
+
+Refer to the Atlassian REST API documentation to confirm which scopes individual endpoints require:
+- [Jira Cloud platform REST API](https://developer.atlassian.com/cloud/jira/platform/rest)
+- [Jira Software Cloud REST API](https://developer.atlassian.com/cloud/jira/software/rest/intro/)
+
+---
+
 ### Environment variables
 
 :::tip
@@ -182,6 +272,7 @@ To avoid storing credentials in the config file, use environment variables inste
 | `JIRA_USERNAME` | Username (basic auth) |
 | `JIRA_PASSWORD` | API token (basic auth) |
 | `JIRA_BEARER_TOKEN` | Personal Access Token (token auth, Jira Data Center) |
+| `JIRA_OAUTH2_TOKEN` | OAuth 2.0 access token (oauth2 auth, Jira Cloud) |
 
 ---
 
@@ -240,7 +331,7 @@ The client automatically detects whether it is connected to Jira Cloud or Jira D
 
 | Feature | Jira Cloud | Jira Data Center |
 |---------|------------|------------------|
-| Authentication | Basic (email + API token) | Token (PAT) or Basic |
+| Authentication | Basic (email + API token) or OAuth 2.0 | Token (PAT) or Basic |
 | Pagination | `nextPageToken` cursor | `startAt` offset |
 | Issue types endpoint | Standard | `issuetypes` endpoint (DC ≥ 8.4) |
 | API base path | `/rest/api/3/` | `/rest/api/2/` |
