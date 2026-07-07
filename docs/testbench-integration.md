@@ -95,6 +95,15 @@ Use this procedure to migrate from the legacy Defect Service setup to the new ar
 1. **Set up the new Defect Service**
    Initialize and configure `testbench-defect-service` in your environment.
 
+   :::tip
+   If you are migrating an existing setup, use the values from your current DMProxy `.properties` files as input for the service configuration. This is especially helpful when running the configuration wizard, because you can reuse the existing service-related values instead of entering them again manually. For the initial setup flow, see [Quickstart](getting-started/quickstart.md) and [Configuration](configuration.md).
+
+   The current DMProxy configuration is usually the best reference for the values you need during migration:
+
+   - Use the existing repository name from the [wrapper configuration](#1-wrapper-configuration).
+   - Use the current connection details from the [service settings](#2-service-settings).
+   :::
+
    Requirement: The configured service name must match the previous service name character-for-character.
 2. **Integrate with DMProxy**
    Register the new service in DMProxy as described on this page.
