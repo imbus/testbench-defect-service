@@ -140,6 +140,25 @@ class TestConfigureOauth2Runtime:
         assert jira_oauth._oauth2_settings["client_id"] == "new_id"
         assert jira_oauth._oauth2_settings["client_secret"] == "new_sec"
 
+    def test_updates_client_credentials_when_cache_exists(self, isolated_env):
+        payload = {
+            jira_oauth._TOKEN_CACHE_SECTION: {
+                "access_token": "disk_access",
+                "refresh_token": "disk_refresh",
+                "expires_at": 9999999999,
+            }
+        }
+        with isolated_env.open("wb") as f:
+            tomli_w.dump(payload, f)
+
+        jira_oauth.configure_oauth2_runtime(
+            client_id="cfg_id",
+            client_secret="cfg_secret",
+        )
+
+        assert jira_oauth._oauth2_settings["client_id"] == "cfg_id"
+        assert jira_oauth._oauth2_settings["client_secret"] == "cfg_secret"
+
 
 class TestRefreshJiraTokenSync:
     """Tests for the _refresh_jira_token_sync function."""

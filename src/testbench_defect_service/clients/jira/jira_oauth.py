@@ -110,16 +110,20 @@ def configure_oauth2_runtime(
     """Apply OAuth2 runtime values from config/environment to token refresh state."""
     _load_token_store_from_disk()
 
-    if access_token:
-        token_store["access_token"] = access_token
-    if refresh_token:
-        token_store["refresh_token"] = refresh_token
-    if expires_at is not None:
-        token_store["expires_at"] = float(expires_at)
+    # Always accept explicit config credentials, even when a token cache exists.
+    # This allows runtime config values to override placeholder env defaults.
     if client_id:
         _oauth2_settings["client_id"] = client_id
     if client_secret:
         _oauth2_settings["client_secret"] = client_secret
+
+    if not _TOKEN_CACHE_PATH.exists():
+        if access_token:
+            token_store["access_token"] = access_token
+        if refresh_token:
+            token_store["refresh_token"] = refresh_token
+        if expires_at is not None:
+            token_store["expires_at"] = float(expires_at)
 
     _persist_token_store_to_disk()
 
@@ -127,9 +131,9 @@ def configure_oauth2_runtime(
 def _refresh_jira_token_sync() -> dict[str, object]:
     client_id = str(_oauth2_settings.get("client_id", ""))
     client_secret = str(_oauth2_settings.get("client_secret", ""))
+
     if _is_placeholder(client_id) or _is_placeholder(client_secret):
         raise JiraAuthExpiredError("Missing OAuth2 client credentials for Jira token refresh")
-
     payload = {
         "grant_type": "refresh_token",
         "client_id": client_id,
