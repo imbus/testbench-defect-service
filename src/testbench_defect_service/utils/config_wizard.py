@@ -339,10 +339,11 @@ def configure_client_only(config_path: Path):
     if client_type == "custom" and not change_client_type:
         client_class = client_class_path
     else:
-        client_class = get_client_class(client_type)
-        if client_class is None:
+        raw_client_class = get_client_class(client_type)
+        if raw_client_class is None:
             click.echo("\nConfiguration cancelled.")
             return
+        client_class = raw_client_class
 
     client_config = configure_client(client_type, client_class, service_config)
     if client_config is None:

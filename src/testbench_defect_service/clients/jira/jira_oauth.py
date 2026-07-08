@@ -14,7 +14,7 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib
 
-token_store = {
+token_store: dict[str, str | float] = {
     "access_token": "YOUR_CURRENT_ACCESS_TOKEN",
     "refresh_token": "YOUR_CURRENT_REFRESH_TOKEN",
     "expires_at": time.time() + 3600,
@@ -57,7 +57,7 @@ def _load_token_store_from_disk() -> None:
         token_store["access_token"] = access_token
     if isinstance(refresh_token, str) and refresh_token:
         token_store["refresh_token"] = refresh_token
-    if isinstance(expires_at, int | float):
+    if isinstance(expires_at, float):
         token_store["expires_at"] = float(expires_at)
 
 
@@ -76,7 +76,7 @@ def _persist_token_store_to_disk() -> None:
         _TOKEN_CACHE_SECTION: {
             "access_token": access_token,
             "refresh_token": refresh_token,
-            "expires_at": int(expires_at),
+            "expires_at": expires_at,
         }
     }
 
@@ -168,11 +168,7 @@ def get_valid_jira_token_sync(
 
     If refresh credentials are not configured, the provided fallback token is used.
     """
-    expires_at = float(str(token_store.get("expires_at", 0)))
-    access_token = str(token_store.get("access_token", ""))
-
-    if fallback_token and (_is_placeholder(access_token) or not access_token):
-        access_token = fallback_token
+    expires_at, access_token = _get_cached_token_data(fallback_token)
 
     if time.time() < (expires_at - 300) and access_token and not is_first_call:
         return access_token
@@ -180,11 +176,7 @@ def get_valid_jira_token_sync(
     with refresh_lock_sync:
         _load_token_store_from_disk()
 
-        expires_at = float(str(token_store.get("expires_at", 0)))
-        access_token = str(token_store.get("access_token", ""))
-
-        if fallback_token and (_is_placeholder(access_token) or not access_token):
-            access_token = fallback_token
+        expires_at, access_token = _get_cached_token_data(fallback_token)
 
         # Check one more time in case the disk load yielded a fresh, valid token
         if time.time() < (expires_at - 300) and access_token and not is_first_call:
@@ -204,3 +196,12 @@ def get_valid_jira_token_sync(
         _persist_token_store_to_disk()
 
         return str(token_store.get("access_token", ""))
+
+
+def _get_cached_token_data(fallback_token: str | None) -> tuple[float, str]:
+    expires_at = float(str(token_store.get("expires_at", 0)))
+    access_token = str(token_store.get("access_token", ""))
+
+    if fallback_token and (_is_placeholder(access_token) or not access_token):
+        access_token = fallback_token
+    return expires_at, access_token
