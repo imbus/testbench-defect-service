@@ -109,18 +109,44 @@ class TestPersistTokenStoreToDisk:
                 assert section["refresh_token"] == "real_refresh"
                 assert section["expires_at"] == 1234567890
 
-    def test_skips_placeholders(self, isolated_env):
+    def test_persists_refresh_token_when_access_token_placeholder(self, isolated_env):
         jira_oauth.token_store.update(
             {
                 "access_token": "YOUR_TOKEN",
                 "refresh_token": "real_refresh",
+                "expires_at": 0.0,
             }
         )
 
         jira_oauth._persist_token_store_to_disk()
 
-        # File should not be created if placeholders are present
+        with isolated_env.open("rb") as f:
+            data = jira_oauth.tomllib.load(f)
+            section = data[jira_oauth._TOKEN_CACHE_SECTION]
+            assert "access_token" not in section
+            assert section["refresh_token"] == "real_refresh"
+
+    def test_skips_placeholder_refresh_token(self, isolated_env):
+        jira_oauth.token_store.update(
+            {
+                "access_token": "real_access",
+                "refresh_token": "YOUR_REFRESH",
+            }
+        )
+
+        jira_oauth._persist_token_store_to_disk()
+
         assert not isolated_env.exists()
+
+    def test_seed_oauth2_refresh_token_writes_refresh_only_cache(self, isolated_env):
+        jira_oauth.seed_oauth2_refresh_token("seed_refresh")
+
+        with isolated_env.open("rb") as f:
+            data = jira_oauth.tomllib.load(f)
+            section = data[jira_oauth._TOKEN_CACHE_SECTION]
+            assert "access_token" not in section
+            assert section["refresh_token"] == "seed_refresh"
+            assert section["expires_at"] == 0
 
 
 class TestConfigureOauth2Runtime:

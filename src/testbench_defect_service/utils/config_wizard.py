@@ -5,6 +5,7 @@ import click
 import questionary
 from pydantic import BaseModel
 
+from testbench_defect_service.clients.jira.jira_oauth import seed_oauth2_refresh_token
 from testbench_defect_service.clients.utils import (
     get_client_config_class,
     get_defect_client_from_client_class_str,
@@ -180,6 +181,11 @@ def configure_client(
 
     if client_config is None:
         return None
+
+    if client_type == "jira" and client_config.get("auth_type") == "oauth2":
+        refresh_token = client_config.get("oauth2_refresh_token")
+        if isinstance(refresh_token, str) and refresh_token:
+            seed_oauth2_refresh_token(refresh_token)
 
     return merge_with_defaults(client_config, config_class)
 

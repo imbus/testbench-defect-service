@@ -113,8 +113,12 @@ readonly       = false
 | `username`           | String  | Jira username for basic auth. Can also be set via`JIRA_USERNAME`.                                | No       | —          |
 | `password`           | String  | Jira API token for basic auth. Can also be set via`JIRA_PASSWORD`.                               | No       | —          |
 | `token`              | String  | Personal Access Token for token auth (Jira Data Center). Can also be set via`JIRA_BEARER_TOKEN`. | No       | —          |
-| `oauth2_token`       | String  | OAuth 2.0 access token for`oauth2` auth (Jira Cloud). Can also be set via `JIRA_OAUTH2_TOKEN`. | No       | —          |
+| `oauth2_client_id`   | String  | OAuth 2.0 client ID for`oauth2` auth (Jira Cloud). Can also be set via `JIRA_OAUTH2_CLIENT_ID`. | No       | —          |
+| `oauth2_client_secret` | String | OAuth 2.0 client secret for`oauth2` auth (Jira Cloud). Can also be set via `JIRA_OAUTH2_CLIENT_SECRET`. | No       | —          |
 | `enable_shared_auth` | Boolean | Use service account credentials for all projects instead of per-user auth.                         | No       | —          |
+
+OAuth2 access and refresh tokens are runtime values. The setup wizard collects the refresh token
+once and stores it in `tmp/oauth2_tokens.toml`; do not add token values to `config.toml` or `.env`.
 
 ### Query & fields
 
@@ -237,15 +241,20 @@ A successful response returns:
 }
 ```
 
-Set the following values in your configuration (or via environment variables):
+Run the setup wizard and enter the returned `refresh_token` when prompted. The wizard stores
+that token in `tmp/oauth2_tokens.toml`, not in `config.toml`. The service uses the refresh token
+to request short-lived access tokens at runtime and updates the cache automatically when they
+expire.
 
-- `oauth2_access_token` (or `JIRA_OAUTH2_ACCESS_TOKEN`) = returned `access_token`
-- `oauth2_refresh_token` (or `JIRA_OAUTH2_REFRESH_TOKEN`) = returned `refresh_token`
+Persist only the OAuth client credentials in your configuration (or provide them via environment
+variables):
+
 - `oauth2_client_id` (or `JIRA_OAUTH2_CLIENT_ID`) = your client ID
 - `oauth2_client_secret` (or `JIRA_OAUTH2_CLIENT_SECRET`) = your client secret
 
 :::note
-If you change token permissions or scopes, update the values in `config.toml` and delete `tmp/oauth2_tokens.toml` so the service can request fresh tokens.
+Do not store OAuth2 access tokens or refresh tokens in `config.toml` or `.env` files. If the refresh
+token is revoked or expires, re-run the setup wizard to seed a new `tmp/oauth2_tokens.toml` cache.
 :::
 
 #### Required OAuth scopes
@@ -275,12 +284,13 @@ Prefer environment variables over hardcoding credentials in `config.toml` to avo
 
 To avoid storing credentials in the config file, use environment variables instead:
 
-| Variable              | Used for                                             |
-| --------------------- | ---------------------------------------------------- |
-| `JIRA_USERNAME`     | Username (basic auth)                                |
-| `JIRA_PASSWORD`     | API token (basic auth)                               |
-| `JIRA_BEARER_TOKEN` | Personal Access Token (token auth, Jira Data Center) |
-| `JIRA_OAUTH2_TOKEN` | OAuth 2.0 access token (oauth2 auth, Jira Cloud)     |
+| Variable                    | Used for                                             |
+| --------------------------- | ---------------------------------------------------- |
+| `JIRA_USERNAME`           | Username (basic auth)                                |
+| `JIRA_PASSWORD`           | API token (basic auth)                               |
+| `JIRA_BEARER_TOKEN`       | Personal Access Token (token auth, Jira Data Center) |
+| `JIRA_OAUTH2_CLIENT_ID`   | OAuth 2.0 client ID (oauth2 auth, Jira Cloud)        |
+| `JIRA_OAUTH2_CLIENT_SECRET` | OAuth 2.0 client secret (oauth2 auth, Jira Cloud)  |
 
 ---
 

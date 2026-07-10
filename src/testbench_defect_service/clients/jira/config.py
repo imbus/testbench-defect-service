@@ -5,6 +5,8 @@ from typing import Literal
 from pydantic import BaseModel, field_validator, model_validator
 from pydantic.fields import Field
 
+from testbench_defect_service.clients.jira.jira_oauth import has_cached_refresh_token
+
 
 class SyncCommandConfig(BaseModel):
     scheduled: str | None = Field(default=None, description="Scheduled command")
@@ -80,16 +82,19 @@ class JiraDefectClientConfig(BaseModel):
 
     oauth2_access_token: str | None = Field(
         None,
-        description="OAuth2 access token for Jira Cloud gateway authentication",
+        exclude=True,
+        description="Legacy OAuth2 access token for Jira Cloud gateway authentication",
         json_schema_extra={
             "sensitive": True,
             "env_var": "JIRA_OAUTH2_ACCESS_TOKEN",
             "depends_on": {"auth_type": "oauth2"},
             "required": False,
+            "skip_if_wizard": True,
         },
     )
     oauth2_refresh_token: str | None = Field(
         None,
+        exclude=True,
         description="OAuth2 refresh token used to obtain new access tokens",
         json_schema_extra={
             "sensitive": True,
@@ -119,11 +124,13 @@ class JiraDefectClientConfig(BaseModel):
     )
     oauth2_expires_at: int | None = Field(
         None,
+        exclude=True,
         description="Optional UNIX timestamp when the current OAuth2 access token expires",
         json_schema_extra={
             "env_var": "JIRA_OAUTH2_EXPIRES_AT",
             "depends_on": {"auth_type": "oauth2"},
             "required": False,
+            "skip_if_wizard": True,
         },
     )
 
@@ -365,7 +372,6 @@ class JiraDefectClientConfig(BaseModel):
             )
 
     def _validate_oauth2(self) -> None:
-        self.oauth2_access_token = self.oauth2_access_token or os.getenv("JIRA_OAUTH2_ACCESS_TOKEN")
         self.oauth2_refresh_token = self.oauth2_refresh_token or os.getenv(
             "JIRA_OAUTH2_REFRESH_TOKEN"
         )
@@ -380,12 +386,16 @@ class JiraDefectClientConfig(BaseModel):
             except ValueError as e:
                 raise ValueError("JIRA_OAUTH2_EXPIRES_AT must be a UNIX timestamp integer") from e
 
-        # Keep backward compatibility: existing code reads config.token for oauth2 auth.
-        self.token = self.token or self.oauth2_access_token or os.getenv("JIRA_BEARER_TOKEN")
-        if not self.token:
+        if not self.oauth2_client_id or not self.oauth2_client_secret:
             raise ValueError(
-                "Jira OAuth2 access token must be provided "
-                "(via oauth2_access_token / JIRA_OAUTH2_ACCESS_TOKEN, token / JIRA_BEARER_TOKEN)"
+                "Jira OAuth2 client credentials must be provided "
+                "(via oauth2_client_id/oauth2_client_secret or JIRA_OAUTH2_CLIENT_ID/"
+                "JIRA_OAUTH2_CLIENT_SECRET)"
+            )
+        if not self.oauth2_refresh_token and not has_cached_refresh_token():
+            raise ValueError(
+                "Jira OAuth2 refresh token is not configured. "
+                "Please re-run the setup wizard to authorize Jira OAuth2."
             )
 
     @model_validator(mode="after")
