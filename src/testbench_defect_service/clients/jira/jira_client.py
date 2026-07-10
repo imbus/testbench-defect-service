@@ -262,21 +262,17 @@ class JiraClient:
 
         if self.config.auth_type == "oauth2":
             configure_oauth2_runtime(
-                access_token=self.config.oauth2_access_token or self.config.token,
                 refresh_token=self.config.oauth2_refresh_token,
                 client_id=self.config.oauth2_client_id,
                 client_secret=self.config.oauth2_client_secret,
                 expires_at=self.config.oauth2_expires_at,
             )
             try:
-                initial_oauth2_token = get_valid_jira_token_sync(
-                    fallback_token=self.config.oauth2_access_token or self.config.token,
-                    is_first_call=True,
-                )
+                initial_oauth2_token = get_valid_jira_token_sync(is_first_call=True)
             except JiraAuthExpiredError as exc:
                 raise ConnectionError(
                     "Jira OAuth2 authorization expired while establishing the initial connection. "
-                    "Please re-authenticate."
+                    "Please re-run the setup wizard to authorize Jira OAuth2."
                 ) from exc
         else:
             initial_oauth2_token = None
@@ -321,14 +317,14 @@ class JiraClient:
     def _patch_session_for_oauth2_token(self, session: Any) -> None:
         """Inject a valid OAuth2 bearer token into every Jira HTTP request."""
         original_send = session.send
-        configured_token = self.config.token
 
         def _oauth2_send(request: Any, **kwargs: Any) -> Any:
             try:
-                token = get_valid_jira_token_sync(fallback_token=configured_token)
+                token = get_valid_jira_token_sync()
             except JiraAuthExpiredError as exc:
                 raise ConnectionError(
-                    "Jira OAuth2 authorization expired. Please re-authenticate."
+                    "Jira OAuth2 authorization expired. "
+                    "Please re-run the setup wizard to authorize Jira OAuth2."
                 ) from exc
 
             if token:

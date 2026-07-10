@@ -57,7 +57,7 @@ def _load_token_store_from_disk() -> None:
         token_store["access_token"] = access_token
     if isinstance(refresh_token, str) and refresh_token:
         token_store["refresh_token"] = refresh_token
-    if isinstance(expires_at, float):
+    if isinstance(expires_at, (int, float)):
         token_store["expires_at"] = float(expires_at)
 
 
@@ -67,18 +67,19 @@ def _persist_token_store_to_disk() -> None:
     refresh_token = str(token_store.get("refresh_token", ""))
     expires_at = float(str(token_store.get("expires_at", 0)))
 
-    if not access_token or not refresh_token:
+    if not refresh_token:
         return
-    if _is_placeholder(access_token) or _is_placeholder(refresh_token):
+    if _is_placeholder(refresh_token):
         return
 
-    payload = {
-        _TOKEN_CACHE_SECTION: {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "expires_at": expires_at,
-        }
+    cache_section: dict[str, str | float] = {
+        "refresh_token": refresh_token,
+        "expires_at": expires_at,
     }
+    if access_token and not _is_placeholder(access_token):
+        cache_section["access_token"] = access_token
+
+    payload = {_TOKEN_CACHE_SECTION: cache_section}
 
     _TOKEN_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = _TOKEN_CACHE_PATH.with_suffix(".tmp")
@@ -93,6 +94,21 @@ def _persist_token_store_to_disk() -> None:
 
 def _is_placeholder(value: str) -> bool:
     return value.startswith("YOUR_")
+
+
+def has_cached_refresh_token() -> bool:
+    """Return whether a usable OAuth2 refresh token is available in the runtime cache."""
+    _load_token_store_from_disk()
+    refresh_token = str(token_store.get("refresh_token", ""))
+    return bool(refresh_token) and not _is_placeholder(refresh_token)
+
+
+def seed_oauth2_refresh_token(refresh_token: str) -> None:
+    """Store a wizard-provided OAuth2 refresh token in the runtime token cache."""
+    token_store["refresh_token"] = refresh_token
+    token_store["access_token"] = ""
+    token_store["expires_at"] = 0.0
+    _persist_token_store_to_disk()
 
 
 class JiraAuthExpiredError(Exception):
