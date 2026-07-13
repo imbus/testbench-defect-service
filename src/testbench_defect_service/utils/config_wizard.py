@@ -636,3 +636,8 @@ def run_full_wizard(config_path: Path):  # noqa: C901, PLR0912, PLR0915
         f"http://{host or DEFAULT_HOST}:{port or DEFAULT_PORT}/docs"
     )
     click.echo()
+
+
+def run_jira_oauth_wizard() -> str:
+    click.echo("Jira OAuth2 refresh token is not configured. ")
+    return str(questionary.text("Please enter your OAuth2 refresh token: ").ask())

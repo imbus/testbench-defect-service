@@ -107,15 +107,15 @@ readonly       = false
 
 ### Authentication methods
 
-| Option                 | Type    | Description                                                                                        | Required | Default     |
-| ---------------------- | ------- | -------------------------------------------------------------------------------------------------- | -------- | ----------- |
-| `auth_type`          | String  | Authentication method. One of`"basic"`, `"token"`, `"oauth"`, or `"oauth2"`.               | No       | `"basic"` |
-| `username`           | String  | Jira username for basic auth. Can also be set via`JIRA_USERNAME`.                                | No       | —          |
-| `password`           | String  | Jira API token for basic auth. Can also be set via`JIRA_PASSWORD`.                               | No       | —          |
-| `token`              | String  | Personal Access Token for token auth (Jira Data Center). Can also be set via`JIRA_BEARER_TOKEN`. | No       | —          |
-| `oauth2_client_id`   | String  | OAuth 2.0 client ID for`oauth2` auth (Jira Cloud). Can also be set via `JIRA_OAUTH2_CLIENT_ID`. | No       | —          |
-| `oauth2_client_secret` | String | OAuth 2.0 client secret for`oauth2` auth (Jira Cloud). Can also be set via `JIRA_OAUTH2_CLIENT_SECRET`. | No       | —          |
-| `enable_shared_auth` | Boolean | Use service account credentials for all projects instead of per-user auth.                         | No       | —          |
+| Option                   | Type    | Description                                                                                                 | Required | Default     |
+| ------------------------ | ------- | ----------------------------------------------------------------------------------------------------------- | -------- | ----------- |
+| `auth_type`            | String  | Authentication method. One of`"basic"`, `"token"`, `"oauth"`, or `"oauth2"`.                        | No       | `"basic"` |
+| `username`             | String  | Jira username for basic auth. Can also be set via`JIRA_USERNAME`.                                         | No       | —          |
+| `password`             | String  | Jira API token for basic auth. Can also be set via`JIRA_PASSWORD`.                                        | No       | —          |
+| `token`                | String  | Personal Access Token for token auth (Jira Data Center). Can also be set via`JIRA_BEARER_TOKEN`.          | No       | —          |
+| `oauth2_client_id`     | String  | OAuth 2.0 client ID for`oauth2` auth (Jira Cloud). Can also be set via `JIRA_OAUTH2_CLIENT_ID`.         | No       | —          |
+| `oauth2_client_secret` | String  | OAuth 2.0 client secret for`oauth2` auth (Jira Cloud). Can also be set via `JIRA_OAUTH2_CLIENT_SECRET`. | No       | —          |
+| `enable_shared_auth`   | Boolean | Use service account credentials for all projects instead of per-user auth.                                  | No       | —          |
 
 OAuth2 access and refresh tokens are runtime values. The setup wizard collects the refresh token
 once and stores it in `tmp/oauth2_tokens.toml`; do not add token values to `config.toml` or `.env`.
@@ -183,7 +183,6 @@ Uses an OAuth 2.0 access token obtained via the Atlassian 3-Legged OAuth (3LO) f
 # config.toml
 [testbench-defect-service.client_config]
 auth_type    = "oauth2"
-oauth2_token = "your-oauth2-access-token"
 ```
 
 #### How to obtain an OAuth 2.0 access token
@@ -284,13 +283,13 @@ Prefer environment variables over hardcoding credentials in `config.toml` to avo
 
 To avoid storing credentials in the config file, use environment variables instead:
 
-| Variable                    | Used for                                             |
-| --------------------------- | ---------------------------------------------------- |
-| `JIRA_USERNAME`           | Username (basic auth)                                |
-| `JIRA_PASSWORD`           | API token (basic auth)                               |
-| `JIRA_BEARER_TOKEN`       | Personal Access Token (token auth, Jira Data Center) |
-| `JIRA_OAUTH2_CLIENT_ID`   | OAuth 2.0 client ID (oauth2 auth, Jira Cloud)        |
-| `JIRA_OAUTH2_CLIENT_SECRET` | OAuth 2.0 client secret (oauth2 auth, Jira Cloud)  |
+| Variable                      | Used for                                             |
+| ----------------------------- | ---------------------------------------------------- |
+| `JIRA_USERNAME`             | Username (basic auth)                                |
+| `JIRA_PASSWORD`             | API token (basic auth)                               |
+| `JIRA_BEARER_TOKEN`         | Personal Access Token (token auth, Jira Data Center) |
+| `JIRA_OAUTH2_CLIENT_ID`     | OAuth 2.0 client ID (oauth2 auth, Jira Cloud)        |
+| `JIRA_OAUTH2_CLIENT_SECRET` | OAuth 2.0 client secret (oauth2 auth, Jira Cloud)    |
 
 ---
 
