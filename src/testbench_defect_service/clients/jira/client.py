@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from jira import JIRAError, Project
+from jira import Issue, JIRAError, Project
 from requests import ConnectTimeout
 from sanic import Forbidden, NotFound, ServerError, Unauthorized
 
@@ -635,7 +635,7 @@ class JiraDefectClient(AbstractDefectClient):
                 return self._build_defect_with_attributes(
                     defect=defect,
                     project=project,
-                    changelog=issue.changelog,
+                    issue=issue,
                     fields=fields_list,
                     sync_context=sync_context,
                 )
@@ -699,7 +699,7 @@ class JiraDefectClient(AbstractDefectClient):
         self,
         defect: DefectWithID,
         project: str,
-        changelog: Any,
+        issue: Issue,
         fields: list[dict[Any, Any]],
         sync_context: SyncContext,
     ) -> DefectWithAttributes:
@@ -708,10 +708,10 @@ class JiraDefectClient(AbstractDefectClient):
         attributes: dict[str, str] = {}
         if self._get_config_value("show_change_history", project=project):
             extract_changelog_attributes(
-                changelog, fields, attribute_fields, attributes, sync_context
+                issue.changelog, fields, attribute_fields, attributes, sync_context
             )
         else:
-            attributes = extract_static_attributes(defect, attribute_fields)
+            attributes = extract_static_attributes(defect, attribute_fields, issue, fields)
 
         data["attributes"] = ExtendedAttributes(**attributes)
         return DefectWithAttributes.model_validate(data)

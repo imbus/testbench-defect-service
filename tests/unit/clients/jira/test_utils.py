@@ -102,7 +102,22 @@ class TestCreateDefectFromIssue:
         mock_jira_issue.fields.customfield_10002 = "Custom Value 2"
         mock_jira_issue.fields.customfield_10003 = True
 
-        result = create_defect_from_issue(mock_jira_issue, sample_field_metadata)
+        sync_context = SyncContext(
+            statusAttribute="status",
+            priorityAttribute="priority",
+            classAttribute="issuetype",
+            udaSyncOptions={
+                "Custom Field 1": "ITB",
+                "Custom Field 2": "ITB",
+                "Boolean Field": "ITB",
+            },
+        )
+        result = create_defect_from_issue(
+            mock_jira_issue,
+            sample_field_metadata,
+            jira_server_url="https://test.atlassian.net",
+            sync_context=sync_context,
+        )
 
         assert isinstance(result, DefectWithID)
         assert result.id.root == "TEST-123"
@@ -112,14 +127,25 @@ class TestCreateDefectFromIssue:
         assert result.priority == "High"
         assert result.classification == "Bug"
         assert result.reporter == "John Doe"
-        assert len(result.references) == 2
+        assert len(result.references) == 3
 
     def test_create_defect_from_issue_with_list_values(self, mock_jira_issue):
         """Test creating defect when field values are lists."""
         fields = [{"id": "customfield_10001", "name": "Labels"}]
         mock_jira_issue.fields.customfield_10001 = ["label1", "label2", "label3"]
 
-        result = create_defect_from_issue(mock_jira_issue, fields)
+        sync_context = SyncContext(
+            statusAttribute="status",
+            priorityAttribute="priority",
+            classAttribute="issuetype",
+            udaSyncOptions={"Labels": "ITB"},
+        )
+        result = create_defect_from_issue(
+            mock_jira_issue,
+            fields,
+            jira_server_url="https://test.atlassian.net",
+            sync_context=sync_context,
+        )
 
         udf = next((f for f in result.userDefinedFields if f.name == "Labels"), None)
         assert udf is not None
@@ -131,7 +157,18 @@ class TestCreateDefectFromIssue:
         mock_jira_issue.fields.priority = None
 
         fields = [{"id": "customfield_10001", "name": "Custom Field"}]
-        result = create_defect_from_issue(mock_jira_issue, fields)
+        sync_context = SyncContext(
+            statusAttribute="status",
+            priorityAttribute="priority",
+            classAttribute="issuetype",
+            udaSyncOptions={},
+        )
+        result = create_defect_from_issue(
+            mock_jira_issue,
+            fields,
+            jira_server_url="https://test.atlassian.net",
+            sync_context=sync_context,
+        )
 
         assert result.status == ""
         assert result.priority == ""
@@ -141,7 +178,18 @@ class TestCreateDefectFromIssue:
         fields = [{"id": "customfield_10099", "name": "Missing Field"}]
         type(mock_jira_issue.fields).customfield_10099 = property(lambda self: None)
 
-        result = create_defect_from_issue(mock_jira_issue, fields)
+        sync_context = SyncContext(
+            statusAttribute="status",
+            priorityAttribute="priority",
+            classAttribute="issuetype",
+            udaSyncOptions={"Missing Field": "ITB"},
+        )
+        result = create_defect_from_issue(
+            mock_jira_issue,
+            fields,
+            jira_server_url="https://test.atlassian.net",
+            sync_context=sync_context,
+        )
 
         udf = next((f for f in result.userDefinedFields if f.name == "Missing Field"), None)
         assert udf is not None
@@ -357,7 +405,7 @@ class TestExtractStaticAttributes:
         """Test extracting standard attributes."""
         attribute_fields = ["title", "status", "priority"]
 
-        result = extract_static_attributes(sample_defect_with_id, attribute_fields)
+        result = extract_static_attributes(sample_defect_with_id, attribute_fields, Mock(), [])
 
         assert "title" in result
         assert result["title"] == "Sample Defect"
@@ -370,7 +418,7 @@ class TestExtractStaticAttributes:
         """Test extracting user-defined field attributes."""
         attribute_fields = ["Custom Field 1", "Custom Field 2"]
 
-        result = extract_static_attributes(sample_defect_with_id, attribute_fields)
+        result = extract_static_attributes(sample_defect_with_id, attribute_fields, Mock(), [])
 
         assert "Custom Field 1" in result
         assert result["Custom Field 1"] == "Value 1"
@@ -381,7 +429,7 @@ class TestExtractStaticAttributes:
         """Test extracting both standard and user-defined attributes."""
         attribute_fields = ["title", "Custom Field 1"]
 
-        result = extract_static_attributes(sample_defect_with_id, attribute_fields)
+        result = extract_static_attributes(sample_defect_with_id, attribute_fields, Mock(), [])
 
         assert "title" in result
         assert "Custom Field 1" in result
@@ -390,12 +438,12 @@ class TestExtractStaticAttributes:
         """Test extracting non-existent attributes."""
         attribute_fields = ["nonexistent"]
 
-        result = extract_static_attributes(sample_defect_with_id, attribute_fields)
+        result = extract_static_attributes(sample_defect_with_id, attribute_fields, Mock(), [])
 
         assert "nonexistent" not in result
 
     def test_extract_static_attributes_empty_list(self, sample_defect_with_id):
         """Test with empty attribute list."""
-        result = extract_static_attributes(sample_defect_with_id, [])
+        result = extract_static_attributes(sample_defect_with_id, [], Mock(), [])
 
         assert result == {}
