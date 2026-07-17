@@ -380,6 +380,7 @@ def configure_client_only(config_path: Path):
             "Select client type:",
             choices=[
                 questionary.Choice("📄 JSONL Files", "jsonl"),
+                questionary.Choice("📊 Excel/CSV Files", "excel"),
                 questionary.Choice("🔗 Jira", "jira"),
                 questionary.Choice("⚙️  Custom Client", "custom"),
             ],
@@ -605,6 +606,7 @@ def run_full_wizard(config_path: Path):  # noqa: C901, PLR0912, PLR0915
         "Where are your defects stored?",
         choices=[
             questionary.Choice("📄 JSONL Files (lightweight, file-based storage)", "jsonl"),
+            questionary.Choice("📊 Excel/CSV Files (spreadsheet-based storage)", "excel"),
             questionary.Choice("🔗 Jira (connect to Atlassian Jira)", "jira"),
             questionary.Choice("⚙️  Custom Client (your own implementation)", "custom"),
         ],
