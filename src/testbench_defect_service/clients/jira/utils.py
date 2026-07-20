@@ -38,8 +38,20 @@ def extract_valuetype_from_issue_field(field: dict[str, Any]) -> ValueType:
     return ValueType.STRING
 
 
-def create_defect_from_issue(
-    issue: Issue, fields: list[dict[str, Any]], jira_server_url: str, sync_context: SyncContext
+def create_defect_from_issue(issue: Issue, fields: list[dict[str, Any]], sync_context: SyncContext):
+    return _build_defect(issue, fields, sync_context, is_extended=False)
+
+
+def create_extended_defect_from_issue(
+    issue: Issue, fields: list[dict[str, Any]], sync_context: SyncContext
+) -> DefectWithID:
+    """Convert a Jira *issue* into an extended ``DefectWithID`` model, "
+    "extracting ALL user fields."""
+    return _build_defect(issue, fields, sync_context, is_extended=True)
+
+
+def _build_defect(
+    issue: Issue, fields: list[dict[str, Any]], sync_context: SyncContext, is_extended: bool = False
 ) -> DefectWithID:
     """Convert a Jira *issue* into a ``DefectWithID`` model.
 
@@ -55,9 +67,8 @@ def create_defect_from_issue(
         status=_get_control_field_value(sync_context.statusAttribute, issue.fields, fields),
         classification=_get_control_field_value(sync_context.classAttribute, issue.fields, fields),
         priority=_get_control_field_value(sync_context.priorityAttribute, issue.fields, fields),
-        userDefinedFields=_extract_user_defined_fields(issue, fields, sync_context),
+        userDefinedFields=_extract_user_defined_fields(issue, fields, sync_context, is_extended),
         lastEdited=datetime.fromisoformat(jira_datetime_to_iso(issue.fields.updated)),
-        # TODO: reaktivate them
         references=_extract_references(issue),
         principal=Login(username="", password=""),
     )
@@ -118,11 +129,14 @@ def _extract_user_defined_fields(
     issue: Issue,
     fields: list[dict[str, Any]],
     sync_context: SyncContext,
+    is_extended: bool = False,
 ) -> list[UserDefinedFieldProperties]:
     """Build user-defined field properties from *issue*."""
     result: list[UserDefinedFieldProperties] = []
     for field in fields:
-        if not sync_context.udaSyncOptions or field["name"] not in sync_context.udaSyncOptions:
+        if (
+            not sync_context.udaSyncOptions or field["name"] not in sync_context.udaSyncOptions
+        ) and not is_extended:
             continue
         value = getattr(issue.fields, field["id"], None)
         if "<jira.resources.PropertyHolder object at" in str(

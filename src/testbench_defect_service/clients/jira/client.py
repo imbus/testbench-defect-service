@@ -14,6 +14,7 @@ from testbench_defect_service.clients.jira.jira_client import JiraClient
 from testbench_defect_service.clients.jira.utils import (
     build_project_dict,
     create_defect_from_issue,
+    create_extended_defect_from_issue,
     extract_changelog_attributes,
     extract_static_attributes,
     extract_valuetype_from_issue_field,
@@ -269,6 +270,7 @@ class JiraDefectClient(AbstractDefectClient):
         control_fields: dict[str, list[str]],
         issue_type: dict,
     ):
+        skipped = []
         for _, field_content in issue_type.get("fields", {}).items():
             field_name = field_content.get("name", "")
             if field_content.get("allowedValues", {}):
@@ -282,12 +284,14 @@ class JiraDefectClient(AbstractDefectClient):
                 control_fields[field_name] = control_field_values
 
             else:
-                logger.warning(
-                    "Control field '%s' has no allowedValues; "
-                    "it may be of an incompatible type. Schema: %s",
-                    field_name,
-                    field_content.get("schema", {}),
-                )
+                skipped.append(field_name)
+        if skipped:
+            logger.debug(
+                "Skipped control field extraction for issue type '%s'"
+                " due to missing allowedValues: %s",
+                issue_type.get("name", "<unknown>"),
+                skipped,
+            )
 
     def get_defects(self, project: str, sync_context: SyncContext) -> ProtocolledDefectSet:
         protocol = Protocol()
@@ -312,7 +316,6 @@ class JiraDefectClient(AbstractDefectClient):
                         create_defect_from_issue(
                             issue,
                             fields,
-                            jira_server_url=self.config.server_url,
                             sync_context=sync_context,
                         )
                     )
@@ -391,7 +394,6 @@ class JiraDefectClient(AbstractDefectClient):
                     defect = create_defect_from_issue(
                         issue,
                         fields,
-                        jira_server_url=self.config.server_url,
                         sync_context=sync_context,
                     )
                     defects.append(defect)
@@ -627,10 +629,9 @@ class JiraDefectClient(AbstractDefectClient):
             ]
 
             try:
-                defect = create_defect_from_issue(
+                defect = create_extended_defect_from_issue(
                     issue,
                     fields_list,
-                    jira_server_url=self.config.server_url,
                     sync_context=sync_context,
                 )
                 return self._build_defect_with_attributes(

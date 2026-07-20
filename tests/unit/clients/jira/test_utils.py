@@ -10,6 +10,7 @@ import pytest
 from testbench_defect_service.clients.jira.utils import (
     build_project_dict,
     create_defect_from_issue,
+    create_extended_defect_from_issue,
     ensure_issuetype_format,
     extract_changelog_attributes,
     extract_static_attributes,
@@ -115,7 +116,6 @@ class TestCreateDefectFromIssue:
         result = create_defect_from_issue(
             mock_jira_issue,
             sample_field_metadata,
-            jira_server_url="https://test.atlassian.net",
             sync_context=sync_context,
         )
 
@@ -143,7 +143,6 @@ class TestCreateDefectFromIssue:
         result = create_defect_from_issue(
             mock_jira_issue,
             fields,
-            jira_server_url="https://test.atlassian.net",
             sync_context=sync_context,
         )
 
@@ -166,7 +165,6 @@ class TestCreateDefectFromIssue:
         result = create_defect_from_issue(
             mock_jira_issue,
             fields,
-            jira_server_url="https://test.atlassian.net",
             sync_context=sync_context,
         )
 
@@ -187,13 +185,65 @@ class TestCreateDefectFromIssue:
         result = create_defect_from_issue(
             mock_jira_issue,
             fields,
-            jira_server_url="https://test.atlassian.net",
             sync_context=sync_context,
         )
 
         udf = next((f for f in result.userDefinedFields if f.name == "Missing Field"), None)
         assert udf is not None
         assert udf.value == ""
+
+
+@pytest.mark.unit
+class TestCreateExtendedDefectFromIssue:
+    """Tests for create_extended_defect_from_issue function."""
+
+    def test_extended_extracts_all_fields_ignoring_uda_sync_options(
+        self, mock_jira_issue, sample_field_metadata
+    ):
+        """Extended extraction returns every field regardless of udaSyncOptions."""
+        mock_jira_issue.fields.customfield_10001 = "Custom Value 1"
+        mock_jira_issue.fields.customfield_10002 = "Custom Value 2"
+        mock_jira_issue.fields.customfield_10003 = True
+
+        # No udaSyncOptions configured at all.
+        sync_context = SyncContext(
+            statusAttribute="status",
+            priorityAttribute="priority",
+            classAttribute="issuetype",
+            udaSyncOptions={},
+        )
+        result = create_extended_defect_from_issue(
+            mock_jira_issue,
+            sample_field_metadata,
+            sync_context=sync_context,
+        )
+
+        assert isinstance(result, DefectWithID)
+        udf_names = {f.name for f in result.userDefinedFields}
+        assert udf_names == {"Custom Field 1", "Custom Field 2", "Boolean Field"}
+
+    def test_regular_extraction_respects_uda_sync_options(
+        self, mock_jira_issue, sample_field_metadata
+    ):
+        """Regular extraction skips fields not listed in udaSyncOptions."""
+        mock_jira_issue.fields.customfield_10001 = "Custom Value 1"
+        mock_jira_issue.fields.customfield_10002 = "Custom Value 2"
+        mock_jira_issue.fields.customfield_10003 = True
+
+        sync_context = SyncContext(
+            statusAttribute="status",
+            priorityAttribute="priority",
+            classAttribute="issuetype",
+            udaSyncOptions={"Custom Field 1": "ITB"},
+        )
+        result = create_defect_from_issue(
+            mock_jira_issue,
+            sample_field_metadata,
+            sync_context=sync_context,
+        )
+
+        udf_names = {f.name for f in result.userDefinedFields}
+        assert udf_names == {"Custom Field 1"}
 
 
 @pytest.mark.unit
