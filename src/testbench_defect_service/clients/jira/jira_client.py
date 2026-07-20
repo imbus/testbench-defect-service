@@ -29,6 +29,21 @@ _JIRA_GATEWAY_BASE = "https://api.atlassian.com/ex/jira/{cloud_id}"
 _TENANT_INFO_PATH = "/_edge/tenant_info"
 
 
+class JiraConnectionError(ConnectionError):
+    """Jira connection/authentication failure that preserves the HTTP status code.
+
+    Subclasses the builtin ``ConnectionError`` (an ``OSError``) so existing
+    ``except ConnectionError`` handlers keep working unchanged, but additionally
+    carries the originating HTTP status code (e.g. 401, 403) so callers can map
+    it to the correct response — 401 Unauthorized vs 403 Forbidden — instead of
+    flattening every auth failure into a single generic error.
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class JiraClient:
     def __init__(self, config: JiraDefectClientConfig, principal: Login | None = None):
         self.config = config
@@ -122,19 +137,25 @@ class JiraClient:
         except Exception as e:
             status_code = getattr(e, "status_code", None)
             detail = f"HTTP {status_code}: {e}" if status_code else f"{type(e).__name__}: {e}"
-            raise ConnectionError(
+            raise JiraConnectionError(
                 f"Could not connect to Jira at '{self.config.server_url}' "
-                f"(auth_type='{self.config.auth_type}'): {detail}"
+                f"(auth_type='{self.config.auth_type}'): {detail}",
+                status_code=status_code,
             ) from e
 
         try:
             auth_ok = self._verify_connection(jira)
+        except JiraConnectionError:
+            # Already carries an actionable message and status code (e.g. 403);
+            # propagate as-is rather than re-wrapping it generically.
+            raise
         except Exception as e:
             status_code = getattr(e, "status_code", None)
             detail = f"HTTP {status_code}: {e}" if status_code else f"{type(e).__name__}: {e}"
-            raise ConnectionError(
+            raise JiraConnectionError(
                 f"Could not connect to Jira at '{self.config.server_url}' "
-                f"(auth_type='{self.config.auth_type}'): {detail}"
+                f"(auth_type='{self.config.auth_type}'): {detail}",
+                status_code=status_code,
             ) from e
 
         if auth_ok:
@@ -154,17 +175,19 @@ class JiraClient:
             try:
                 return self._connect_via_gateway()
             except ConnectionError as gateway_error:
-                raise ConnectionError(
+                raise JiraConnectionError(
                     f"Could not connect to Jira at '{self.config.server_url}' "
                     f"(auth_type='{self.config.auth_type}'): "
                     "Direct authentication failed and gateway fallback also failed: "
-                    f"{gateway_error}"
+                    f"{gateway_error}",
+                    status_code=getattr(gateway_error, "status_code", None),
                 ) from gateway_error
 
-        raise ConnectionError(
+        raise JiraConnectionError(
             f"Could not connect to Jira at '{self.config.server_url}' "
             f"(auth_type='{self.config.auth_type}'): "
-            "Authentication failed (HTTP 401). Please check your credentials."
+            "Authentication failed (HTTP 401). Please check your credentials.",
+            status_code=HTTPStatus.UNAUTHORIZED,
         )
 
     def _create_jira_instance(self, server: str, token_override: str | None = None) -> JIRA:
@@ -228,8 +251,13 @@ class JiraClient:
         during construction is public and returns HTTP 200 regardless of whether
         the credentials are valid.
 
-        Returns ``True`` on success, ``False`` on HTTP 401.  Any other error is
-        re-raised so the caller can surface it as a hard connection failure.
+        Returns ``True`` on success and ``False`` on HTTP 401 (invalid/expired
+        credentials — a 401 on Cloud + basic auth also drives the scoped-token
+        gateway fallback).  An HTTP 403 (authenticated but not permitted — e.g. a
+        scoped API token missing the required user-read scope) is raised as a
+        ``JiraConnectionError`` carrying the 403 status so the caller can surface
+        a distinct 403 Forbidden response with actionable guidance.  Any other
+        error is re-raised so the caller can surface it as a hard failure.
         """
         try:
             jira.myself()
@@ -238,6 +266,15 @@ class JiraClient:
             if e.status_code == HTTPStatus.UNAUTHORIZED:
                 logger.debug("Connection verification returned 401 for '%s'.", jira.server_url)
                 return False
+            if e.status_code == HTTPStatus.FORBIDDEN:
+                logger.debug("Connection verification returned 403 for '%s'.", jira.server_url)
+                raise JiraConnectionError(
+                    f"Access denied by Jira at '{self.config.server_url}' (HTTP 403). "
+                    "The credentials are valid but lack the required permissions/scopes "
+                    "(e.g. a scoped API token missing the user-read scope). "
+                    f"Details: {e}",
+                    status_code=HTTPStatus.FORBIDDEN,
+                ) from e
             raise
 
     def _connect_via_gateway(self) -> JIRA:
@@ -282,9 +319,10 @@ class JiraClient:
             self._patch_session_for_oauth2_token(jira._session)
 
         if not self._verify_connection(jira):
-            raise ConnectionError(
+            raise JiraConnectionError(
                 f"Authentication failed against the Atlassian gateway '{gateway_url}'. "
-                f"Please verify your credentials for '{self.config.server_url}'."
+                f"Please verify your credentials for '{self.config.server_url}'.",
+                status_code=HTTPStatus.UNAUTHORIZED,
             )
 
         self._uses_gateway = True

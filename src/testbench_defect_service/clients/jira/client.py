@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
@@ -54,18 +55,23 @@ class JiraDefectClient(AbstractDefectClient):
             try:
                 self._jira_client = JiraClient(self.config)
             except ConnectionError as exc:
-                logger.error("Jira connection/authentication failed: %s", exc)
+                status_code = getattr(exc, "status_code", None)
+                logger.error(
+                    "Jira connection/authentication failed (status=%s): %s", status_code, exc
+                )
+                if status_code == HTTPStatus.FORBIDDEN:
+                    raise Forbidden(str(exc)) from exc
                 raise Unauthorized(str(exc)) from exc
-            except ConnectTimeout:
+            except ConnectTimeout as exc:
                 logger.error(
                     "Connection timeout: could not reach Jira server at %s", self.config.server_url
                 )
                 raise NotFound(
                     f"Unable to connect to Jira server at {self.config.server_url}: "
                     "Connection timeout",
-                ) from ConnectTimeout
+                ) from exc
             except JIRAError as exc:
-                if exc.status_code == 401:  # noqa: PLR2004
+                if exc.status_code == HTTPStatus.UNAUTHORIZED:
                     logger.error(
                         "Jira API error during authentication (token expired or wrong credentials):"
                         "Status: %s, URL: %s",
@@ -77,8 +83,8 @@ class JiraDefectClient(AbstractDefectClient):
                         "credentials provided are incorrect. Please verify your settings "
                         "and try again."
                         f"Details: Status: {exc.status_code} | Endpoint: {exc.url}"
-                    ) from JIRAError
-                if exc.status_code == 403:  # noqa: PLR2004
+                    ) from exc
+                if exc.status_code == HTTPStatus.FORBIDDEN:
                     logger.error(
                         "Jira API access denied: Status: %s, URL: %s",
                         exc.status_code,
@@ -88,7 +94,7 @@ class JiraDefectClient(AbstractDefectClient):
                         "Access Denied: You do not have the required permissions to perform this "
                         "action in Jira. Check your project roles or contact your administrator."
                         f"Details: Status: {exc.status_code} | Endpoint: {exc.url}"
-                    ) from JIRAError
+                    ) from exc
                 logger.error(
                     "Jira API error during authentication: Status: %s, URL: %s",
                     exc.status_code,
@@ -97,7 +103,7 @@ class JiraDefectClient(AbstractDefectClient):
                 raise Unauthorized(
                     f"Jira API error during authentication: Status: {exc.status_code},"
                     f" URL: {exc.url}"
-                ) from JIRAError
+                ) from exc
         return self._jira_client
 
     @property
