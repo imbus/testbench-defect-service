@@ -323,6 +323,7 @@ class JiraDefectClient(AbstractDefectClient):
                             issue,
                             fields,
                             sync_context=sync_context,
+                            site_url=self.jira_client.site_url,
                         )
                     )
                 except (ValueError, KeyError, AttributeError, TypeError) as exc:
@@ -401,6 +402,7 @@ class JiraDefectClient(AbstractDefectClient):
                         issue,
                         fields,
                         sync_context=sync_context,
+                        site_url=self.jira_client.site_url,
                     )
                     defects.append(defect)
                 except (ValueError, KeyError, AttributeError, TypeError) as exc:
@@ -639,6 +641,7 @@ class JiraDefectClient(AbstractDefectClient):
                     issue,
                     fields_list,
                     sync_context=sync_context,
+                    site_url=self.jira_client.site_url,
                 )
                 return self._build_defect_with_attributes(
                     defect=defect,

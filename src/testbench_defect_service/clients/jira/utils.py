@@ -38,26 +38,41 @@ def extract_valuetype_from_issue_field(field: dict[str, Any]) -> ValueType:
     return ValueType.STRING
 
 
-def create_defect_from_issue(issue: Issue, fields: list[dict[str, Any]], sync_context: SyncContext):
-    return _build_defect(issue, fields, sync_context, is_extended=False)
+def create_defect_from_issue(
+    issue: Issue,
+    fields: list[dict[str, Any]],
+    sync_context: SyncContext,
+    site_url: str | None = None,
+):
+    return _build_defect(issue, fields, sync_context, is_extended=False, site_url=site_url)
 
 
 def create_extended_defect_from_issue(
-    issue: Issue, fields: list[dict[str, Any]], sync_context: SyncContext
+    issue: Issue,
+    fields: list[dict[str, Any]],
+    sync_context: SyncContext,
+    site_url: str | None = None,
 ) -> DefectWithID:
     """Convert a Jira *issue* into an extended ``DefectWithID`` model, "
     "extracting ALL user fields."""
-    return _build_defect(issue, fields, sync_context, is_extended=True)
+    return _build_defect(issue, fields, sync_context, is_extended=True, site_url=site_url)
 
 
 def _build_defect(
-    issue: Issue, fields: list[dict[str, Any]], sync_context: SyncContext, is_extended: bool = False
+    issue: Issue,
+    fields: list[dict[str, Any]],
+    sync_context: SyncContext,
+    is_extended: bool = False,
+    site_url: str | None = None,
 ) -> DefectWithID:
     """Convert a Jira *issue* into a ``DefectWithID`` model.
 
     Args:
         issue: The Jira issue object to convert.
         fields: Field metadata dicts (keys ``'id'`` and ``'name'``) for user-defined fields.
+        site_url: Human-facing Jira site URL used to build the browse permalink. When
+            connecting via the Atlassian API gateway (e.g. OAuth2), ``issue.permalink()``
+            would otherwise point at the gateway host instead of the configured server URL.
     """
     return DefectWithID(
         id=DefectID(root=str(issue.key)),
@@ -69,7 +84,7 @@ def _build_defect(
         priority=_get_control_field_value(sync_context.priorityAttribute, issue.fields, fields),
         userDefinedFields=_extract_user_defined_fields(issue, fields, sync_context, is_extended),
         lastEdited=datetime.fromisoformat(jira_datetime_to_iso(issue.fields.updated)),
-        references=_extract_references(issue),
+        references=_extract_references(issue, site_url),
         principal=Login(username="", password=""),
     )
 
@@ -170,16 +185,31 @@ def _safe_display_name(obj: Any) -> str:
     return obj.displayName if obj else ""
 
 
-def _extract_references(issue: Issue) -> list[str]:
-    """Return attachment URLs / filenames from *issue*."""
+def _extract_references(issue: Issue, site_url: str | None = None) -> list[str]:
+    """Return the issue permalink and attachment URLs / filenames from *issue*.
+
+    When *site_url* is given it is used to build the browse permalink, so the
+    reference points at the configured Jira site rather than the Atlassian API
+    gateway host used for the underlying connection (e.g. under OAuth2).
+    """
     attachments = getattr(issue.fields, "attachment", None)
     if not attachments:
         attachment_urls = []
     else:
-        attachment_urls = [
-            att.content if hasattr(att, "content") else str(att) for att in attachments
-        ]
-    return [issue.permalink(), *attachment_urls]
+        if site_url is None:
+            attachment_urls = [
+                str(att.content) if hasattr(att, "content") else str(att) for att in attachments
+            ]
+            permalink = issue.permalink()
+        else:
+            attachment_urls = [
+                f"{site_url.rstrip('/')}/rest/api/2/attachment/content/{att.id}"
+                if hasattr(att, "id")
+                else str(att)
+                for att in attachments
+            ]
+        permalink = f"{site_url.rstrip('/')}/browse/{issue.key}" if site_url else issue.permalink()
+    return [permalink, *attachment_urls]
 
 
 def jira_datetime_to_iso(date_str: str) -> str:
