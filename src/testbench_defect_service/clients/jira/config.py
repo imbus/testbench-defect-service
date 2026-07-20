@@ -7,9 +7,7 @@ from pydantic.fields import Field
 
 from testbench_defect_service.clients.jira.jira_oauth import (
     has_cached_refresh_token,
-    seed_oauth2_refresh_token,
 )
-from testbench_defect_service.utils.config_wizard import run_jira_oauth_wizard
 
 
 class SyncCommandConfig(BaseModel):
@@ -397,15 +395,10 @@ class JiraDefectClientConfig(BaseModel):
                 "JIRA_OAUTH2_CLIENT_SECRET)"
             )
         if not self.oauth2_refresh_token and not has_cached_refresh_token():
-            refresh_token = run_jira_oauth_wizard()
-
-            if not refresh_token:
-                raise ValueError(
-                    "Jira OAuth2 refresh token is required. "
-                    "Please re-run the setup wizard to authorize Jira OAuth2."
-                )
-            if isinstance(refresh_token, str) and refresh_token:
-                seed_oauth2_refresh_token(refresh_token)
+            raise ValueError(
+                "Jira OAuth2 refresh token is required. "
+                "Provide it in the configuration wizard or set JIRA_OAUTH2_REFRESH_TOKEN."
+            )
 
     @model_validator(mode="after")
     def validate_config(self):

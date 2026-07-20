@@ -638,6 +638,7 @@ def run_full_wizard(config_path: Path):  # noqa: C901, PLR0912, PLR0915
     click.echo()
 
 
-def run_jira_oauth_wizard() -> str:
+def run_jira_oauth_wizard() -> str | None:
     click.echo("Jira OAuth2 refresh token is not configured. ")
-    return str(questionary.text("Please enter your OAuth2 refresh token: ").ask())
+    refresh_token = questionary.text("Please enter your OAuth2 refresh token: ").ask()
+    return refresh_token if isinstance(refresh_token, str) and refresh_token else None
