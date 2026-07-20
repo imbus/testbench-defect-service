@@ -192,23 +192,20 @@ def _extract_references(issue: Issue, site_url: str | None = None) -> list[str]:
     reference points at the configured Jira site rather than the Atlassian API
     gateway host used for the underlying connection (e.g. under OAuth2).
     """
-    attachments = getattr(issue.fields, "attachment", None)
-    if not attachments:
-        attachment_urls = []
+    permalink = f"{site_url.rstrip('/')}/browse/{issue.key}" if site_url else issue.permalink()
+
+    attachments = getattr(issue.fields, "attachment", None) or []
+    if site_url is None:
+        attachment_urls = [
+            str(att.content) if hasattr(att, "content") else str(att) for att in attachments
+        ]
     else:
-        if site_url is None:
-            attachment_urls = [
-                str(att.content) if hasattr(att, "content") else str(att) for att in attachments
-            ]
-            permalink = issue.permalink()
-        else:
-            attachment_urls = [
-                f"{site_url.rstrip('/')}/rest/api/2/attachment/content/{att.id}"
-                if hasattr(att, "id")
-                else str(att)
-                for att in attachments
-            ]
-        permalink = f"{site_url.rstrip('/')}/browse/{issue.key}" if site_url else issue.permalink()
+        attachment_urls = [
+            f"{site_url.rstrip('/')}/rest/api/2/attachment/content/{att.id}"
+            if hasattr(att, "id")
+            else str(att)
+            for att in attachments
+        ]
     return [permalink, *attachment_urls]
 
 
