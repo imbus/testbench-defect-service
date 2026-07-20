@@ -39,7 +39,7 @@ class JiraProjectConfig(BaseModel):
 
 
 class JiraDefectClientConfig(BaseModel):
-    name: str = Field(default="Jira", json_schema_extra={"skip_if_wizard": True})
+    name: str = Field(default="DefectService", json_schema_extra={"skip_if_wizard": True})
     server_url: str = Field(
         ..., description="Jira server URL (e.g., https://your-domain.atlassian.net)"
     )
