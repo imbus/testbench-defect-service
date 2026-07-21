@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 import sys
@@ -23,7 +22,6 @@ token_store: dict[str, str | float] = {
 _TOKEN_CACHE_PATH = Path("tmp/oauth2_tokens.toml")
 _TOKEN_CACHE_SECTION = "oauth2"
 
-refresh_lock = asyncio.Lock()
 refresh_lock_sync = threading.Lock()
 
 _CLIENT_ID = os.getenv("JIRA_OAUTH2_CLIENT_ID", "YOUR_CLIENT_ID")
@@ -206,8 +204,8 @@ def get_valid_jira_token_sync(
 
         data = _refresh_jira_token_sync()
 
-        token_store["access_token"] = str(data["access_token"])
-        token_store["refresh_token"] = str(data["refresh_token"])
+        token_store["access_token"] = str(data.get("access_token", ""))
+        token_store["refresh_token"] = str(data.get("refresh_token", ""))
         token_store["expires_at"] = time.time() + int(str(data.get("expires_in", 0)))
         _persist_token_store_to_disk()
 

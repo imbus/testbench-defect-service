@@ -15,8 +15,8 @@ from testbench_defect_service.clients.jira.utils import (
     ensure_issuetype_format,
     extract_changelog_attributes,
     extract_static_attributes,
-    extract_valuetype_from_issue_field,
     get_attribute_name_from_field,
+    get_value_type_from_jira_field,
     iso8601_to_unix_timestamp,
     jira_datetime_to_iso,
 )
@@ -72,25 +72,25 @@ class TestExtractValueTypeFromIssueField:
     def test_extract_valuetype_boolean(self):
         """Test extracting boolean value type."""
         field = {"schema": {"type": "boolean"}}
-        result = extract_valuetype_from_issue_field(field)
+        result = get_value_type_from_jira_field(field)
         assert result == ValueType.BOOLEAN
 
     def test_extract_valuetype_string(self):
         """Test extracting string value type."""
         field = {"schema": {"type": "string"}}
-        result = extract_valuetype_from_issue_field(field)
+        result = get_value_type_from_jira_field(field)
         assert result == ValueType.STRING
 
     def test_extract_valuetype_other(self):
         """Test extracting other value types defaults to STRING."""
         field = {"schema": {"type": "number"}}
-        result = extract_valuetype_from_issue_field(field)
+        result = get_value_type_from_jira_field(field)
         assert result == ValueType.STRING
 
     def test_extract_valuetype_no_schema(self):
         """Test extracting value type when schema is missing."""
         field = {}
-        result = extract_valuetype_from_issue_field(field)
+        result = get_value_type_from_jira_field(field)
         assert result == ValueType.STRING
 
 

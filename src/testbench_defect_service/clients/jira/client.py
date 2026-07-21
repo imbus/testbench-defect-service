@@ -18,7 +18,7 @@ from testbench_defect_service.clients.jira.utils import (
     create_extended_defect_from_issue,
     extract_changelog_attributes,
     extract_static_attributes,
-    extract_valuetype_from_issue_field,
+    get_value_type_from_jira_field,
 )
 from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import (
@@ -438,7 +438,7 @@ class JiraDefectClient(AbstractDefectClient):
         not configured (None). Uses per-user auth only when explicitly disabled.
         """
         shared = self._get_config_value("enable_shared_auth", project=project)
-        if shared is not False or self.config.auth_type == "oauth1":
+        if shared is not False or self.config.auth_type in {"oauth1", "oauth2"}:
             logger.debug("Using shared authentication for project '%s'", project)
             return self.jira_client
         logger.debug("Using per-user authentication for project '%s'", project)
@@ -487,7 +487,7 @@ class JiraDefectClient(AbstractDefectClient):
                 "Defect created successfully in Jira",
                 protocol_code=ProtocolCode.INSERT_SUCCESS,
             )
-        except (RuntimeError, ValueError, KeyError, AttributeError, TypeError) as exc:
+        except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
             logger.error("Failed to create Jira issue for project '%s': %s", project_key, exc)
             protocol.add_general_error(
                 "Failed to create Jira issue", protocol_code=ProtocolCode.INSERT_ERROR
@@ -679,7 +679,7 @@ class JiraDefectClient(AbstractDefectClient):
         return [
             UserDefinedAttribute(
                 name=field["name"],
-                valueType=extract_valuetype_from_issue_field(field),
+                valueType=get_value_type_from_jira_field(field),
                 mustField=getattr(field, "required", None),
             )
             for field in self.jira_client.get_all_project_fields(project=project_key)

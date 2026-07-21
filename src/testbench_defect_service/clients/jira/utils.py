@@ -31,7 +31,7 @@ def build_project_dict(projects: list[Project]) -> dict[str, Project]:
     return {f"{project.name} ({project.key})": project for project in projects}
 
 
-def extract_valuetype_from_issue_field(field: dict[str, Any]) -> ValueType:
+def get_value_type_from_jira_field(field: dict[str, Any]) -> ValueType:
     """Return ``ValueType.BOOLEAN`` or ``ValueType.STRING`` for a Jira issue-field schema."""
     if field.get("schema", {}).get("type") == "boolean":
         return ValueType.BOOLEAN
@@ -43,7 +43,7 @@ def create_defect_from_issue(
     fields: list[dict[str, Any]],
     sync_context: SyncContext,
     site_url: str | None = None,
-):
+) -> DefectWithID:
     return _build_defect(issue, fields, sync_context, is_extended=False, site_url=site_url)
 
 
@@ -53,8 +53,8 @@ def create_extended_defect_from_issue(
     sync_context: SyncContext,
     site_url: str | None = None,
 ) -> DefectWithID:
-    """Convert a Jira *issue* into an extended ``DefectWithID`` model, "
-    "extracting ALL user fields."""
+    """Convert a Jira *issue* into an extended ``DefectWithID`` model,
+    extracting ALL user fields."""
     return _build_defect(issue, fields, sync_context, is_extended=True, site_url=site_url)
 
 
@@ -89,15 +89,13 @@ def _build_defect(
     )
 
 
-def _get_control_field_value(
-    controll_field: str | None, issue_fields: Any, meta_fields: Any
-) -> str:
-    """Return a readable value for *controll_field* if the key exists in *fields*."""
-    if not controll_field:
+def _get_control_field_value(control_field: str | None, issue_fields: Any, meta_fields: Any) -> str:
+    """Return a readable value for *control_field* if the key exists in *fields*."""
+    if not control_field:
         return ""
 
     field_values = _to_field_dict(issue_fields)
-    key = _resolve_control_field_key(controll_field, field_values, meta_fields)
+    key = _resolve_control_field_key(control_field, field_values, meta_fields)
     if key is None:
         return ""
     return _stringify_control_value(field_values.get(key))
@@ -115,13 +113,13 @@ def _to_field_dict(fields: Any) -> dict[str, Any]:
 
 
 def _resolve_control_field_key(
-    controll_field: str, field_values: dict[str, Any], meta_fields
+    control_field: str, field_values: dict[str, Any], meta_fields
 ) -> str | None:
     """Resolve a configured control field to an existing Jira field key."""
-    if controll_field in field_values:
-        return controll_field
+    if control_field in field_values:
+        return control_field
     for field in meta_fields:
-        if field.get("name", None) == controll_field:
+        if field.get("name", None) == control_field:
             return str(field.get("id", None))
     return None
 
@@ -196,9 +194,7 @@ def _extract_references(issue: Issue, site_url: str | None = None) -> list[str]:
 
     attachments = getattr(issue.fields, "attachment", None) or []
     if site_url is None:
-        attachment_urls = [
-            str(att.content) if hasattr(att, "content") else str(att) for att in attachments
-        ]
+        logger.warning("site_url cannot be None when building attachment URL")
     else:
         attachment_urls = [
             f"{site_url.rstrip('/')}/rest/api/2/attachment/content/{att.id}"
