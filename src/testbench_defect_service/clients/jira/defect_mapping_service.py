@@ -72,7 +72,7 @@ class DefectToJiraMapper:
         self._set_field(
             fields,
             self.get_jira_field_key(sync_context.statusAttribute, meta_fields),
-            str(defect.priority),
+            str(defect.status),
             allowed,
         )
         self._set_field(
@@ -91,6 +91,12 @@ class DefectToJiraMapper:
             self._set_field(
                 fields,
                 "reporter",
+                defect.reporter,
+                allowed,
+            )
+            self._set_field(
+                fields,
+                "creator",
                 defect.reporter,
                 allowed,
             )
