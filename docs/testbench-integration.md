@@ -128,9 +128,9 @@ Use this procedure to migrate from the legacy Defect Service setup to the new ar
 
 | Symptom                | Likely cause                            | Fix                                                                      |
 | ---------------------- | --------------------------------------- | ------------------------------------------------------------------------ |
-| `Connection refused` | Service is not running or port mismatch | Start the service; verify`host` and `port` in config.                |
-| `401 Unauthorized`   | Wrong credentials                       | Re-run`testbench-defect-service set-credentials`.                      |
-| `500 Server Error`   | Service or client misconfiguration      | Check service logs; run`configure --view` to inspect current settings. |
+| `Connection refused` | Service is not running or port mismatch | Start the service; verify `host` and `port` in config. |
+| `401 Unauthorized`   | Wrong credentials                       | Re-run `testbench-defect-service set-credentials`.     |
+| `500 Server Error`   | Service or client misconfiguration      | Check service logs; run `configure --view` to inspect current settings. |
 
 ---
 
