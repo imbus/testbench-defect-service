@@ -109,7 +109,7 @@ readonly       = false
 
 | Option                   | Type    | Description                                                                                                 | Required | Default     |
 | ------------------------ | ------- | ----------------------------------------------------------------------------------------------------------- | -------- | ----------- |
-| `auth_type`            | String  | Authentication method. One of`"basic"`, `"token"`, `"oauth"`, or `"oauth2"`.                        | No       | `"basic"` |
+| `auth_type`            | String  | Authentication method. One of `"basic"`, `"token"`, `"oauth1"`, or `"oauth2"`. | No       | `"basic"` |
 | `username`             | String  | Jira username for basic auth. Can also be set via`JIRA_USERNAME`.                                         | No       | —          |
 | `password`             | String  | Jira API token for basic auth. Can also be set via`JIRA_PASSWORD`.                                        | No       | —          |
 | `token`                | String  | Personal Access Token for token auth (Jira Data Center). Can also be set via`JIRA_BEARER_TOKEN`.          | No       | —          |
