@@ -131,13 +131,12 @@ def configure_oauth2_runtime(
     if client_secret:
         _oauth2_settings["client_secret"] = client_secret
 
-    if not _TOKEN_CACHE_PATH.exists():
-        if access_token:
-            token_store["access_token"] = access_token
-        if refresh_token:
-            token_store["refresh_token"] = refresh_token
-        if expires_at is not None:
-            token_store["expires_at"] = float(expires_at)
+    if access_token and not _is_placeholder(access_token):
+        token_store["access_token"] = access_token
+    if refresh_token and not _is_placeholder(refresh_token):
+        token_store["refresh_token"] = refresh_token
+    if expires_at is not None:
+        token_store["expires_at"] = float(expires_at)
 
     _persist_token_store_to_disk()
 
