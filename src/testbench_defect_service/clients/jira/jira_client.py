@@ -620,8 +620,8 @@ class JiraClient:
             issue = self.jira.create_issue(issue_fields, True)
             logger.info("Created issue '%s' in project '%s'", issue.key, project_key)
             self.transition_issue_status(issue, defect)
-            if defect.references:
-                self.add_attachments(issue, defect.references)
+            # if defect.references:
+            #     self.add_attachments(issue, defect.references)
             return issue
         except JIRAError as exc:
             logger.error("Failed to create issue in project %s: %s", project_key, exc)
@@ -656,8 +656,8 @@ class JiraClient:
             issue.update(fields=update_fields)
             logger.info("Updated issue '%s' in project '%s'", issue.key, project_key)
             self.transition_issue_status(issue, defect)
-            if defect.references:
-                self.add_attachments(issue, defect.references)
+            # if defect.references:
+            #     self.add_attachments(issue, defect.references)
         except JIRAError as exc:
             logger.error("Failed to update issue in project %s: %s", project_key, exc)
             raise ValueError(f"Unable to update Jira issue: {exc}") from exc

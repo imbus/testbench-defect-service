@@ -94,6 +94,13 @@ class DefectToJiraMapper:
                 defect.reporter,
                 allowed,
             )
+        if defect.reporter:
+            self._set_field(
+                fields,
+                "creator",
+                defect.reporter,
+                allowed,
+            )
         return {k: v for k, v in fields.items() if v is not None}
 
     def get_jira_field_key(self, controll_field: str | None, meta_fields) -> str:
