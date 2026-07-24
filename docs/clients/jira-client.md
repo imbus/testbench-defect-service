@@ -102,7 +102,7 @@ readonly       = false
 
 | Option         | Type   | Description                                                                                          | Required      | Default    |
 | -------------- | ------ | ---------------------------------------------------------------------------------------------------- | ------------- | ---------- |
-| `name`       | String | Display name shown in TestBench. Must match the name in the DMProxy properties file or during setup. | No            | `"Jira"` |
+| `name`       | String | Display name shown in TestBench. Must match the name in the DMProxy properties file or during setup. | No            | "DefectService" |
 | `server_url` | String | Base URL of your Jira instance (no trailing slash).                                                  | **Yes** | —         |
 
 ### Authentication methods
