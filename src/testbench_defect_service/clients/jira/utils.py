@@ -193,15 +193,15 @@ def _extract_references(issue: Issue, site_url: str | None = None) -> list[str]:
     permalink = f"{site_url.rstrip('/')}/browse/{issue.key}" if site_url else issue.permalink()
 
     attachments = getattr(issue.fields, "attachment", None) or []
-    if site_url is None:
-        logger.warning("site_url cannot be None when building attachment URL")
-    else:
+    if site_url is not None:
         attachment_urls = [
             f"{site_url.rstrip('/')}/rest/api/2/attachment/content/{att.id}"
             if hasattr(att, "id")
             else str(att)
             for att in attachments
         ]
+    else:
+        attachment_urls = [getattr(att, "content", None) or str(att) for att in attachments]
     return [permalink, *attachment_urls]
 
 

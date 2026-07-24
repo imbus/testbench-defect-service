@@ -61,7 +61,10 @@ class JiraDefectClient(AbstractDefectClient):
                 )
                 if status_code == HTTPStatus.FORBIDDEN:
                     raise Forbidden(str(exc)) from exc
-                raise Unauthorized(str(exc)) from exc
+
+                if status_code == HTTPStatus.UNAUTHORIZED:
+                    raise Unauthorized(str(exc)) from exc
+                raise NotFound(str(exc)) from exc
             except ConnectTimeout as exc:
                 logger.error(
                     "Connection timeout: could not reach Jira server at %s", self.config.server_url
