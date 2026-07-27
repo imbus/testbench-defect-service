@@ -82,13 +82,55 @@ If you configured HTTPS, use `https://` instead and ensure the TestBench host tr
 
 ---
 
+## Migrating to the New Service
+
+Use this procedure to migrate from the legacy Defect Service setup to the new architecture without losing synchronization.
+
+:::warning
+ During setup and integration, the new service name must be exactly the same as the old service name. Any mismatch will break the integration.
+:::
+
+### Migration steps
+
+1. **Set up the new Defect Service**
+   Initialize and configure `testbench-defect-service` in your environment.
+
+   :::tip
+   If you are migrating an existing setup, use the values from your current DMProxy `.properties` files as input for the service configuration. This is especially helpful when running the configuration wizard, because you can reuse the existing service-related values instead of entering them again manually. For the initial setup flow, see [Quickstart](getting-started/quickstart.md) and [Configuration](configuration.md).
+
+   The current DMProxy configuration is usually the best reference for the values you need during migration:
+
+   - Use the existing repository name from the [wrapper configuration](#1-wrapper-configuration).
+   - Use the current connection details from the [service settings](#2-service-settings).
+   :::
+
+   Requirement: The configured service name must match the previous service name character-for-character.
+2. **Integrate with DMProxy**
+   Register the new service in DMProxy as described on this page.
+
+   Requirement: The service name used in DMProxy must be identical to the previous service name.
+3. **Start both services**
+   After configuration is complete, start:
+
+   - `testbench-defect-service`
+   - `DMProxy`
+4. **Update credentials in TestBench**
+   Open TestBench and go to Defect Manager. Update the credentials for the migrated service connection.
+5. **Reselect and synchronize the project**
+   Complete the migration in your project workspace:
+
+   - Reselect the project once in the UI (even if it is already selected).
+   - Trigger a manual synchronization.
+
+---
+
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
-|---------|--------------|-----|
+| Symptom                | Likely cause                            | Fix                                                                      |
+| ---------------------- | --------------------------------------- | ------------------------------------------------------------------------ |
 | `Connection refused` | Service is not running or port mismatch | Start the service; verify `host` and `port` in config. |
-| `401 Unauthorized` | Wrong credentials | Re-run `testbench-defect-service set-credentials`. |
-| `500 Server Error` | Service or client misconfiguration | Check service logs; run `configure --view` to inspect current settings. |
+| `401 Unauthorized`   | Wrong credentials                       | Re-run `testbench-defect-service set-credentials`.     |
+| `500 Server Error`   | Service or client misconfiguration      | Check service logs; run `configure --view` to inspect current settings. |
 
 ---
 

@@ -61,6 +61,9 @@ def mock_jira_issue() -> Mock:
     attachment2.content = "https://example.com/attachment2.pdf"
     issue.fields.attachment = [attachment1, attachment2]
 
+    # Mock permalink
+    issue.permalink.return_value = "https://test.atlassian.net/browse/TEST-123"
+
     return issue
 
 

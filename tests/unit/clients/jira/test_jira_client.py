@@ -13,7 +13,9 @@ from sanic import NotFound
 
 from testbench_defect_service.clients.jira.config import JiraDefectClientConfig
 from testbench_defect_service.clients.jira.jira_client import JiraClient
-from testbench_defect_service.models.defects import Defect, Login
+from testbench_defect_service.models.defects import Defect, Login, SyncContext
+
+_SYNC_CONTEXT = SyncContext(iTBProject=None)
 
 
 def _make_config(**overrides) -> JiraDefectClientConfig:
@@ -268,7 +270,7 @@ class TestFetchProjectStatuses:
 
 
 @pytest.mark.unit
-class TestFetchAllCustomFields:
+class TestGetAllProjectFields:
     def test_cloud_uses_createmeta(self, cloud_client):
         cloud_client.jira.createmeta.return_value = {
             "projects": [
@@ -284,7 +286,7 @@ class TestFetchAllCustomFields:
                 }
             ]
         }
-        result = cloud_client.fetch_all_custom_fields("TEST")
+        result = cloud_client.get_all_project_fields("TEST")
         ids = {f["id"] for f in result}
         assert "customfield_001" in ids
         assert "customfield_002" in ids
@@ -300,18 +302,18 @@ class TestFetchAllCustomFields:
                 }
             ]
         }
-        result = cloud_client.fetch_all_custom_fields("TEST")
+        result = cloud_client.get_all_project_fields("TEST")
         env_fields = [f for f in result if f["id"] == "customfield_001"]
         assert len(env_fields) == 1
         assert env_fields[0]["required"] is True
 
     def test_cloud_returns_empty_when_no_projects(self, cloud_client):
         cloud_client.jira.createmeta.return_value = {"projects": []}
-        assert cloud_client.fetch_all_custom_fields("TEST") == []
+        assert cloud_client.get_all_project_fields("TEST") == []
 
     def test_cloud_returns_empty_on_jira_error(self, cloud_client):
         cloud_client.jira.createmeta.side_effect = JIRAError("fail")
-        assert cloud_client.fetch_all_custom_fields("TEST") == []
+        assert cloud_client.get_all_project_fields("TEST") == []
 
     def test_dc_uses_project_issue_types(self, dc_client):
         it1 = Mock()
@@ -321,7 +323,7 @@ class TestFetchAllCustomFields:
         dc_client.jira.project_issue_types.return_value = [it1]
         dc_client.jira.project_issue_fields.return_value = [f1]
 
-        result = dc_client.fetch_all_custom_fields("TEST")
+        result = dc_client.get_all_project_fields("TEST")
         assert any(f["fieldId"] == "customfield_001" for f in result)
 
     def test_dc_no_project_falls_back_to_all_fields(self, dc_client):
@@ -329,12 +331,13 @@ class TestFetchAllCustomFields:
             {"id": "customfield_001", "name": "Env"},
             {"id": "status", "name": "Status"},
         ]
-        result = dc_client.fetch_all_custom_fields("")
-        assert all(f["id"].startswith("customfield_") for f in result)
+        result = dc_client.get_all_project_fields("")
+        ids = {f["id"] for f in result}
+        assert "customfield_001" in ids
 
     def test_dc_returns_empty_on_fields_jira_error(self, dc_client):
         dc_client.jira.fields.side_effect = JIRAError("fail")
-        result = dc_client.fetch_all_custom_fields("")
+        result = dc_client.get_all_project_fields("")
         assert result == []
 
 
@@ -436,14 +439,14 @@ class TestCreateIssue:
     def test_cloud_creates_issue_and_returns_it(self, cloud_client):
         defect = _make_defect()
         mock_issue = self._setup_cloud_create(cloud_client, defect)
-        result = cloud_client.create_issue("TEST", defect)
+        result = cloud_client.create_issue("TEST", defect, _SYNC_CONTEXT)
         assert result is mock_issue
         cloud_client.jira.create_issue.assert_called_once()
 
     def test_cloud_sets_project_key(self, cloud_client):
         defect = _make_defect()
         self._setup_cloud_create(cloud_client, defect)
-        cloud_client.create_issue("TEST", defect)
+        cloud_client.create_issue("TEST", defect, _SYNC_CONTEXT)
         call_args = cloud_client.jira.create_issue.call_args[0][0]
         assert call_args["project"] == "TEST"
 
@@ -453,7 +456,7 @@ class TestCreateIssue:
         mock_issue.fields.status.name = "Open"
         transition = {"id": "31", "to": {"name": "Closed"}}
         cloud_client.jira.transitions.return_value = [transition]
-        cloud_client.create_issue("TEST", defect)
+        cloud_client.create_issue("TEST", defect, _SYNC_CONTEXT)
         cloud_client.jira.transition_issue.assert_called_once_with(mock_issue, "31")
 
     def test_raises_value_error_on_jira_error(self, cloud_client):
@@ -461,7 +464,7 @@ class TestCreateIssue:
         cloud_client.jira.createmeta.return_value = _make_cloud_createmeta()
         cloud_client.jira.create_issue.side_effect = JIRAError("server error")
         with pytest.raises(ValueError, match="Unable to create Jira issue"):
-            cloud_client.create_issue("TEST", defect)
+            cloud_client.create_issue("TEST", defect, _SYNC_CONTEXT)
 
     def test_dc_uses_project_issue_fields(self, dc_client):
         defect = _make_defect()
@@ -479,7 +482,7 @@ class TestCreateIssue:
         dc_client.jira.project_issue_fields.return_value = [f_summary]
         dc_client.jira.create_issue.return_value = mock_issue
 
-        result = dc_client.create_issue("TEST", defect)
+        result = dc_client.create_issue("TEST", defect, _SYNC_CONTEXT)
         assert result is mock_issue
 
 
@@ -499,7 +502,7 @@ class TestUpdateIssue:
         mock_issue = Mock()
         mock_issue.fields.status.name = defect.status
         cloud_client.jira.createmeta.return_value = _make_cloud_createmeta()
-        cloud_client.update_issue("TEST", mock_issue, defect)
+        cloud_client.update_issue("TEST", mock_issue, defect, _SYNC_CONTEXT)
         mock_issue.update.assert_called_once()
 
     def test_raises_value_error_on_jira_error(self, cloud_client):
@@ -509,7 +512,7 @@ class TestUpdateIssue:
         cloud_client.jira.createmeta.return_value = _make_cloud_createmeta()
         mock_issue.update.side_effect = JIRAError("update failed")
         with pytest.raises(ValueError, match="Unable to update Jira issue"):
-            cloud_client.update_issue("TEST", mock_issue, defect)
+            cloud_client.update_issue("TEST", mock_issue, defect, _SYNC_CONTEXT)
 
     def test_dc_calls_project_issue_fields(self, dc_client):
         defect = _make_defect()
@@ -526,7 +529,7 @@ class TestUpdateIssue:
         dc_client.jira.project_issue_types.return_value = [it]
         dc_client.jira.project_issue_fields.return_value = [f]
 
-        dc_client.update_issue("TEST", mock_issue, defect)
+        dc_client.update_issue("TEST", mock_issue, defect, _SYNC_CONTEXT)
         mock_issue.update.assert_called_once()
 
 
