@@ -9,6 +9,10 @@ from pydantic import ValidationError
 from sanic.config import Config
 from sanic.http.tls.context import CIPHERS_TLS12
 
+from testbench_defect_service.clients.jira.jira_oauth import (
+    has_cached_refresh_token,
+    seed_oauth2_refresh_token,
+)
 from testbench_defect_service.clients.utils import get_client_config_class
 from testbench_defect_service.utils.config import (
     CONFIG_PREFIX,
@@ -17,6 +21,7 @@ from testbench_defect_service.utils.config import (
     print_config_errors,
     resolve_config_file_path,
 )
+from testbench_defect_service.utils.config_wizard import run_jira_oauth_wizard
 
 
 class AppConfig(Config):
@@ -139,6 +144,7 @@ class AppConfig(Config):
                 client_config = load_client_config_from_file(self.CLIENT_CONFIG_PATH)
             else:
                 client_config = self._client_config_inline
+            self._prompt_for_missing_jira_oauth2_refresh_token(client_config)
             return client_config_class.model_validate(client_config)
         except ValidationError as e:
             if separate_file:
@@ -149,3 +155,23 @@ class AppConfig(Config):
             sys.exit(1)
         except Exception as e:
             raise ValueError(f"Failed to validate client configuration: {e}") from e
+
+    def _prompt_for_missing_jira_oauth2_refresh_token(self, client_config: dict) -> None:
+        """Prompt for a Jira OAuth2 refresh token when starting the service."""
+        if "testbench_defect_service.clients.JiraDefectClient" not in self.CLIENT_CLASS:
+            return
+        if client_config.get("auth_type") != "oauth2":
+            return
+        if (
+            client_config.get("oauth2_refresh_token")
+            or os.getenv("JIRA_OAUTH2_REFRESH_TOKEN")
+            or has_cached_refresh_token()
+        ):
+            return
+
+        refresh_token = run_jira_oauth_wizard()
+        if not refresh_token:
+            return
+
+        client_config["oauth2_refresh_token"] = refresh_token
+        seed_oauth2_refresh_token(refresh_token)

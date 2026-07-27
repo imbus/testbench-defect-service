@@ -8,13 +8,15 @@ from unittest.mock import Mock
 import pytest
 
 from testbench_defect_service.clients.jira.utils import (
+    _extract_references,
     build_project_dict,
     create_defect_from_issue,
+    create_extended_defect_from_issue,
     ensure_issuetype_format,
     extract_changelog_attributes,
     extract_static_attributes,
-    extract_valuetype_from_issue_field,
     get_attribute_name_from_field,
+    get_value_type_from_jira_field,
     iso8601_to_unix_timestamp,
     jira_datetime_to_iso,
 )
@@ -70,25 +72,25 @@ class TestExtractValueTypeFromIssueField:
     def test_extract_valuetype_boolean(self):
         """Test extracting boolean value type."""
         field = {"schema": {"type": "boolean"}}
-        result = extract_valuetype_from_issue_field(field)
+        result = get_value_type_from_jira_field(field)
         assert result == ValueType.BOOLEAN
 
     def test_extract_valuetype_string(self):
         """Test extracting string value type."""
         field = {"schema": {"type": "string"}}
-        result = extract_valuetype_from_issue_field(field)
+        result = get_value_type_from_jira_field(field)
         assert result == ValueType.STRING
 
     def test_extract_valuetype_other(self):
         """Test extracting other value types defaults to STRING."""
         field = {"schema": {"type": "number"}}
-        result = extract_valuetype_from_issue_field(field)
+        result = get_value_type_from_jira_field(field)
         assert result == ValueType.STRING
 
     def test_extract_valuetype_no_schema(self):
         """Test extracting value type when schema is missing."""
         field = {}
-        result = extract_valuetype_from_issue_field(field)
+        result = get_value_type_from_jira_field(field)
         assert result == ValueType.STRING
 
 
@@ -115,7 +117,6 @@ class TestCreateDefectFromIssue:
         result = create_defect_from_issue(
             mock_jira_issue,
             sample_field_metadata,
-            jira_server_url="https://test.atlassian.net",
             sync_context=sync_context,
         )
 
@@ -143,7 +144,6 @@ class TestCreateDefectFromIssue:
         result = create_defect_from_issue(
             mock_jira_issue,
             fields,
-            jira_server_url="https://test.atlassian.net",
             sync_context=sync_context,
         )
 
@@ -166,7 +166,6 @@ class TestCreateDefectFromIssue:
         result = create_defect_from_issue(
             mock_jira_issue,
             fields,
-            jira_server_url="https://test.atlassian.net",
             sync_context=sync_context,
         )
 
@@ -187,13 +186,161 @@ class TestCreateDefectFromIssue:
         result = create_defect_from_issue(
             mock_jira_issue,
             fields,
-            jira_server_url="https://test.atlassian.net",
             sync_context=sync_context,
         )
 
         udf = next((f for f in result.userDefinedFields if f.name == "Missing Field"), None)
         assert udf is not None
         assert udf.value == ""
+
+
+@pytest.mark.unit
+class TestCreateExtendedDefectFromIssue:
+    """Tests for create_extended_defect_from_issue function."""
+
+    def test_extended_extracts_all_fields_ignoring_uda_sync_options(
+        self, mock_jira_issue, sample_field_metadata
+    ):
+        """Extended extraction returns every field regardless of udaSyncOptions."""
+        mock_jira_issue.fields.customfield_10001 = "Custom Value 1"
+        mock_jira_issue.fields.customfield_10002 = "Custom Value 2"
+        mock_jira_issue.fields.customfield_10003 = True
+
+        # No udaSyncOptions configured at all.
+        sync_context = SyncContext(
+            statusAttribute="status",
+            priorityAttribute="priority",
+            classAttribute="issuetype",
+            udaSyncOptions={},
+        )
+        result = create_extended_defect_from_issue(
+            mock_jira_issue,
+            sample_field_metadata,
+            sync_context=sync_context,
+        )
+
+        assert isinstance(result, DefectWithID)
+        udf_names = {f.name for f in result.userDefinedFields}
+        assert udf_names == {"Custom Field 1", "Custom Field 2", "Boolean Field"}
+
+    def test_regular_extraction_respects_uda_sync_options(
+        self, mock_jira_issue, sample_field_metadata
+    ):
+        """Regular extraction skips fields not listed in udaSyncOptions."""
+        mock_jira_issue.fields.customfield_10001 = "Custom Value 1"
+        mock_jira_issue.fields.customfield_10002 = "Custom Value 2"
+        mock_jira_issue.fields.customfield_10003 = True
+
+        sync_context = SyncContext(
+            statusAttribute="status",
+            priorityAttribute="priority",
+            classAttribute="issuetype",
+            udaSyncOptions={"Custom Field 1": "ITB"},
+        )
+        result = create_defect_from_issue(
+            mock_jira_issue,
+            sample_field_metadata,
+            sync_context=sync_context,
+        )
+
+        udf_names = {f.name for f in result.userDefinedFields}
+        assert udf_names == {"Custom Field 1"}
+
+
+@pytest.mark.unit
+class TestExtractReferences:
+    """Tests for _extract_references — especially the OAuth2/gateway case.
+
+    Under OAuth2 the underlying JIRA connection runs through the Atlassian API
+    gateway (``api.atlassian.com/ex/jira/{cloudId}``), so ``issue.permalink()``
+    and attachment ``content`` URLs point at the gateway host.  Passing the
+    configured ``site_url`` must make every reference resolve to the human-facing
+    Jira site instead.
+    """
+
+    def test_without_site_url_falls_back_to_permalink(self, mock_jira_issue):
+        """With no site_url, the permalink comes straight from issue.permalink()."""
+        mock_jira_issue.permalink.return_value = (
+            "https://api.atlassian.com/ex/jira/abc-cloud-id/browse/TEST-123"
+        )
+
+        references = _extract_references(mock_jira_issue)
+
+        assert references[0] == ("https://api.atlassian.com/ex/jira/abc-cloud-id/browse/TEST-123")
+        assert references[1:] == [
+            "https://example.com/attachment1.png",
+            "https://example.com/attachment2.pdf",
+        ]
+
+    def test_site_url_overrides_gateway_permalink(self, mock_jira_issue):
+        """With site_url given, the permalink points at the site, not the gateway."""
+        # Simulate the gateway host the JIRA client would otherwise produce.
+        mock_jira_issue.permalink.return_value = (
+            "https://api.atlassian.com/ex/jira/abc-cloud-id/browse/TEST-123"
+        )
+
+        references = _extract_references(
+            mock_jira_issue, site_url="https://mycompany.atlassian.net"
+        )
+
+        assert references[0] == "https://mycompany.atlassian.net/browse/TEST-123"
+        # issue.permalink() must not be consulted when site_url is provided.
+        mock_jira_issue.permalink.assert_not_called()
+
+    def test_site_url_rebuilds_attachment_urls(self, mock_jira_issue):
+        """Attachment references are rebuilt against site_url using the attachment id."""
+        mock_jira_issue.fields.attachment[0].id = "10001"
+        mock_jira_issue.fields.attachment[1].id = "10002"
+
+        references = _extract_references(
+            mock_jira_issue, site_url="https://mycompany.atlassian.net"
+        )
+
+        assert references[1:] == [
+            "https://mycompany.atlassian.net/rest/api/2/attachment/content/10001",
+            "https://mycompany.atlassian.net/rest/api/2/attachment/content/10002",
+        ]
+
+    def test_site_url_trailing_slash_is_normalized(self, mock_jira_issue):
+        """A trailing slash on site_url does not produce a double slash."""
+        references = _extract_references(
+            mock_jira_issue, site_url="https://mycompany.atlassian.net/"
+        )
+
+        assert references[0] == "https://mycompany.atlassian.net/browse/TEST-123"
+
+    def test_no_attachments_returns_only_permalink(self, mock_jira_issue):
+        """When the issue has no attachments, only the permalink is returned."""
+        mock_jira_issue.fields.attachment = []
+
+        references = _extract_references(
+            mock_jira_issue, site_url="https://mycompany.atlassian.net"
+        )
+
+        assert references == ["https://mycompany.atlassian.net/browse/TEST-123"]
+
+    def test_create_defect_from_issue_threads_site_url(
+        self, mock_jira_issue, sample_field_metadata
+    ):
+        """create_defect_from_issue forwards site_url into the built references."""
+        mock_jira_issue.permalink.return_value = (
+            "https://api.atlassian.com/ex/jira/abc-cloud-id/browse/TEST-123"
+        )
+        sync_context = SyncContext(
+            statusAttribute="status",
+            priorityAttribute="priority",
+            classAttribute="issuetype",
+            udaSyncOptions={},
+        )
+
+        result = create_defect_from_issue(
+            mock_jira_issue,
+            sample_field_metadata,
+            sync_context=sync_context,
+            site_url="https://mycompany.atlassian.net",
+        )
+
+        assert result.references[0] == "https://mycompany.atlassian.net/browse/TEST-123"
 
 
 @pytest.mark.unit

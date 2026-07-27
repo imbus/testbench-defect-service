@@ -94,6 +94,7 @@ class DefectToJiraMapper:
                 defect.reporter,
                 allowed,
             )
+        if defect.reporter:
             self._set_field(
                 fields,
                 "creator",

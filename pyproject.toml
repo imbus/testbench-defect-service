@@ -76,7 +76,7 @@ Changelog = "https://github.com/imbus/testbench-defect-service/blob/main/CHANGEL
 testbench-defect-service = "testbench_defect_service.cli:cli"
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 no_implicit_optional = true
 strict_optional = true
 warn_return_any = true

@@ -13,6 +13,11 @@ from sanic import NotFound
 
 from testbench_defect_service.clients.jira.config import JiraDefectClientConfig
 from testbench_defect_service.clients.jira.defect_mapping_service import DefectToJiraMapper
+from testbench_defect_service.clients.jira.jira_oauth import (
+    JiraAuthExpiredError,
+    configure_oauth2_runtime,
+    get_valid_jira_token_sync,
+)
 from testbench_defect_service.clients.jira.utils import (
     ensure_issuetype_format,
     iso8601_to_unix_timestamp,
@@ -22,6 +27,21 @@ from testbench_defect_service.models.defects import Defect, Login, SyncContext
 
 _JIRA_GATEWAY_BASE = "https://api.atlassian.com/ex/jira/{cloud_id}"
 _TENANT_INFO_PATH = "/_edge/tenant_info"
+
+
+class JiraConnectionError(ConnectionError):
+    """Jira connection/authentication failure that preserves the HTTP status code.
+
+    Subclasses the builtin ``ConnectionError`` (an ``OSError``) so existing
+    ``except ConnectionError`` handlers keep working unchanged, but additionally
+    carries the originating HTTP status code (e.g. 401, 403) so callers can map
+    it to the correct response — 401 Unauthorized vs 403 Forbidden — instead of
+    flattening every auth failure into a single generic error.
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class JiraClient:
@@ -89,39 +109,6 @@ class JiraClient:
             return self._connect()
         raise NotImplementedError(f"Unsupported auth_type {self.config.auth_type}")
 
-    # def _connect_old(self) -> JIRA:
-    #     logger.debug("Connecting with shared credentials (auth_type=%s)", self.config.auth_type)
-    #     if self.config.auth_type == "basic":
-    #         return JIRA(
-    #             server=self.config.server_url,
-    #             options=self._options,
-    #             basic_auth=(self.config.username or "", self.config.password or ""),
-    #             max_retries=self.config.max_retries,
-    #             timeout=self.config.timeout,
-    #         )
-    #     if self.config.auth_type == "token":
-    #         return JIRA(
-    #             server=self.config.server_url,
-    #             options=self._options,
-    #             token_auth=self.config.token,
-    #             max_retries=self.config.max_retries,
-    #             timeout=self.config.timeout,
-    #         )
-    #     if self.config.auth_type == "oauth1":
-    #         return JIRA(
-    #             server=self.config.server_url,
-    #             options=self._options,
-    #             oauth={
-    #                 "access_token": self.config.oauth1_access_token,
-    #                 "access_token_secret": self.config.oauth1_access_token_secret,
-    #                 "consumer_key": self.config.oauth1_consumer_key,
-    #                 "key_cert": self.config.oauth1_key_cert,
-    #             },
-    #             max_retries=self.config.max_retries,
-    #             timeout=self.config.timeout,
-    #         )
-    #     raise NotImplementedError(f"Unsupported auth_type {self.config.auth_type}")
-
     def _connect(self) -> JIRA:
         """Connect to Jira using the configured authentication.
 
@@ -141,25 +128,34 @@ class JiraClient:
         - A 401 on DC basic auth means wrong credentials, not a scoped token.
         """
         try:
+            if self.config.auth_type == "oauth2":
+                return self._connect_via_gateway()
+
             jira = self._create_jira_instance(self.config.server_url)
         except NotImplementedError:
             raise
         except Exception as e:
             status_code = getattr(e, "status_code", None)
             detail = f"HTTP {status_code}: {e}" if status_code else f"{type(e).__name__}: {e}"
-            raise ConnectionError(
+            raise JiraConnectionError(
                 f"Could not connect to Jira at '{self.config.server_url}' "
-                f"(auth_type='{self.config.auth_type}'): {detail}"
+                f"(auth_type='{self.config.auth_type}'): {detail}",
+                status_code=status_code,
             ) from e
 
         try:
             auth_ok = self._verify_connection(jira)
+        except JiraConnectionError:
+            # Already carries an actionable message and status code (e.g. 403);
+            # propagate as-is rather than re-wrapping it generically.
+            raise
         except Exception as e:
             status_code = getattr(e, "status_code", None)
             detail = f"HTTP {status_code}: {e}" if status_code else f"{type(e).__name__}: {e}"
-            raise ConnectionError(
+            raise JiraConnectionError(
                 f"Could not connect to Jira at '{self.config.server_url}' "
-                f"(auth_type='{self.config.auth_type}'): {detail}"
+                f"(auth_type='{self.config.auth_type}'): {detail}",
+                status_code=status_code,
             ) from e
 
         if auth_ok:
@@ -179,20 +175,22 @@ class JiraClient:
             try:
                 return self._connect_via_gateway()
             except ConnectionError as gateway_error:
-                raise ConnectionError(
+                raise JiraConnectionError(
                     f"Could not connect to Jira at '{self.config.server_url}' "
                     f"(auth_type='{self.config.auth_type}'): "
                     "Direct authentication failed and gateway fallback also failed: "
-                    f"{gateway_error}"
+                    f"{gateway_error}",
+                    status_code=getattr(gateway_error, "status_code", None),
                 ) from gateway_error
 
-        raise ConnectionError(
+        raise JiraConnectionError(
             f"Could not connect to Jira at '{self.config.server_url}' "
             f"(auth_type='{self.config.auth_type}'): "
-            "Authentication failed (HTTP 401). Please check your credentials."
+            "Authentication failed (HTTP 401). Please check your credentials.",
+            status_code=HTTPStatus.UNAUTHORIZED,
         )
 
-    def _create_jira_instance(self, server: str) -> JIRA:
+    def _create_jira_instance(self, server: str, token_override: str | None = None) -> JIRA:
         """Create a JIRA instance against *server* using the configured auth."""
         logger.debug(
             "Creating JIRA instance for '%s' (auth_type='%s')", server, self.config.auth_type
@@ -227,6 +225,15 @@ class JiraClient:
                 max_retries=self.config.max_retries,
                 timeout=self.config.timeout,
             )
+        if self.config.auth_type == "oauth2":
+            token = token_override or self.config.token
+            return JIRA(
+                server=server,
+                options=options,
+                token_auth=token,
+                max_retries=self.config.max_retries,
+                timeout=self.config.timeout,
+            )
         raise NotImplementedError(f"Unsupported auth_type {self.config.auth_type}")
 
     def _build_jira_options(self) -> dict[str, Any]:
@@ -244,8 +251,13 @@ class JiraClient:
         during construction is public and returns HTTP 200 regardless of whether
         the credentials are valid.
 
-        Returns ``True`` on success, ``False`` on HTTP 401.  Any other error is
-        re-raised so the caller can surface it as a hard connection failure.
+        Returns ``True`` on success and ``False`` on HTTP 401 (invalid/expired
+        credentials — a 401 on Cloud + basic auth also drives the scoped-token
+        gateway fallback).  An HTTP 403 (authenticated but not permitted — e.g. a
+        scoped API token missing the required user-read scope) is raised as a
+        ``JiraConnectionError`` carrying the 403 status so the caller can surface
+        a distinct 403 Forbidden response with actionable guidance.  Any other
+        error is re-raised so the caller can surface it as a hard failure.
         """
         try:
             jira.myself()
@@ -254,6 +266,15 @@ class JiraClient:
             if e.status_code == HTTPStatus.UNAUTHORIZED:
                 logger.debug("Connection verification returned 401 for '%s'.", jira.server_url)
                 return False
+            if e.status_code == HTTPStatus.FORBIDDEN:
+                logger.debug("Connection verification returned 403 for '%s'.", jira.server_url)
+                raise JiraConnectionError(
+                    f"Access denied by Jira at '{self.config.server_url}' (HTTP 403). "
+                    "The credentials are valid but lack the required permissions/scopes "
+                    "(e.g. a scoped API token missing the user-read scope). "
+                    f"Details: {e}",
+                    status_code=HTTPStatus.FORBIDDEN,
+                ) from e
             raise
 
     def _connect_via_gateway(self) -> JIRA:
@@ -276,11 +297,32 @@ class JiraClient:
             f"Connecting to Jira via Atlassian gateway (scoped API token mode): {gateway_url}"
         )
 
-        jira = self._create_jira_instance(gateway_url)
+        if self.config.auth_type == "oauth2":
+            configure_oauth2_runtime(
+                refresh_token=self.config.oauth2_refresh_token,
+                client_id=self.config.oauth2_client_id,
+                client_secret=self.config.oauth2_client_secret,
+                expires_at=self.config.oauth2_expires_at,
+            )
+            try:
+                initial_oauth2_token = get_valid_jira_token_sync(is_first_call=True)
+            except JiraAuthExpiredError as exc:
+                raise ConnectionError(
+                    "Jira OAuth2 authorization expired while establishing the initial connection. "
+                    "Please re-run the setup wizard to authorize Jira OAuth2."
+                ) from exc
+        else:
+            initial_oauth2_token = None
+
+        jira = self._create_jira_instance(gateway_url, token_override=initial_oauth2_token)
+        if self.config.auth_type == "oauth2":
+            self._patch_session_for_oauth2_token(jira._session)
+
         if not self._verify_connection(jira):
-            raise ConnectionError(
+            raise JiraConnectionError(
                 f"Authentication failed against the Atlassian gateway '{gateway_url}'. "
-                f"Please verify your credentials for '{self.config.server_url}'."
+                f"Please verify your credentials for '{self.config.server_url}'.",
+                status_code=HTTPStatus.UNAUTHORIZED,
             )
 
         self._uses_gateway = True
@@ -309,6 +351,25 @@ class JiraClient:
             return original_send(request, **kwargs)
 
         session.send = _rewriting_send
+
+    def _patch_session_for_oauth2_token(self, session: Any) -> None:
+        """Inject a valid OAuth2 bearer token into every Jira HTTP request."""
+        original_send = session.send
+
+        def _oauth2_send(request: Any, **kwargs: Any) -> Any:
+            try:
+                token = get_valid_jira_token_sync()
+            except JiraAuthExpiredError as exc:
+                raise ConnectionError(
+                    "Jira OAuth2 authorization expired. "
+                    "Please re-run the setup wizard to authorize Jira OAuth2."
+                ) from exc
+
+            if token:
+                request.headers["Authorization"] = f"Bearer {token}"
+            return original_send(request, **kwargs)
+
+        session.send = _oauth2_send
 
     def _fetch_cloud_id(self) -> str | None:
         """Fetch the Atlassian Cloud ID for this Jira instance.
@@ -559,8 +620,8 @@ class JiraClient:
             issue = self.jira.create_issue(issue_fields, True)
             logger.info("Created issue '%s' in project '%s'", issue.key, project_key)
             self.transition_issue_status(issue, defect)
-            if defect.references:
-                self.add_attachments(issue, defect.references)
+            # if defect.references:
+            #     self.add_attachments(issue, defect.references)
             return issue
         except JIRAError as exc:
             logger.error("Failed to create issue in project %s: %s", project_key, exc)
@@ -595,8 +656,8 @@ class JiraClient:
             issue.update(fields=update_fields)
             logger.info("Updated issue '%s' in project '%s'", issue.key, project_key)
             self.transition_issue_status(issue, defect)
-            if defect.references:
-                self.add_attachments(issue, defect.references)
+            # if defect.references:
+            #     self.add_attachments(issue, defect.references)
         except JIRAError as exc:
             logger.error("Failed to update issue in project %s: %s", project_key, exc)
             raise ValueError(f"Unable to update Jira issue: {exc}") from exc
