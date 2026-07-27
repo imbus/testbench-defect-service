@@ -7,7 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.1.0] - 2026-04-20
+## [0.2.0][0.2.0] - 2026-07-27
+
+### Added
+
+- OAuth2 authentication support for the Jira backend, including client ID/secret
+  configuration, refresh token handling, and token cache management.
+- Setup wizard for retrieving and storing Jira OAuth2 tokens during
+  configuration.
+- Extended defect creation via `create_extended_defect_from_issue`.
+- `site_url` parameter for defect creation to generate correct permalinks and
+  attachment URLs.
+- Reporter field mapping when creating and updating Jira issues.
+- Migration procedure and documentation for transitioning from the previous
+  Defect Service architecture (including reuse of existing DMProxy configuration
+  values).
+- Troubleshooting guidance for Jira synchronization issues related to
+  permissions.
+
+### Changed
+
+- Refactored error handling in `JiraDefectClient`; introduced
+  `JiraConnectionError` to preserve HTTP status codes and improve error
+  messaging.
+- OAuth2 client ID and secret are now required; runtime client credentials can
+  override cached token values.
+- Renamed `fetch_all_custom_fields` to `get_all_project_fields` for clarity.
+- `fetch_project_issue_fields` now falls back to the `createmeta` endpoint for
+  improved reliability.
+- Default name in `JiraDefectClientConfig` changed to `DefectService`.
+- Documentation clarifications, formatting, and consistency improvements.
+
+### Removed
+
+- Deprecated `_connect_old` method from `JiraClient`.
+- Control fields from defect mapping, streamlining the mapping logic.
+- Duplicate attributes.
+
+## [0.1.0][0.1.0] - 2026-04-20
 
 ### Added
 
@@ -21,4 +58,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI entry point (`testbench-defect-service`) with `init`, `start`, and `set-credentials` commands.
 - `jira` optional dependency group for Jira backend support.
 
+[0.2.0]: https://github.com/imbus/testbench-defect-service/releases/tag/v0.2.0
 [0.1.0]: https://github.com/imbus/testbench-defect-service/releases/tag/v0.1.0
