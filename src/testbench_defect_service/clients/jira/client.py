@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +15,10 @@ from testbench_defect_service.clients.jira.jira_client import JiraClient
 from testbench_defect_service.clients.jira.utils import (
     build_project_dict,
     create_defect_from_issue,
+    create_extended_defect_from_issue,
     extract_changelog_attributes,
     extract_static_attributes,
-    extract_valuetype_from_issue_field,
+    get_value_type_from_jira_field,
 )
 from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import (
@@ -52,16 +54,27 @@ class JiraDefectClient(AbstractDefectClient):
         if self._jira_client is None:
             try:
                 self._jira_client = JiraClient(self.config)
-            except ConnectTimeout:
+            except ConnectionError as exc:
+                status_code = getattr(exc, "status_code", None)
+                logger.error(
+                    "Jira connection/authentication failed (status=%s): %s", status_code, exc
+                )
+                if status_code == HTTPStatus.FORBIDDEN:
+                    raise Forbidden(str(exc)) from exc
+
+                if status_code == HTTPStatus.UNAUTHORIZED:
+                    raise Unauthorized(str(exc)) from exc
+                raise NotFound(str(exc)) from exc
+            except ConnectTimeout as exc:
                 logger.error(
                     "Connection timeout: could not reach Jira server at %s", self.config.server_url
                 )
                 raise NotFound(
                     f"Unable to connect to Jira server at {self.config.server_url}: "
                     "Connection timeout",
-                ) from ConnectTimeout
+                ) from exc
             except JIRAError as exc:
-                if exc.status_code == 401:  # noqa: PLR2004
+                if exc.status_code == HTTPStatus.UNAUTHORIZED:
                     logger.error(
                         "Jira API error during authentication (token expired or wrong credentials):"
                         "Status: %s, URL: %s",
@@ -73,8 +86,8 @@ class JiraDefectClient(AbstractDefectClient):
                         "credentials provided are incorrect. Please verify your settings "
                         "and try again."
                         f"Details: Status: {exc.status_code} | Endpoint: {exc.url}"
-                    ) from JIRAError
-                if exc.status_code == 403:  # noqa: PLR2004
+                    ) from exc
+                if exc.status_code == HTTPStatus.FORBIDDEN:
                     logger.error(
                         "Jira API access denied: Status: %s, URL: %s",
                         exc.status_code,
@@ -84,7 +97,7 @@ class JiraDefectClient(AbstractDefectClient):
                         "Access Denied: You do not have the required permissions to perform this "
                         "action in Jira. Check your project roles or contact your administrator."
                         f"Details: Status: {exc.status_code} | Endpoint: {exc.url}"
-                    ) from JIRAError
+                    ) from exc
                 logger.error(
                     "Jira API error during authentication: Status: %s, URL: %s",
                     exc.status_code,
@@ -93,7 +106,7 @@ class JiraDefectClient(AbstractDefectClient):
                 raise Unauthorized(
                     f"Jira API error during authentication: Status: {exc.status_code},"
                     f" URL: {exc.url}"
-                ) from JIRAError
+                ) from exc
         return self._jira_client
 
     @property
@@ -266,6 +279,7 @@ class JiraDefectClient(AbstractDefectClient):
         control_fields: dict[str, list[str]],
         issue_type: dict,
     ):
+        skipped = []
         for _, field_content in issue_type.get("fields", {}).items():
             field_name = field_content.get("name", "")
             if field_content.get("allowedValues", {}):
@@ -279,14 +293,14 @@ class JiraDefectClient(AbstractDefectClient):
                 control_fields[field_name] = control_field_values
 
             else:
-                pass
-                # logger.warning(
-                #     "Control field '%s' in project '%s' has no allowedValues; "
-                #     "it may be of an incompatible type. Schema: %s",
-                #     field_name,
-                #     project,
-                #     field_content.get("schema", {}),
-                # )
+                skipped.append(field_name)
+        if skipped:
+            logger.debug(
+                "Skipped control field extraction for issue type '%s'"
+                " due to missing allowedValues: %s",
+                issue_type.get("name", "<unknown>"),
+                skipped,
+            )
 
     def get_defects(self, project: str, sync_context: SyncContext) -> ProtocolledDefectSet:
         protocol = Protocol()
@@ -311,8 +325,8 @@ class JiraDefectClient(AbstractDefectClient):
                         create_defect_from_issue(
                             issue,
                             fields,
-                            jira_server_url=self.config.server_url,
                             sync_context=sync_context,
+                            site_url=self.jira_client.site_url,
                         )
                     )
                 except (ValueError, KeyError, AttributeError, TypeError) as exc:
@@ -390,8 +404,8 @@ class JiraDefectClient(AbstractDefectClient):
                     defect = create_defect_from_issue(
                         issue,
                         fields,
-                        jira_server_url=self.config.server_url,
                         sync_context=sync_context,
+                        site_url=self.jira_client.site_url,
                     )
                     defects.append(defect)
                 except (ValueError, KeyError, AttributeError, TypeError) as exc:
@@ -427,7 +441,7 @@ class JiraDefectClient(AbstractDefectClient):
         not configured (None). Uses per-user auth only when explicitly disabled.
         """
         shared = self._get_config_value("enable_shared_auth", project=project)
-        if shared is not False or self.config.auth_type == "oauth1":
+        if shared is not False or self.config.auth_type in {"oauth1", "oauth2"}:
             logger.debug("Using shared authentication for project '%s'", project)
             return self.jira_client
         logger.debug("Using per-user authentication for project '%s'", project)
@@ -476,7 +490,7 @@ class JiraDefectClient(AbstractDefectClient):
                 "Defect created successfully in Jira",
                 protocol_code=ProtocolCode.INSERT_SUCCESS,
             )
-        except (RuntimeError, ValueError, KeyError, AttributeError, TypeError) as exc:
+        except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
             logger.error("Failed to create Jira issue for project '%s': %s", project_key, exc)
             protocol.add_general_error(
                 "Failed to create Jira issue", protocol_code=ProtocolCode.INSERT_ERROR
@@ -626,11 +640,11 @@ class JiraDefectClient(AbstractDefectClient):
             ]
 
             try:
-                defect = create_defect_from_issue(
+                defect = create_extended_defect_from_issue(
                     issue,
                     fields_list,
-                    jira_server_url=self.config.server_url,
                     sync_context=sync_context,
+                    site_url=self.jira_client.site_url,
                 )
                 return self._build_defect_with_attributes(
                     defect=defect,
@@ -668,7 +682,7 @@ class JiraDefectClient(AbstractDefectClient):
         return [
             UserDefinedAttribute(
                 name=field["name"],
-                valueType=extract_valuetype_from_issue_field(field),
+                valueType=get_value_type_from_jira_field(field),
                 mustField=getattr(field, "required", None),
             )
             for field in self.jira_client.get_all_project_fields(project=project_key)

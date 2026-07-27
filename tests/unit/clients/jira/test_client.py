@@ -1596,12 +1596,10 @@ class TestExtractControlFieldValuesJdc:
 
     def test_extracts_matching_fields_by_name(self, mock_jira_client_instance):
         """Test that fields matching by name are extracted."""
-        av1, av2, av3 = Mock(), Mock(), Mock()
-        av1.name, av2.name, av3.name = "Critical", "Major", "Minor"
         mock_field = Mock()
         mock_field.name = "Severity"
         mock_field.fieldId = "customfield_10001"
-        mock_field.allowedValues = [av1, av2, av3]
+        mock_field.allowedValues = [{"name": "Critical"}, {"name": "Major"}, {"name": "Minor"}]
 
         mock_jira_client_instance.jira_client.fetch_project_issue_fields = Mock(
             return_value=[mock_field]
@@ -1615,12 +1613,10 @@ class TestExtractControlFieldValuesJdc:
 
     def test_extracts_matching_fields_by_id(self, mock_jira_client_instance):
         """Test that fields matching by fieldId are extracted."""
-        av1, av2 = Mock(), Mock()
-        av1.name, av2.name = "High", "Low"
         mock_field = Mock()
         mock_field.name = "Severity"
         mock_field.fieldId = "customfield_10001"
-        mock_field.allowedValues = [av1, av2]
+        mock_field.allowedValues = [{"name": "High"}, {"name": "Low"}]
 
         mock_jira_client_instance.jira_client.fetch_project_issue_fields = Mock(
             return_value=[mock_field]

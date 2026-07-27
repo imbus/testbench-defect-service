@@ -5,7 +5,7 @@ title: Windows Service Installation
 
 The TestBench Defect Service can be deployed as a Windows service for automatic startup and process management.
 
-For the full installation guide covering NSSM, FireDaemon, YAJSW, and Windows Task Scheduler, see the [**Windows Service Installation Guide**](../docs/windows-service-installation).
+For the full installation guide covering NSSM, FireDaemon, YAJSW, and Windows Task Scheduler, see the [**Windows Service Installation Guide**](/testbench-ecosystem-documentation/docs/windows-service-installation).
 
 Use these values when following the central guide:
 
