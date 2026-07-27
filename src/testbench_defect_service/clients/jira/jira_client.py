@@ -965,7 +965,7 @@ class JiraClient:
                             options=self.jira._options, session=self.jira._session, raw=field_data
                         )
         except Exception as e:
-            logger.debug(f"Error fetching issue fields for projecte {project_key}: {e}")
+            logger.debug(f"Error fetching issue fields for project {project_key}: {e}")
             raise
 
         return list(fields_dict.values())
