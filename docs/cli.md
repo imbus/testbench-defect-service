@@ -21,6 +21,9 @@ testbench-defect-service [COMMAND] [OPTIONS]
 | [`configure`](#configure) | Create or update an existing configuration interactively. |
 | [`set-credentials`](#set-credentials) | Set the service username and password. |
 | [`start`](#start) | Start the defect service. |
+| [`convert-config`](#convert-config) | Convert Jira `.conf` or Excel `.properties` into TestBench TOML config. |
+| [`convert-jira-conf`](#convert-jira-conf-alias) | Alias for Jira conversion. |
+| [`convert-excel-properties`](#convert-excel-properties-alias) | Alias for Excel conversion. |
 
 ---
 
@@ -178,6 +181,61 @@ testbench-defect-service start --ssl-cert certs/server.crt --ssl-key certs/serve
 
 # Start with mutual TLS (mTLS)
 testbench-defect-service start --ssl-cert certs/server.crt --ssl-key certs/server.key --ssl-ca-cert certs/ca.crt
+```
+
+---
+
+## `convert-config`
+
+Convert a legacy config file into TestBench Defect Service TOML.
+
+```bash
+testbench-defect-service convert-config INPUT_FILE OUTPUT_FILE [OPTIONS]
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--type [jira\|excel]` | Input file type to convert (default: `jira`) |
+| `--overwrite` | Overwrite `OUTPUT_FILE` with a full base TOML config |
+| `--add-project` | Append a project section to an existing TOML config |
+| `--project-name TEXT` | Project key to use with `--add-project` |
+
+If neither `--overwrite` nor `--add-project` is passed and `OUTPUT_FILE` already exists,
+the command asks interactively whether to overwrite or append a project section.
+
+### Examples
+
+```bash
+# Create or overwrite config.toml from JiraRest.conf
+testbench-defect-service convert-config JiraRest.conf config.toml --type jira --overwrite
+
+# Create or overwrite config.toml from ExcelWrapper.properties
+testbench-defect-service convert-config ExcelWrapper.properties config.toml --type excel --overwrite
+
+# Append a project section to an existing config
+testbench-defect-service convert-config JiraRest.conf config.toml --type jira --add-project --project-name MYPROJ
+```
+
+---
+
+## `convert-jira-conf` alias
+
+Backward-compatible alias for:
+
+```bash
+testbench-defect-service convert-config ... --type jira
+```
+
+---
+
+## `convert-excel-properties` alias
+
+Backward-compatible alias for:
+
+```bash
+testbench-defect-service convert-config ... --type excel
 ```
 
 ---

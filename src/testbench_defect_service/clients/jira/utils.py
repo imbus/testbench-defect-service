@@ -31,7 +31,7 @@ def build_project_dict(projects: list[Project]) -> dict[str, Project]:
     return {f"{project.name} ({project.key})": project for project in projects}
 
 
-def extract_valuetype_from_issue_field(field: dict[str, Any]) -> ValueType:
+def get_value_type_from_jira_field(field: dict[str, Any]) -> ValueType:
     """Return ``ValueType.BOOLEAN`` or ``ValueType.STRING`` for a Jira issue-field schema."""
     if field.get("schema", {}).get("type") == "boolean":
         return ValueType.BOOLEAN
@@ -39,13 +39,40 @@ def extract_valuetype_from_issue_field(field: dict[str, Any]) -> ValueType:
 
 
 def create_defect_from_issue(
-    issue: Issue, fields: list[dict[str, Any]], jira_server_url: str, sync_context: SyncContext
+    issue: Issue,
+    fields: list[dict[str, Any]],
+    sync_context: SyncContext,
+    site_url: str | None = None,
+) -> DefectWithID:
+    return _build_defect(issue, fields, sync_context, is_extended=False, site_url=site_url)
+
+
+def create_extended_defect_from_issue(
+    issue: Issue,
+    fields: list[dict[str, Any]],
+    sync_context: SyncContext,
+    site_url: str | None = None,
+) -> DefectWithID:
+    """Convert a Jira *issue* into an extended ``DefectWithID`` model,
+    extracting ALL user fields."""
+    return _build_defect(issue, fields, sync_context, is_extended=True, site_url=site_url)
+
+
+def _build_defect(
+    issue: Issue,
+    fields: list[dict[str, Any]],
+    sync_context: SyncContext,
+    is_extended: bool = False,
+    site_url: str | None = None,
 ) -> DefectWithID:
     """Convert a Jira *issue* into a ``DefectWithID`` model.
 
     Args:
         issue: The Jira issue object to convert.
         fields: Field metadata dicts (keys ``'id'`` and ``'name'``) for user-defined fields.
+        site_url: Human-facing Jira site URL used to build the browse permalink. When
+            connecting via the Atlassian API gateway (e.g. OAuth2), ``issue.permalink()``
+            would otherwise point at the gateway host instead of the configured server URL.
     """
     return DefectWithID(
         id=DefectID(root=str(issue.key)),
@@ -55,22 +82,20 @@ def create_defect_from_issue(
         status=_get_control_field_value(sync_context.statusAttribute, issue.fields, fields),
         classification=_get_control_field_value(sync_context.classAttribute, issue.fields, fields),
         priority=_get_control_field_value(sync_context.priorityAttribute, issue.fields, fields),
-        userDefinedFields=_extract_user_defined_fields(issue, fields),
+        userDefinedFields=_extract_user_defined_fields(issue, fields, sync_context, is_extended),
         lastEdited=datetime.fromisoformat(jira_datetime_to_iso(issue.fields.updated)),
-        references=_extract_references(issue),
+        references=_extract_references(issue, site_url),
         principal=Login(username="", password=""),
     )
 
 
-def _get_control_field_value(
-    controll_field: str | None, issue_fields: Any, meta_fields: Any
-) -> str:
-    """Return a readable value for *controll_field* if the key exists in *fields*."""
-    if not controll_field:
+def _get_control_field_value(control_field: str | None, issue_fields: Any, meta_fields: Any) -> str:
+    """Return a readable value for *control_field* if the key exists in *fields*."""
+    if not control_field:
         return ""
 
     field_values = _to_field_dict(issue_fields)
-    key = _resolve_control_field_key(controll_field, field_values, meta_fields)
+    key = _resolve_control_field_key(control_field, field_values, meta_fields)
     if key is None:
         return ""
     return _stringify_control_value(field_values.get(key))
@@ -88,13 +113,13 @@ def _to_field_dict(fields: Any) -> dict[str, Any]:
 
 
 def _resolve_control_field_key(
-    controll_field: str, field_values: dict[str, Any], meta_fields
+    control_field: str, field_values: dict[str, Any], meta_fields
 ) -> str | None:
     """Resolve a configured control field to an existing Jira field key."""
-    if controll_field in field_values:
-        return controll_field
+    if control_field in field_values:
+        return control_field
     for field in meta_fields:
-        if field.get("name", None) == controll_field:
+        if field.get("name", None) == control_field:
             return str(field.get("id", None))
     return None
 
@@ -114,11 +139,18 @@ def _stringify_control_value(value: Any) -> str:
 
 
 def _extract_user_defined_fields(
-    issue: Issue, fields: list[dict[str, Any]]
+    issue: Issue,
+    fields: list[dict[str, Any]],
+    sync_context: SyncContext,
+    is_extended: bool = False,
 ) -> list[UserDefinedFieldProperties]:
     """Build user-defined field properties from *issue*."""
     result: list[UserDefinedFieldProperties] = []
     for field in fields:
+        if (
+            not sync_context.udaSyncOptions or field["name"] not in sync_context.udaSyncOptions
+        ) and not is_extended:
+            continue
         value = getattr(issue.fields, field["id"], None)
         if "<jira.resources.PropertyHolder object at" in str(
             value
@@ -151,16 +183,26 @@ def _safe_display_name(obj: Any) -> str:
     return obj.displayName if obj else ""
 
 
-def _extract_references(issue: Issue) -> list[str]:
-    """Return attachment URLs / filenames from *issue*."""
-    attachments = getattr(issue.fields, "attachment", None)
-    if not attachments:
-        attachment_urls = []
-    else:
+def _extract_references(issue: Issue, site_url: str | None = None) -> list[str]:
+    """Return the issue permalink and attachment URLs / filenames from *issue*.
+
+    When *site_url* is given it is used to build the browse permalink, so the
+    reference points at the configured Jira site rather than the Atlassian API
+    gateway host used for the underlying connection (e.g. under OAuth2).
+    """
+    permalink = f"{site_url.rstrip('/')}/browse/{issue.key}" if site_url else issue.permalink()
+
+    attachments = getattr(issue.fields, "attachment", None) or []
+    if site_url is not None:
         attachment_urls = [
-            att.content if hasattr(att, "content") else str(att) for att in attachments
+            f"{site_url.rstrip('/')}/rest/api/2/attachment/content/{att.id}"
+            if hasattr(att, "id")
+            else str(att)
+            for att in attachments
         ]
-    return [issue.permalink(), *attachment_urls]
+    else:
+        attachment_urls = [getattr(att, "content", None) or str(att) for att in attachments]
+    return [permalink, *attachment_urls]
 
 
 def jira_datetime_to_iso(date_str: str) -> str:
@@ -251,9 +293,37 @@ def extract_changelog_attributes(
                 attributes[key] = f"{item.fromString} → {item.toString}"
 
 
-def extract_static_attributes(defect: DefectWithID, attribute_fields: list[str]) -> dict[str, str]:
+def extract_static_attributes(  # noqa: C901
+    defect: DefectWithID,
+    attribute_fields: list[str],
+    issue: Issue,
+    fields: list[dict[Any, Any]],
+) -> dict[str, str]:
     """Return a dict of attribute values from *defect* for the given *attribute_fields*."""
     attributes: dict[str, str] = {}
+    for field in fields:
+        if field["name"] not in attribute_fields:
+            continue
+        value = getattr(issue.fields, field["id"], None)
+        if "<jira.resources.PropertyHolder object at" in str(
+            value
+        ) or "com.atlassian.greenhopper" in str(value):
+            continue
+
+        if "<JIRA" in str(value):
+            if isinstance(value, list):
+                formatted_value = []
+                for elem in value:
+                    formatted_value.append(str(elem))
+                value = formatted_value
+            elif isinstance(value, jira.resources.TimeTracking):
+                value = value.timeSpent if hasattr(value, "timeSpent") else None
+
+        if isinstance(value, list) and all(isinstance(v, str) for v in value):
+            value = ", ".join(value)
+
+        attributes[field["name"]] = str(value) if value is not None else ""
+
     for attr in attribute_fields:
         value = getattr(defect, attr, None)
         if value is not None:

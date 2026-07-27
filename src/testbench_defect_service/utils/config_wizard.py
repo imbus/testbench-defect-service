@@ -5,6 +5,7 @@ import click
 import questionary
 from pydantic import BaseModel
 
+from testbench_defect_service.clients.jira.jira_oauth import seed_oauth2_refresh_token
 from testbench_defect_service.clients.utils import (
     get_client_config_class,
     get_defect_client_from_client_class_str,
@@ -181,6 +182,11 @@ def configure_client(
     if client_config is None:
         return None
 
+    if client_type == "jira" and client_config.get("auth_type") == "oauth2":
+        refresh_token = client_config.get("oauth2_refresh_token")
+        if isinstance(refresh_token, str) and refresh_token:
+            seed_oauth2_refresh_token(refresh_token)
+
     return merge_with_defaults(client_config, config_class)
 
 
@@ -339,10 +345,11 @@ def configure_client_only(config_path: Path):
     if client_type == "custom" and not change_client_type:
         client_class = client_class_path
     else:
-        client_class = get_client_class(client_type)
-        if client_class is None:
+        raw_client_class = get_client_class(client_type)
+        if raw_client_class is None:
             click.echo("\nConfiguration cancelled.")
             return
+        client_class = raw_client_class
 
     client_config = configure_client(client_type, client_class, service_config)
     if client_config is None:
@@ -629,3 +636,9 @@ def run_full_wizard(config_path: Path):  # noqa: C901, PLR0912, PLR0915
         f"http://{host or DEFAULT_HOST}:{port or DEFAULT_PORT}/docs"
     )
     click.echo()
+
+
+def run_jira_oauth_wizard() -> str | None:
+    click.echo("Jira OAuth2 refresh token is not configured. ")
+    refresh_token = questionary.text("Please enter your OAuth2 refresh token: ").ask()
+    return refresh_token if isinstance(refresh_token, str) and refresh_token else None
