@@ -136,6 +136,24 @@ class TestInit:
     def test_config_stored(self, cloud_client):
         assert cloud_client.config.server_url == "https://test.atlassian.net"
 
+    def test_proxy_url_passed_to_options(self):
+        cfg = _make_config(proxy_url="http://proxy.example.com:8080")
+        with patch("testbench_defect_service.clients.jira.jira_client.JIRA") as mock_jira:
+            mock_jira.return_value = _make_jira()
+            JiraClient(cfg)
+        _, kwargs = mock_jira.call_args
+        assert kwargs["options"]["proxies"] == {
+            "http": "http://proxy.example.com:8080",
+            "https": "http://proxy.example.com:8080",
+        }
+
+    def test_no_proxy_url_omits_proxies(self):
+        with patch("testbench_defect_service.clients.jira.jira_client.JIRA") as mock_jira:
+            mock_jira.return_value = _make_jira()
+            JiraClient(_make_config())
+        _, kwargs = mock_jira.call_args
+        assert "proxies" not in kwargs["options"]
+
 
 @pytest.mark.unit
 class TestConnect:
