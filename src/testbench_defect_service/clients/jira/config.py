@@ -221,6 +221,10 @@ class JiraDefectClientConfig(BaseModel):
         },
     )
 
+    proxy_url: str | None = Field(
+        default=None, description="Proxy URL (leave empty if no proxy is needed)"
+    )
+
     defect_jql: str = Field(
         "project = '{project}' AND issuetype in standardIssueTypes()",
         description="JQL query template for fetching defects",

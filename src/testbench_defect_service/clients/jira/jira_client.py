@@ -52,6 +52,11 @@ class JiraClient:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         if self.config.client_cert is not None:
             self._options["client_cert"] = self.config.client_cert
+        if self.config.proxy_url:
+            self._options["proxies"] = {
+                "http": self.config.proxy_url,
+                "https": self.config.proxy_url,
+            }
         self._uses_gateway: bool = False
         self._gateway_url: str | None = None
         if principal:
@@ -449,43 +454,63 @@ class JiraClient:
             logger.error("Error fetching project statuses for '%s': %s", project_key, e)
             return []
 
-    def get_all_project_fields(self, project: str | None) -> list[dict[str, Any]]:  # noqa: C901, PLR0911, PLR0912
+    def get_all_project_fields(self, project: str | None) -> list[dict[str, Any]]:  # noqa: C901, PLR0912
         if self.use_issuetypes_endpoint:
             if project:
                 fields_dict = {}
                 logger.debug("_fetch_project_issue_fields: Use issuetypes endpoint")
-                issue_types = self.jira.project_issue_types(project, maxResults=100)
-                for issue_type in issue_types:
-                    try:
-                        fields_list = self.jira.project_issue_fields(
-                            project, issue_type=issue_type.id, maxResults=100
-                        )
+                try:
+                    issue_types = self.jira.project_issue_types(project, maxResults=100)
+                except JIRAError as e:
+                    logger.warning(
+                        "project_issue_types failed for project '%s' (status=%s). "
+                        "Falling back to createmeta endpoint: %s",
+                        project,
+                        e.status_code,
+                        e,
+                    )
+                else:
+                    for issue_type in issue_types:
+                        try:
+                            fields_list = self.jira.project_issue_fields(
+                                project, issue_type=issue_type.id, maxResults=100
+                            )
 
-                        for field in fields_list:
-                            field_raw = field.raw
-                            field_raw["id"] = field_raw.get("fieldId", "")
-                            if "name" not in field_raw:
-                                field_raw["name"] = getattr(field, "name", field_raw["id"])
-                            fields_dict[field_raw.get("name")] = field_raw
+                            for field in fields_list:
+                                field_raw = field.raw
+                                field_raw["id"] = field_raw.get("fieldId", "")
+                                if "name" not in field_raw:
+                                    field_raw["name"] = getattr(field, "name", field_raw["id"])
+                                fields_dict[field_raw.get("name")] = field_raw
 
-                    except Exception as e:
-                        logger.warning(
-                            f"Error fetching issue fields for issue type {issue_type.id}: {e}"
-                        )
-                        return []
-                fields_dict["status"] = {
-                    "required": True,
-                    "name": "Status",
-                    "fieldId": "status",
-                    "id": "status",
-                }
+                        except Exception as e:
+                            logger.warning(
+                                "Error fetching issue fields for issue type %s in project '%s': %s",
+                                issue_type.id,
+                                project,
+                                e,
+                            )
 
-                return list(fields_dict.values())
-            try:
-                return self.jira.fields()
-            except JIRAError as e:
-                logger.debug(f"Error fetching custom fields: {e}")
-                return []
+                    if fields_dict:
+                        fields_dict["status"] = {
+                            "required": True,
+                            "name": "Status",
+                            "fieldId": "status",
+                            "id": "status",
+                        }
+                        return list(fields_dict.values())
+
+                    logger.warning(
+                        "No issue fields returned via issuetypes endpoint for project '%s'; "
+                        "falling back to createmeta endpoint",
+                        project,
+                    )
+            if not project:
+                try:
+                    return self.jira.fields()
+                except JIRAError as e:
+                    logger.debug(f"Error fetching custom fields: {e}")
+                    return []
         try:
             # Get creation metadata for the project
             meta = self.jira.createmeta(projectKeys=project, expand="projects.issuetypes.fields")
