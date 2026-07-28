@@ -149,29 +149,22 @@ def merge_with_defaults(
     return config_obj.model_dump(mode="json", by_alias=True, exclude_none=True, exclude=exclude)
 
 
-def maybe_store_client_secret_in_env(
+def store_client_secret_in_env(
     client_config: dict[str, Any], dotenv_path: Path = DEFAULT_DOTENV_PATH
 ) -> None:
-    """Offer to store the Jira OAuth2 client secret in a .env file instead of the config file.
+    """Always store the Jira OAuth2 client secret in a .env file, never in the config file.
 
-    When accepted, the secret is written to ``dotenv_path`` as ``JIRA_OAUTH2_CLIENT_SECRET``,
-    exported to the current process environment, and removed from ``client_config``. Because
-    ``merge_with_defaults`` excludes fields whose env var is set, the secret is then kept out of
-    the generated config file while the config still validates against the environment value.
+    When a secret is present in ``client_config`` it is written to ``dotenv_path`` as
+    ``JIRA_OAUTH2_CLIENT_SECRET``, exported to the current process environment, and removed
+    from ``client_config``. Because ``merge_with_defaults`` excludes fields whose env var is
+    set, the secret is thereby kept out of the generated config file while the config still
+    validates against the environment value.
 
-    Mutates ``client_config`` in place when the user accepts.
+    Mutates ``client_config`` in place. Does nothing when no secret is present — e.g. when the
+    secret was already supplied via the environment, in which case it never entered the config.
     """
     secret = client_config.get("oauth2_client_secret")
     if not isinstance(secret, str) or not secret:
-        return
-
-    store_in_env = questionary.confirm(
-        f"Store the OAuth2 client secret in a .env file ({JIRA_CLIENT_SECRET_ENV_VAR}) "
-        "instead of the config file?",
-        default=True,
-    ).ask()
-
-    if not store_in_env:
         return
 
     set_key(str(dotenv_path), JIRA_CLIENT_SECRET_ENV_VAR, secret)
@@ -227,7 +220,7 @@ def configure_client(
             seed_oauth2_refresh_token(refresh_token)
 
     if client_type == "jira":
-        maybe_store_client_secret_in_env(client_config)
+        store_client_secret_in_env(client_config)
 
     return merge_with_defaults(client_config, config_class)
 

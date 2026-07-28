@@ -123,7 +123,7 @@ readonly       = false
 | `password`             | String  | Jira API token for basic auth. Can also be set via`JIRA_PASSWORD`.                                        | No       | —          |
 | `token`                | String  | Personal Access Token for token auth (Jira Data Center). Can also be set via`JIRA_BEARER_TOKEN`.          | No       | —          |
 | `oauth2_client_id`     | String  | OAuth 2.0 client ID for both oauth2 flows (Jira Cloud). Can also be set via `JIRA_OAUTH2_CLIENT_ID`.         | No       | —          |
-| `oauth2_client_secret` | String  | OAuth 2.0 client secret for both oauth2 flows (Jira Cloud). Can also be set via `JIRA_OAUTH2_CLIENT_SECRET`. | No       | —          |
+| `oauth2_client_secret` | String  | OAuth 2.0 client secret for both oauth2 flows (Jira Cloud). Always stored via the `JIRA_OAUTH2_CLIENT_SECRET` environment variable (`.env`), never in `config.toml`. | No       | —          |
 | `enable_shared_auth`   | Boolean | Use service account credentials for all projects instead of per-user auth.                                  | No       | —          |
 
 There are two OAuth 2.0 flows:
@@ -204,13 +204,15 @@ and you want all access under that single identity.
 ```toml
 # config.toml
 [testbench-defect-service.client_config]
-auth_type           = "oauth2 2LO (service account)"
-oauth2_client_id    = "YOUR_CLIENT_ID"
-oauth2_client_secret = "YOUR_CLIENT_SECRET"
+auth_type        = "oauth2 2LO (service account)"
+oauth2_client_id = "YOUR_CLIENT_ID"
 ```
 
-The client id/secret may also be supplied via `JIRA_OAUTH2_CLIENT_ID` /
-`JIRA_OAUTH2_CLIENT_SECRET`. No setup-wizard token step is required.
+The `oauth2_client_secret` is **always stored as an environment variable**
+(`JIRA_OAUTH2_CLIENT_SECRET`), never in `config.toml`. When you enter it in the
+setup wizard it is written to a `.env` file automatically; you can also export it
+yourself. The client ID may be given either in `config.toml` (as above) or via
+`JIRA_OAUTH2_CLIENT_ID`. No setup-wizard token step is required.
 
 At runtime the service requests a token from the Atlassian token endpoint:
 
@@ -230,8 +232,8 @@ it nears expiry. Because it is always re-derivable from the client credentials,
 nothing is written to `tmp/oauth2_tokens.toml`.
 
 :::note
-Only the client credentials are secrets to protect. Store them in `config.toml`
-or, preferably, via the environment variables above.
+The client secret is the only value to protect and is always kept in the
+environment (`.env`), never in `config.toml`.
 :::
 
 ### OAuth 2.0 (3LO) auth — user account (Jira Cloud)
@@ -304,11 +306,11 @@ that token in `tmp/oauth2_tokens.toml`, not in `config.toml`. Only the refresh t
 disk — the service uses it to request short-lived access tokens at runtime, and those access tokens
 are held in memory only (never written to `tmp/oauth2_tokens.toml`).
 
-Persist only the OAuth client credentials in your configuration (or provide them via environment
-variables):
+Persist only the OAuth client credentials:
 
-- `oauth2_client_id` (or `JIRA_OAUTH2_CLIENT_ID`) = your client ID
-- `oauth2_client_secret` (or `JIRA_OAUTH2_CLIENT_SECRET`) = your client secret
+- `oauth2_client_id` — in `config.toml` or via `JIRA_OAUTH2_CLIENT_ID`
+- `oauth2_client_secret` — always via the `JIRA_OAUTH2_CLIENT_SECRET` environment variable
+  (`.env`); the setup wizard writes it there for you and keeps it out of `config.toml`
 
 :::note
 Do not store OAuth2 access tokens or refresh tokens in `config.toml` or `.env` files. If the refresh
