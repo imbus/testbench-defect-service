@@ -118,16 +118,25 @@ readonly       = false
 
 | Option                   | Type    | Description                                                                                                 | Required | Default     |
 | ------------------------ | ------- | ----------------------------------------------------------------------------------------------------------- | -------- | ----------- |
-| `auth_type`            | String  | Authentication method. One of `"basic"`, `"token"`, `"oauth1"`, or `"oauth2"`. | No       | `"basic"` |
+| `auth_type`            | String  | Authentication method. One of `"basic"`, `"token"`, `"oauth1"`, `"oauth2 2LO (service account)"`, or `"oauth2 3LO (user account)"`. | No       | `"basic"` |
 | `username`             | String  | Jira username for basic auth. Can also be set via`JIRA_USERNAME`.                                         | No       | —          |
 | `password`             | String  | Jira API token for basic auth. Can also be set via`JIRA_PASSWORD`.                                        | No       | —          |
 | `token`                | String  | Personal Access Token for token auth (Jira Data Center). Can also be set via`JIRA_BEARER_TOKEN`.          | No       | —          |
-| `oauth2_client_id`     | String  | OAuth 2.0 client ID for`oauth2` auth (Jira Cloud). Can also be set via `JIRA_OAUTH2_CLIENT_ID`.         | No       | —          |
-| `oauth2_client_secret` | String  | OAuth 2.0 client secret for`oauth2` auth (Jira Cloud). Can also be set via `JIRA_OAUTH2_CLIENT_SECRET`. | No       | —          |
+| `oauth2_client_id`     | String  | OAuth 2.0 client ID for both oauth2 flows (Jira Cloud). Can also be set via `JIRA_OAUTH2_CLIENT_ID`.         | No       | —          |
+| `oauth2_client_secret` | String  | OAuth 2.0 client secret for both oauth2 flows (Jira Cloud). Can also be set via `JIRA_OAUTH2_CLIENT_SECRET`. | No       | —          |
 | `enable_shared_auth`   | Boolean | Use service account credentials for all projects instead of per-user auth.                                  | No       | —          |
 
-OAuth2 access and refresh tokens are runtime values. The setup wizard collects the refresh token
-once and stores it in `tmp/oauth2_tokens.toml`; do not add token values to `config.toml` or `.env`.
+There are two OAuth 2.0 flows:
+
+- **2LO (service account)** — the `client_credentials` grant. The access token is
+  minted from `oauth2_client_id` + `oauth2_client_secret` alone; there is no user,
+  no refresh token, and no authorization step. The token is held in memory and
+  re-minted automatically when it nears expiry (nothing is written to disk).
+- **3LO (user account)** — the authorization-code grant with a refresh token. The
+  setup wizard collects the refresh token once and stores it in
+  `tmp/oauth2_tokens.toml`; the service exchanges it for access tokens at runtime.
+
+For 3LO, do not add access or refresh token values to `config.toml` or `.env`.
 
 ### Query & fields
 
@@ -184,14 +193,55 @@ token     = "your-personal-access-token"
 Personal Access Tokens expire based on the duration set in your Jira Data Center profile. If the service stops authenticating unexpectedly, check whether the token has expired and generate a new one.
 :::
 
-### OAuth 2.0 (3LO) auth (Jira Cloud)
+### OAuth 2.0 (2LO) auth — service account (Jira Cloud)
+
+Uses the Atlassian 2-Legged OAuth (2LO) `client_credentials` grant. This is the
+simplest OAuth option: the service mints its own access token from the client
+credentials — there is no user, no browser authorization step, and no refresh
+token to manage. Use it when your Atlassian app is set up as a service account
+and you want all access under that single identity.
+
+```toml
+# config.toml
+[testbench-defect-service.client_config]
+auth_type           = "oauth2 2LO (service account)"
+oauth2_client_id    = "YOUR_CLIENT_ID"
+oauth2_client_secret = "YOUR_CLIENT_SECRET"
+```
+
+The client id/secret may also be supplied via `JIRA_OAUTH2_CLIENT_ID` /
+`JIRA_OAUTH2_CLIENT_SECRET`. No setup-wizard token step is required.
+
+At runtime the service requests a token from the Atlassian token endpoint:
+
+```bash
+curl --request POST \
+  --url 'https://auth.atlassian.com/oauth/token' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "grant_type": "client_credentials",
+    "client_id": "YOUR_CLIENT_ID",
+    "client_secret": "YOUR_CLIENT_SECRET"
+  }'
+```
+
+The returned access token is held in memory only and re-minted automatically as
+it nears expiry. Because it is always re-derivable from the client credentials,
+nothing is written to `tmp/oauth2_tokens.toml`.
+
+:::note
+Only the client credentials are secrets to protect. Store them in `config.toml`
+or, preferably, via the environment variables above.
+:::
+
+### OAuth 2.0 (3LO) auth — user account (Jira Cloud)
 
 Uses an OAuth 2.0 access token obtained via the Atlassian 3-Legged OAuth (3LO) flow. This is recommended when your Atlassian app is registered in the [Atlassian developer console](https://developer.atlassian.com/console/myapps/) and you need delegated user access.
 
 ```toml
 # config.toml
 [testbench-defect-service.client_config]
-auth_type    = "oauth2"
+auth_type    = "oauth2 3LO (user account)"
 ```
 
 #### How to obtain an OAuth 2.0 access token
@@ -250,9 +300,9 @@ A successful response returns:
 ```
 
 Run the setup wizard and enter the returned `refresh_token` when prompted. The wizard stores
-that token in `tmp/oauth2_tokens.toml`, not in `config.toml`. The service uses the refresh token
-to request short-lived access tokens at runtime and updates the cache automatically when they
-expire.
+that token in `tmp/oauth2_tokens.toml`, not in `config.toml`. Only the refresh token is written to
+disk — the service uses it to request short-lived access tokens at runtime, and those access tokens
+are held in memory only (never written to `tmp/oauth2_tokens.toml`).
 
 Persist only the OAuth client credentials in your configuration (or provide them via environment
 variables):
@@ -297,8 +347,9 @@ To avoid storing credentials in the config file, use environment variables inste
 | `JIRA_USERNAME`             | Username (basic auth)                                |
 | `JIRA_PASSWORD`             | API token (basic auth)                               |
 | `JIRA_BEARER_TOKEN`         | Personal Access Token (token auth, Jira Data Center) |
-| `JIRA_OAUTH2_CLIENT_ID`     | OAuth 2.0 client ID (oauth2 auth, Jira Cloud)        |
-| `JIRA_OAUTH2_CLIENT_SECRET` | OAuth 2.0 client secret (oauth2 auth, Jira Cloud)    |
+| `JIRA_OAUTH2_CLIENT_ID`     | OAuth 2.0 client ID (2LO and 3LO, Jira Cloud)        |
+| `JIRA_OAUTH2_CLIENT_SECRET` | OAuth 2.0 client secret (2LO and 3LO, Jira Cloud)    |
+| `JIRA_OAUTH2_REFRESH_TOKEN` | OAuth 2.0 refresh token (3LO only, Jira Cloud)       |
 
 ---
 

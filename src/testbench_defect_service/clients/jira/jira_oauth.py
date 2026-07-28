@@ -26,14 +26,27 @@ refresh_lock_sync = threading.Lock()
 
 _CLIENT_ID = os.getenv("JIRA_OAUTH2_CLIENT_ID", "YOUR_CLIENT_ID")
 _CLIENT_SECRET = os.getenv("JIRA_OAUTH2_CLIENT_SECRET", "YOUR_CLIENT_SECRET")
+
+# Supported OAuth2 grant types:
+# - "refresh_token": 3LO (user account) — exchange a stored refresh token.
+# - "client_credentials": 2LO (service account) — mint a token from the
+#   client id/secret alone; no refresh token and no user authorization.
+GRANT_REFRESH_TOKEN = "refresh_token"
+GRANT_CLIENT_CREDENTIALS = "client_credentials"
+
 _oauth2_settings = {
     "client_id": _CLIENT_ID,
     "client_secret": _CLIENT_SECRET,
+    "grant_type": GRANT_REFRESH_TOKEN,
 }
 
 
 def _load_token_store_from_disk() -> None:
-    """Load persisted OAuth2 tokens from tmp/oauth2_tokens.toml when available."""
+    """Load the persisted OAuth2 refresh token from tmp/oauth2_tokens.toml.
+
+    Only the refresh token is persisted; the access token is never read from or
+    written to disk and lives exclusively in memory (``token_store``).
+    """
     if not _TOKEN_CACHE_PATH.exists():
         return
 
@@ -47,23 +60,19 @@ def _load_token_store_from_disk() -> None:
     if not isinstance(section, dict):
         return
 
-    access_token = section.get("access_token")
     refresh_token = section.get("refresh_token")
-    expires_at = section.get("expires_at")
-
-    if isinstance(access_token, str) and access_token:
-        token_store["access_token"] = access_token
     if isinstance(refresh_token, str) and refresh_token:
         token_store["refresh_token"] = refresh_token
-    if isinstance(expires_at, (int, float)):
-        token_store["expires_at"] = float(expires_at)
 
 
 def _persist_token_store_to_disk() -> None:
-    """Persist OAuth2 runtime tokens to tmp/oauth2_tokens.toml atomically."""
-    access_token = str(token_store.get("access_token", ""))
+    """Persist only the OAuth2 refresh token to tmp/oauth2_tokens.toml atomically.
+
+    The access token is intentionally never written to disk — it exists only in
+    memory and is re-derived from the refresh token (3LO) or the client
+    credentials (2LO) whenever it is missing or expired.
+    """
     refresh_token = str(token_store.get("refresh_token", ""))
-    expires_at = float(str(token_store.get("expires_at", 0)))
 
     if not refresh_token:
         return
@@ -72,10 +81,7 @@ def _persist_token_store_to_disk() -> None:
 
     cache_section: dict[str, str | float] = {
         "refresh_token": refresh_token,
-        "expires_at": expires_at,
     }
-    if access_token and not _is_placeholder(access_token):
-        cache_section["access_token"] = access_token
 
     payload = {_TOKEN_CACHE_SECTION: cache_section}
 
@@ -113,19 +119,25 @@ class JiraAuthExpiredError(Exception):
     """Raised when Jira OAuth refresh fails due to invalid or expired authorization."""
 
 
-def configure_oauth2_runtime(
+def configure_oauth2_runtime(  # noqa: PLR0913
     *,
     access_token: str | None = None,
     refresh_token: str | None = None,
     client_id: str | None = None,
     client_secret: str | None = None,
     expires_at: int | None = None,
+    grant_type: str | None = None,
 ) -> None:
     """Apply OAuth2 runtime values from config/environment to token refresh state."""
-    _load_token_store_from_disk()
+    if grant_type != GRANT_CLIENT_CREDENTIALS:
+        # 2LO (client_credentials) mints tokens in memory and never reads the
+        # on-disk refresh-token cache; only the 3LO flow needs it.
+        _load_token_store_from_disk()
 
     # Always accept explicit config credentials, even when a token cache exists.
     # This allows runtime config values to override placeholder env defaults.
+    if grant_type:
+        _oauth2_settings["grant_type"] = grant_type
     if client_id:
         _oauth2_settings["client_id"] = client_id
     if client_secret:
@@ -138,21 +150,16 @@ def configure_oauth2_runtime(
     if expires_at is not None:
         token_store["expires_at"] = float(expires_at)
 
-    _persist_token_store_to_disk()
+    if _oauth2_settings.get("grant_type") != GRANT_CLIENT_CREDENTIALS:
+        _persist_token_store_to_disk()
 
 
-def _refresh_jira_token_sync() -> dict[str, object]:
-    client_id = str(_oauth2_settings.get("client_id", ""))
-    client_secret = str(_oauth2_settings.get("client_secret", ""))
+def _post_oauth_token_request(payload: dict[str, str]) -> dict[str, object]:
+    """POST *payload* to the Atlassian OAuth token endpoint and return the JSON body.
 
-    if _is_placeholder(client_id) or _is_placeholder(client_secret):
-        raise JiraAuthExpiredError("Missing OAuth2 client credentials for Jira token refresh")
-    payload = {
-        "grant_type": "refresh_token",
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "refresh_token": token_store["refresh_token"],
-    }
+    Raises ``JiraAuthExpiredError`` on HTTP 400/401 (invalid/expired grant), and
+    re-raises any other HTTP error unchanged.
+    """
     req = request.Request(
         "https://auth.atlassian.com/oauth/token",
         data=json.dumps(payload).encode("utf-8"),
@@ -174,13 +181,84 @@ def _refresh_jira_token_sync() -> dict[str, object]:
     return data
 
 
+def _refresh_jira_token_sync() -> dict[str, object]:
+    client_id = str(_oauth2_settings.get("client_id", ""))
+    client_secret = str(_oauth2_settings.get("client_secret", ""))
+
+    if _is_placeholder(client_id) or _is_placeholder(client_secret):
+        raise JiraAuthExpiredError("Missing OAuth2 client credentials for Jira token refresh")
+    payload = {
+        "grant_type": GRANT_REFRESH_TOKEN,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": str(token_store["refresh_token"]),
+    }
+    return _post_oauth_token_request(payload)
+
+
+def _mint_client_credentials_token_sync() -> dict[str, object]:
+    """Mint a fresh 2LO access token via the client_credentials grant.
+
+    The service-account flow needs only the client id/secret — there is no
+    refresh token and no user authorization step. A new token is requested
+    whenever the cached one is missing or near expiry.
+    """
+    client_id = str(_oauth2_settings.get("client_id", ""))
+    client_secret = str(_oauth2_settings.get("client_secret", ""))
+
+    missing = not client_id or not client_secret
+    if missing or _is_placeholder(client_id) or _is_placeholder(client_secret):
+        raise JiraAuthExpiredError("Missing OAuth2 client credentials for Jira token request")
+    payload = {
+        "grant_type": GRANT_CLIENT_CREDENTIALS,
+        "client_id": client_id,
+        "client_secret": client_secret,
+    }
+    return _post_oauth_token_request(payload)
+
+
+def _is_cached_2lo_token_valid(is_first_call: bool) -> str | None:
+    """Return a still-valid cached 2LO access token, or ``None`` to force a mint."""
+    if is_first_call:
+        return None
+    expires_at = float(str(token_store.get("expires_at", 0)))
+    access_token = str(token_store.get("access_token", ""))
+    if access_token and not _is_placeholder(access_token) and time.time() < (expires_at - 300):
+        return access_token
+    return None
+
+
+def _get_valid_client_credentials_token(is_first_call: bool) -> str:
+    """Return a valid 2LO access token, minting a new one when needed."""
+    cached = _is_cached_2lo_token_valid(is_first_call)
+    if cached is not None:
+        return cached
+
+    with refresh_lock_sync:
+        # Re-check inside the lock in case another thread just minted a token.
+        cached = _is_cached_2lo_token_valid(is_first_call)
+        if cached is not None:
+            return cached
+
+        data = _mint_client_credentials_token_sync()
+        token_store["access_token"] = str(data.get("access_token", ""))
+        token_store["expires_at"] = time.time() + int(str(data.get("expires_in", 0)))
+        return str(token_store.get("access_token", ""))
+
+
 def get_valid_jira_token_sync(
     fallback_token: str | None = None, is_first_call: bool = False
 ) -> str:
     """Returns a valid access token for synchronous callers.
 
-    If refresh credentials are not configured, the provided fallback token is used.
+    For the 2LO (client_credentials) grant the token is minted in memory from
+    the client id/secret. For the 3LO (refresh_token) grant a stored refresh
+    token is exchanged, and the provided fallback token is used when refresh
+    credentials are not configured.
     """
+    if _oauth2_settings.get("grant_type") == GRANT_CLIENT_CREDENTIALS:
+        return _get_valid_client_credentials_token(is_first_call)
+
     expires_at, access_token = _get_cached_token_data(fallback_token)
 
     if time.time() < (expires_at - 300) and access_token and not is_first_call:

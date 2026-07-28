@@ -10,7 +10,7 @@ from requests import ConnectTimeout
 from sanic import Forbidden, NotFound, ServerError, Unauthorized
 
 from testbench_defect_service.clients.abstract_client import AbstractDefectClient
-from testbench_defect_service.clients.jira.config import JiraDefectClientConfig
+from testbench_defect_service.clients.jira.config import JiraDefectClientConfig, is_oauth2
 from testbench_defect_service.clients.jira.jira_client import JiraClient
 from testbench_defect_service.clients.jira.utils import (
     build_project_dict,
@@ -437,11 +437,15 @@ class JiraDefectClient(AbstractDefectClient):
         """Return the appropriate JiraClient for a write operation.
 
         Uses shared auth when explicitly configured, when auth_type is oauth1
-        (which doesn't support per-user auth), or when enable_shared_auth is
-        not configured (None). Uses per-user auth only when explicitly disabled.
+        or oauth2 (which don't support per-user auth), or when enable_shared_auth
+        is not configured (None). Uses per-user auth only when explicitly disabled.
         """
         shared = self._get_config_value("enable_shared_auth", project=project)
-        if shared is not False or self.config.auth_type in {"oauth1", "oauth2"}:
+        if (
+            shared is not False
+            or self.config.auth_type == "oauth1"
+            or is_oauth2(self.config.auth_type)
+        ):
             logger.debug("Using shared authentication for project '%s'", project)
             return self.jira_client
         logger.debug("Using per-user authentication for project '%s'", project)
