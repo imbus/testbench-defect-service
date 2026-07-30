@@ -158,6 +158,36 @@ class TestInit:
 
 
 @pytest.mark.unit
+class TestFetchCloudId:
+    def _patch_requests_get(self, cloud_id: str = "cid-1"):
+        response = Mock()
+        response.json.return_value = {"cloudId": cloud_id}
+        return patch(
+            "testbench_defect_service.clients.jira.jira_client.requests.get",
+            return_value=response,
+        )
+
+    def test_tenant_info_request_uses_proxy(self):
+        cfg = _make_config(proxy_url="http://proxy.example.com:8080")
+        with patch("testbench_defect_service.clients.jira.jira_client.JIRA") as mock_jira:
+            mock_jira.return_value = _make_jira()
+            client = JiraClient(cfg)
+        with self._patch_requests_get() as mock_get:
+            assert client._fetch_cloud_id() == "cid-1"
+        _, kwargs = mock_get.call_args
+        assert kwargs["proxies"] == {
+            "http": "http://proxy.example.com:8080",
+            "https": "http://proxy.example.com:8080",
+        }
+
+    def test_tenant_info_request_without_proxy(self, cloud_client):
+        with self._patch_requests_get() as mock_get:
+            assert cloud_client._fetch_cloud_id() == "cid-1"
+        _, kwargs = mock_get.call_args
+        assert kwargs["proxies"] is None
+
+
+@pytest.mark.unit
 class TestConnect:
     def test_basic_auth(self):
         cfg = _make_config(username="u@x.com", password="tok")

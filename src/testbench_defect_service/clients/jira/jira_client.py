@@ -11,9 +11,15 @@ from jira import JIRA, Issue, JIRAError
 from jira.resources import Field, Project
 from sanic import NotFound
 
-from testbench_defect_service.clients.jira.config import JiraDefectClientConfig
+from testbench_defect_service.clients.jira.config import (
+    AUTH_OAUTH2_2LO,
+    JiraDefectClientConfig,
+    is_oauth2,
+)
 from testbench_defect_service.clients.jira.defect_mapping_service import DefectToJiraMapper
 from testbench_defect_service.clients.jira.jira_oauth import (
+    GRANT_CLIENT_CREDENTIALS,
+    GRANT_REFRESH_TOKEN,
     JiraAuthExpiredError,
     configure_oauth2_runtime,
     get_valid_jira_token_sync,
@@ -47,16 +53,15 @@ class JiraConnectionError(ConnectionError):
 class JiraClient:
     def __init__(self, config: JiraDefectClientConfig, principal: Login | None = None):
         self.config = config
-        self._options: dict[str, Any] = {"verify": self.config.ssl_verify}
         if self.config.ssl_verify is False:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        if self.config.client_cert is not None:
-            self._options["client_cert"] = self.config.client_cert
+        self._proxies: dict[str, str] | None = None
         if self.config.proxy_url:
-            self._options["proxies"] = {
+            self._proxies = {
                 "http": self.config.proxy_url,
                 "https": self.config.proxy_url,
             }
+        self._options: dict[str, Any] = self._build_jira_options()
         self._uses_gateway: bool = False
         self._gateway_url: str | None = None
         if principal:
@@ -133,7 +138,7 @@ class JiraClient:
         - A 401 on DC basic auth means wrong credentials, not a scoped token.
         """
         try:
-            if self.config.auth_type == "oauth2":
+            if is_oauth2(self.config.auth_type):
                 return self._connect_via_gateway()
 
             jira = self._create_jira_instance(self.config.server_url)
@@ -230,7 +235,7 @@ class JiraClient:
                 max_retries=self.config.max_retries,
                 timeout=self.config.timeout,
             )
-        if self.config.auth_type == "oauth2":
+        if is_oauth2(self.config.auth_type):
             token = token_override or self.config.token
             return JIRA(
                 server=server,
@@ -242,9 +247,17 @@ class JiraClient:
         raise NotImplementedError(f"Unsupported auth_type {self.config.auth_type}")
 
     def _build_jira_options(self) -> dict[str, Any]:
+        """Build the JIRA client ``options`` dict shared by every connection path.
+
+        Used both for the shared/service connection (via ``_create_jira_instance``)
+        and for per-user connections (via ``self._options``), so a configured
+        ``proxy_url`` applies uniformly to all Jira API traffic.
+        """
         options: dict[str, Any] = {"verify": self.config.ssl_verify}
         if self.config.client_cert is not None:
             options["client_cert"] = self.config.client_cert
+        if self._proxies is not None:
+            options["proxies"] = self._proxies
         return options
 
     def _verify_connection(self, jira: JIRA) -> bool:
@@ -302,12 +315,14 @@ class JiraClient:
             f"Connecting to Jira via Atlassian gateway (scoped API token mode): {gateway_url}"
         )
 
-        if self.config.auth_type == "oauth2":
+        if is_oauth2(self.config.auth_type):
+            is_2lo = self.config.auth_type == AUTH_OAUTH2_2LO
             configure_oauth2_runtime(
-                refresh_token=self.config.oauth2_refresh_token,
+                grant_type=GRANT_CLIENT_CREDENTIALS if is_2lo else GRANT_REFRESH_TOKEN,
+                refresh_token=None if is_2lo else self.config.oauth2_refresh_token,
                 client_id=self.config.oauth2_client_id,
                 client_secret=self.config.oauth2_client_secret,
-                expires_at=self.config.oauth2_expires_at,
+                expires_at=None if is_2lo else self.config.oauth2_expires_at,
             )
             try:
                 initial_oauth2_token = get_valid_jira_token_sync(is_first_call=True)
@@ -320,7 +335,7 @@ class JiraClient:
             initial_oauth2_token = None
 
         jira = self._create_jira_instance(gateway_url, token_override=initial_oauth2_token)
-        if self.config.auth_type == "oauth2":
+        if is_oauth2(self.config.auth_type):
             self._patch_session_for_oauth2_token(jira._session)
 
         if not self._verify_connection(jira):
@@ -393,6 +408,7 @@ class JiraClient:
                 tenant_info_url,
                 timeout=self.config.timeout,
                 verify=self.config.ssl_verify,
+                proxies=self._proxies,
             )
             response.raise_for_status()
             data = response.json()

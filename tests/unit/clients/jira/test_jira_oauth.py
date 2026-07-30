@@ -1,5 +1,6 @@
 import io
 import json
+import threading
 import time
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
@@ -62,7 +63,9 @@ class TestIsPlaceholder:
 class TestLoadTokenStoreFromDisk:
     """Tests for the _load_token_store_from_disk function."""
 
-    def test_loads_valid_toml(self, isolated_env):
+    def test_loads_refresh_token_only(self, isolated_env):
+        # Even if an old cache file contains an access token, it must never be
+        # loaded back into memory — only the refresh token is read.
         payload = {
             jira_oauth._TOKEN_CACHE_SECTION: {
                 "access_token": "disk_access",
@@ -73,11 +76,11 @@ class TestLoadTokenStoreFromDisk:
         with isolated_env.open("wb") as f:
             tomli_w.dump(payload, f)
 
+        jira_oauth.token_store["access_token"] = "YOUR_CURRENT_ACCESS_TOKEN"
         jira_oauth._load_token_store_from_disk()
 
-        assert jira_oauth.token_store["access_token"] == "disk_access"
         assert jira_oauth.token_store["refresh_token"] == "disk_refresh"
-        assert jira_oauth.token_store["expires_at"] == 9999999999.0
+        assert jira_oauth.token_store["access_token"] == "YOUR_CURRENT_ACCESS_TOKEN"
 
     def test_handles_missing_file(self):
         jira_oauth.token_store["access_token"] = "initial"
@@ -88,7 +91,8 @@ class TestLoadTokenStoreFromDisk:
 class TestPersistTokenStoreToDisk:
     """Tests for the _persist_token_store_to_disk function."""
 
-    def test_persists_valid_tokens(self, isolated_env):
+    def test_persists_refresh_token_only(self, isolated_env):
+        # The access token must never be written to disk, only the refresh token.
         jira_oauth.token_store.update(
             {
                 "access_token": "real_access",
@@ -105,9 +109,9 @@ class TestPersistTokenStoreToDisk:
             with isolated_env.open("rb") as f:
                 data = jira_oauth.tomllib.load(f)
                 section = data[jira_oauth._TOKEN_CACHE_SECTION]
-                assert section["access_token"] == "real_access"
                 assert section["refresh_token"] == "real_refresh"
-                assert section["expires_at"] == 1234567890
+                assert "access_token" not in section
+                assert "expires_at" not in section
 
     def test_persists_refresh_token_when_access_token_placeholder(self, isolated_env):
         jira_oauth.token_store.update(
@@ -146,7 +150,7 @@ class TestPersistTokenStoreToDisk:
             section = data[jira_oauth._TOKEN_CACHE_SECTION]
             assert "access_token" not in section
             assert section["refresh_token"] == "seed_refresh"
-            assert section["expires_at"] == 0
+            assert "expires_at" not in section
 
 
 class TestConfigureOauth2Runtime:
@@ -271,4 +275,204 @@ class TestGetValidJiraTokenSync:
 
         assert mock_refresh.called
         assert token == "new_acc"
-        assert jira_oauth.token_store["access_token"] == "new_acc"
+
+
+class TestMintClientCredentialsTokenSync:
+    """Tests for the 2LO _mint_client_credentials_token_sync function."""
+
+    @patch("urllib.request.urlopen")
+    def test_success_sends_client_credentials_grant(self, mock_urlopen):
+        jira_oauth._oauth2_settings.update(
+            {"client_id": "valid_id", "client_secret": "valid_secret"}
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"access_token": "service_access", "expires_in": 3600, "token_type": "Bearer"}
+        ).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        data = jira_oauth._mint_client_credentials_token_sync()
+
+        assert data["access_token"] == "service_access"
+        assert "refresh_token" not in data
+
+        sent_request = mock_urlopen.call_args.args[0]
+        sent_payload = json.loads(sent_request.data.decode("utf-8"))
+        assert sent_payload == {
+            "grant_type": "client_credentials",
+            "client_id": "valid_id",
+            "client_secret": "valid_secret",
+        }
+
+    def test_missing_creds_raises(self):
+        with pytest.raises(
+            jira_oauth.JiraAuthExpiredError, match="Missing OAuth2 client credentials"
+        ):
+            jira_oauth._mint_client_credentials_token_sync()
+
+    @patch("urllib.request.urlopen")
+    def test_http_error_raises_auth_expired(self, mock_urlopen):
+        jira_oauth._oauth2_settings.update({"client_id": "id", "client_secret": "sec"})
+        mock_urlopen.side_effect = HTTPError("url", 401, "Unauthorized", {}, io.BytesIO(b""))
+
+        with pytest.raises(jira_oauth.JiraAuthExpiredError):
+            jira_oauth._mint_client_credentials_token_sync()
+
+
+class TestGetValidJiraTokenSyncClientCredentials:
+    """Tests for the 2LO branch of get_valid_jira_token_sync."""
+
+    @patch("testbench_defect_service.clients.jira.jira_oauth._mint_client_credentials_token_sync")
+    def test_mints_on_first_call(self, mock_mint):
+        jira_oauth._oauth2_settings["grant_type"] = jira_oauth.GRANT_CLIENT_CREDENTIALS
+        mock_mint.return_value = {"access_token": "minted", "expires_in": 3600}
+
+        token = jira_oauth.get_valid_jira_token_sync(is_first_call=True)
+
+        assert mock_mint.called
+        assert token == "minted"
+        assert jira_oauth.token_store["access_token"] == "minted"
+
+    @patch("testbench_defect_service.clients.jira.jira_oauth._mint_client_credentials_token_sync")
+    def test_reuses_cached_token_when_valid(self, mock_mint):
+        jira_oauth._oauth2_settings["grant_type"] = jira_oauth.GRANT_CLIENT_CREDENTIALS
+        jira_oauth.token_store.update({"access_token": "cached", "expires_at": time.time() + 1000})
+
+        token = jira_oauth.get_valid_jira_token_sync()
+
+        assert not mock_mint.called
+        assert token == "cached"
+
+    @patch("testbench_defect_service.clients.jira.jira_oauth._mint_client_credentials_token_sync")
+    def test_remints_when_expired(self, mock_mint):
+        jira_oauth._oauth2_settings["grant_type"] = jira_oauth.GRANT_CLIENT_CREDENTIALS
+        jira_oauth.token_store.update({"access_token": "stale", "expires_at": time.time() - 1000})
+        mock_mint.return_value = {"access_token": "fresh", "expires_in": 3600}
+
+        token = jira_oauth.get_valid_jira_token_sync()
+
+        assert mock_mint.called
+        assert token == "fresh"
+
+    @patch("testbench_defect_service.clients.jira.jira_oauth._mint_client_credentials_token_sync")
+    def test_remints_when_cached_token_is_placeholder(self, mock_mint):
+        # The default token_store seeds a placeholder access token with a
+        # future expiry; the 2LO path must not hand that placeholder back.
+        jira_oauth._oauth2_settings["grant_type"] = jira_oauth.GRANT_CLIENT_CREDENTIALS
+        jira_oauth.token_store.update(
+            {"access_token": "YOUR_CURRENT_ACCESS_TOKEN", "expires_at": time.time() + 3600}
+        )
+        mock_mint.return_value = {"access_token": "fresh", "expires_in": 3600}
+
+        token = jira_oauth.get_valid_jira_token_sync()
+
+        assert mock_mint.called
+        assert token == "fresh"
+
+    @patch("testbench_defect_service.clients.jira.jira_oauth._mint_client_credentials_token_sync")
+    def test_does_not_persist_to_disk(self, mock_mint, isolated_env):
+        jira_oauth._oauth2_settings["grant_type"] = jira_oauth.GRANT_CLIENT_CREDENTIALS
+        mock_mint.return_value = {"access_token": "minted", "expires_in": 3600}
+
+        jira_oauth.get_valid_jira_token_sync(is_first_call=True)
+
+        assert not isolated_env.exists()
+        assert jira_oauth.token_store["access_token"] == "minted"
+
+
+def _run_concurrent_first_calls(fetch_name: str, response: dict[str, object]) -> tuple[list, list]:
+    """Race two ``is_first_call=True`` callers and record token fetches and results.
+
+    Returns ``(fetch_calls, tokens)``. Both threads are released from a barrier
+    simultaneously, and the patched fetch sleeps briefly so the loser is
+    guaranteed to be waiting on ``refresh_lock_sync`` while the winner is still
+    in flight — the exact window the double-checked lock exists to close.
+    """
+    fetch_calls: list[int] = []
+    tokens: list[str] = []
+    gate = threading.Barrier(2)
+
+    def fake_fetch() -> dict[str, object]:
+        fetch_calls.append(1)
+        time.sleep(0.05)
+        return response
+
+    def worker() -> None:
+        gate.wait()
+        tokens.append(jira_oauth.get_valid_jira_token_sync(is_first_call=True))
+
+    with patch.object(jira_oauth, fetch_name, side_effect=fake_fetch):
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+    return fetch_calls, tokens
+
+
+class TestConcurrentFirstCalls:
+    """Two threads cold-starting at once must trigger exactly one token fetch.
+
+    Regression tests for the double-checked-locking defect where the post-lock
+    re-check honoured ``is_first_call`` and therefore always fell through, making
+    both racing threads perform a live token request against Atlassian.
+    """
+
+    def test_3lo_refreshes_only_once(self, isolated_env):
+        jira_oauth._oauth2_settings["grant_type"] = jira_oauth.GRANT_REFRESH_TOKEN
+        jira_oauth.token_store.update(
+            {
+                "access_token": "YOUR_CURRENT_ACCESS_TOKEN",
+                "refresh_token": "real_refresh",
+                "expires_at": time.time() + 3600,
+            }
+        )
+
+        fetch_calls, tokens = _run_concurrent_first_calls(
+            "_refresh_jira_token_sync",
+            {"access_token": "fresh", "refresh_token": "next_refresh", "expires_in": 3600},
+        )
+
+        assert len(fetch_calls) == 1
+        assert tokens == ["fresh", "fresh"]
+
+    def test_2lo_mints_only_once(self, isolated_env):
+        jira_oauth._oauth2_settings["grant_type"] = jira_oauth.GRANT_CLIENT_CREDENTIALS
+        jira_oauth.token_store.update(
+            {"access_token": "YOUR_CURRENT_ACCESS_TOKEN", "expires_at": time.time() + 3600}
+        )
+
+        fetch_calls, tokens = _run_concurrent_first_calls(
+            "_mint_client_credentials_token_sync",
+            {"access_token": "minted", "expires_in": 3600},
+        )
+
+        assert len(fetch_calls) == 1
+        assert tokens == ["minted", "minted"]
+
+    def test_3lo_single_first_call_still_forces_refresh(self, isolated_env):
+        """A lone first call must not be short-circuited by the peer-refresh check."""
+        jira_oauth._oauth2_settings["grant_type"] = jira_oauth.GRANT_REFRESH_TOKEN
+        jira_oauth.token_store.update(
+            {
+                "access_token": "stale_but_unexpired",
+                "refresh_token": "real_refresh",
+                "expires_at": time.time() + 3600,
+            }
+        )
+
+        with patch.object(
+            jira_oauth,
+            "_refresh_jira_token_sync",
+            return_value={
+                "access_token": "fresh",
+                "refresh_token": "next_refresh",
+                "expires_in": 3600,
+            },
+        ) as mock_refresh:
+            token = jira_oauth.get_valid_jira_token_sync(is_first_call=True)
+
+        assert mock_refresh.called
+        assert token == "fresh"
