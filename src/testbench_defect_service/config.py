@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from sanic.config import Config
 from sanic.http.tls.context import CIPHERS_TLS12
 
+from testbench_defect_service.clients.jira.config import AUTH_OAUTH2_3LO
 from testbench_defect_service.clients.jira.jira_oauth import (
     has_cached_refresh_token,
     seed_oauth2_refresh_token,
@@ -160,7 +161,7 @@ class AppConfig(Config):
         """Prompt for a Jira OAuth2 refresh token when starting the service."""
         if "testbench_defect_service.clients.JiraDefectClient" not in self.CLIENT_CLASS:
             return
-        if client_config.get("auth_type") != "oauth2":
+        if client_config.get("auth_type") != AUTH_OAUTH2_3LO:
             return
         if (
             client_config.get("oauth2_refresh_token")

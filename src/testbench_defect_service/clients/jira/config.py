@@ -9,6 +9,15 @@ from testbench_defect_service.clients.jira.jira_oauth import (
     has_cached_refresh_token,
 )
 
+# Canonical auth_type values for the two OAuth 2.0 flows.
+AUTH_OAUTH2_2LO = "oauth2 2LO (service account)"
+AUTH_OAUTH2_3LO = "oauth2 3LO (user account)"
+
+
+def is_oauth2(auth_type: str) -> bool:
+    """Return whether *auth_type* is one of the OAuth 2.0 flows (2LO or 3LO)."""
+    return auth_type in {AUTH_OAUTH2_2LO, AUTH_OAUTH2_3LO}
+
 
 class SyncCommandConfig(BaseModel):
     scheduled: str | None = Field(default=None, description="Scheduled command")
@@ -43,9 +52,15 @@ class JiraDefectClientConfig(BaseModel):
     server_url: str = Field(
         ..., description="Jira server URL (e.g., https://your-domain.atlassian.net)"
     )
-    auth_type: Literal["basic", "token", "oauth1", "oauth2"] = Field(
+    auth_type: Literal[
+        "basic", "token", "oauth1", "oauth2 2LO (service account)", "oauth2 3LO (user account)"
+    ] = Field(
         "basic",
-        description=("Authentication type: basic, token, oauth1 (OAuth 1.0a), or oauth2"),
+        description=(
+            "Authentication type: basic, token, oauth1 (OAuth 1.0a), "
+            "oauth2 2LO (service account, client credentials), or "
+            "oauth2 3LO (user account, authorization code)"
+        ),
     )
 
     username: str | None = Field(
@@ -89,7 +104,7 @@ class JiraDefectClientConfig(BaseModel):
         json_schema_extra={
             "sensitive": True,
             "env_var": "JIRA_OAUTH2_ACCESS_TOKEN",
-            "depends_on": {"auth_type": "oauth2"},
+            "depends_on": {"auth_type": "oauth2 3LO (user account)"},
             "required": False,
             "skip_if_wizard": True,
         },
@@ -101,26 +116,30 @@ class JiraDefectClientConfig(BaseModel):
         json_schema_extra={
             "sensitive": True,
             "env_var": "JIRA_OAUTH2_REFRESH_TOKEN",
-            "depends_on": {"auth_type": "oauth2"},
+            "depends_on": {"auth_type": "oauth2 3LO (user account)"},
             "required": False,
         },
     )
     oauth2_client_id: str | None = Field(
         None,
-        description="OAuth2 client ID for Jira token refresh",
+        description="OAuth2 client ID (required for both 2LO and 3LO flows)",
         json_schema_extra={
             "env_var": "JIRA_OAUTH2_CLIENT_ID",
-            "depends_on": {"auth_type": "oauth2"},
+            "depends_on": {
+                "auth_type": [AUTH_OAUTH2_2LO, AUTH_OAUTH2_3LO],
+            },
             "required": True,
         },
     )
     oauth2_client_secret: str | None = Field(
         None,
-        description="OAuth2 client secret for Jira token refresh",
+        description="OAuth2 client secret (required for both 2LO and 3LO flows)",
         json_schema_extra={
             "sensitive": True,
             "env_var": "JIRA_OAUTH2_CLIENT_SECRET",
-            "depends_on": {"auth_type": "oauth2"},
+            "depends_on": {
+                "auth_type": [AUTH_OAUTH2_2LO, AUTH_OAUTH2_3LO],
+            },
             "required": True,
         },
     )
@@ -130,7 +149,7 @@ class JiraDefectClientConfig(BaseModel):
         description="Optional UNIX timestamp when the current OAuth2 access token expires",
         json_schema_extra={
             "env_var": "JIRA_OAUTH2_EXPIRES_AT",
-            "depends_on": {"auth_type": "oauth2"},
+            "depends_on": {"auth_type": "oauth2 3LO (user account)"},
             "required": False,
             "skip_if_wizard": True,
         },
@@ -377,13 +396,27 @@ class JiraDefectClientConfig(BaseModel):
                 "or oauth1_key_cert / JIRA_OAUTH1_KEY_CERT env)"
             )
 
-    def _validate_oauth2(self) -> None:
-        self.oauth2_refresh_token = self.oauth2_refresh_token or os.getenv(
-            "JIRA_OAUTH2_REFRESH_TOKEN"
-        )
+    def _resolve_oauth2_client_credentials(self) -> None:
+        """Fill client id/secret from env when not provided and require both."""
         self.oauth2_client_id = self.oauth2_client_id or os.getenv("JIRA_OAUTH2_CLIENT_ID")
         self.oauth2_client_secret = self.oauth2_client_secret or os.getenv(
             "JIRA_OAUTH2_CLIENT_SECRET"
+        )
+        if not self.oauth2_client_id or not self.oauth2_client_secret:
+            raise ValueError(
+                "Jira OAuth2 client credentials must be provided "
+                "(via oauth2_client_id/oauth2_client_secret or JIRA_OAUTH2_CLIENT_ID/"
+                "JIRA_OAUTH2_CLIENT_SECRET)"
+            )
+
+    def _validate_oauth2_2lo(self) -> None:
+        # 2LO (service account) mints access tokens from the client credentials
+        # alone via the client_credentials grant — no refresh token is needed.
+        self._resolve_oauth2_client_credentials()
+
+    def _validate_oauth2_3lo(self) -> None:
+        self.oauth2_refresh_token = self.oauth2_refresh_token or os.getenv(
+            "JIRA_OAUTH2_REFRESH_TOKEN"
         )
         expires_at_value = self.oauth2_expires_at or os.getenv("JIRA_OAUTH2_EXPIRES_AT")
         if isinstance(expires_at_value, str) and expires_at_value.strip():
@@ -392,12 +425,7 @@ class JiraDefectClientConfig(BaseModel):
             except ValueError as e:
                 raise ValueError("JIRA_OAUTH2_EXPIRES_AT must be a UNIX timestamp integer") from e
 
-        if not self.oauth2_client_id or not self.oauth2_client_secret:
-            raise ValueError(
-                "Jira OAuth2 client credentials must be provided "
-                "(via oauth2_client_id/oauth2_client_secret or JIRA_OAUTH2_CLIENT_ID/"
-                "JIRA_OAUTH2_CLIENT_SECRET)"
-            )
+        self._resolve_oauth2_client_credentials()
         if not self.oauth2_refresh_token and not has_cached_refresh_token():
             raise ValueError(
                 "Jira OAuth2 refresh token is required. "
@@ -412,6 +440,8 @@ class JiraDefectClientConfig(BaseModel):
             self._validate_token_auth()
         elif self.auth_type == "oauth1":
             self._validate_oauth1()
-        elif self.auth_type == "oauth2":
-            self._validate_oauth2()
+        elif self.auth_type == AUTH_OAUTH2_2LO:
+            self._validate_oauth2_2lo()
+        elif self.auth_type == AUTH_OAUTH2_3LO:
+            self._validate_oauth2_3lo()
         return self

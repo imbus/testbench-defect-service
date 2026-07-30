@@ -26,6 +26,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- OAuth2 2LO (service account) authentication for the Jira backend, using the
+  `client_credentials` grant. The access token is minted from the client
+  id/secret alone — no refresh token, no user authorization — and kept in memory
+  (re-minted on expiry, never written to disk).
+
+### Changed
+
+- Split the Jira `auth_type` OAuth2 option into
+  `"oauth2 2LO (service account)"` and `"oauth2 3LO (user account)"` (previously
+  a single `"oauth2"` value), and updated the client, wizard, and validation to
+  recognize both flows.
+- OAuth2 access tokens are now held in memory only and are never written to
+  `tmp/oauth2_tokens.toml`. Only the 3LO refresh token is persisted to disk.
+
+---
+
 ## [0.2.0][0.2.0] - 2026-07-27
 
 ### Added
