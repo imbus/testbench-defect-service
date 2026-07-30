@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+---
+
+## [0.3.0][0.3.0] 30.07.2026
+
+### Added
+
+- OAuth2 2LO (service account) authentication for the Jira backend, using the
+  `client_credentials` grant. The access token is minted from the client
+  id/secret alone — no refresh token, no user authorization — and kept in memory
+  (re-minted on expiry, never written to disk).
+
+### Changed
+
+- Split the Jira `auth_type` OAuth2 option into
+  `"oauth2 2LO (service account)"` and `"oauth2 3LO (user account)"` (previously
+  a single `"oauth2"` value), and updated the client, wizard, and validation to
+  recognize both flows.
+- OAuth2 access tokens are now held in memory only and are never written to
+  `tmp/oauth2_tokens.toml`. Only the 3LO refresh token is persisted to disk.
 
 ---
 
@@ -58,5 +77,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI entry point (`testbench-defect-service`) with `init`, `start`, and `set-credentials` commands.
 - `jira` optional dependency group for Jira backend support.
 
+[0.3.0]: https://github.com/imbus/testbench-defect-service/releases/tag/v0.3.0
 [0.2.0]: https://github.com/imbus/testbench-defect-service/releases/tag/v0.2.0
 [0.1.0]: https://github.com/imbus/testbench-defect-service/releases/tag/v0.1.0
