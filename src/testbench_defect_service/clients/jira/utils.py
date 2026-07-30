@@ -78,7 +78,7 @@ def _build_defect(
         id=DefectID(root=str(issue.key)),
         title=issue.fields.summary,
         description=issue.fields.description,
-        reporter=_safe_display_name(issue.fields.creator),
+        reporter=_safe_display_name(issue.fields.reporter),
         status=_get_control_field_value(sync_context.statusAttribute, issue.fields, fields),
         classification=_get_control_field_value(sync_context.classAttribute, issue.fields, fields),
         priority=_get_control_field_value(sync_context.priorityAttribute, issue.fields, fields),
