@@ -168,6 +168,10 @@ def store_client_secret_in_env(
         return
 
     set_key(str(dotenv_path), JIRA_CLIENT_SECRET_ENV_VAR, secret)
+    try:
+        dotenv_path.chmod(0o600)
+    except OSError:
+        pass
     os.environ[JIRA_CLIENT_SECRET_ENV_VAR] = secret
     client_config.pop("oauth2_client_secret", None)
 
