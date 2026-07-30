@@ -58,11 +58,13 @@ class JiraClient:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         if self.config.client_cert is not None:
             self._options["client_cert"] = self.config.client_cert
+        self._proxies: dict[str, str] | None = None
         if self.config.proxy_url:
-            self._options["proxies"] = {
+            self._proxies = {
                 "http": self.config.proxy_url,
                 "https": self.config.proxy_url,
             }
+            self._options["proxies"] = self._proxies
         self._uses_gateway: bool = False
         self._gateway_url: str | None = None
         if principal:
@@ -401,6 +403,7 @@ class JiraClient:
                 tenant_info_url,
                 timeout=self.config.timeout,
                 verify=self.config.ssl_verify,
+                proxies=self._proxies,
             )
             response.raise_for_status()
             data = response.json()
