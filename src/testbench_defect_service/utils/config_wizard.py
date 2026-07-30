@@ -419,6 +419,8 @@ def is_sensitive_config_key(key: str) -> bool:
         "oauth1_access_token_secret",
         "oauth1_consumer_key",
         "oauth1_key_cert",
+        "oauth2_client_secret",
+        "client_secret",
     }
     key_lower = key.lower()
     return any(sensitive in key_lower for sensitive in sensitive_keys)

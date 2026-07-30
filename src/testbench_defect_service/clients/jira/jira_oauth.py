@@ -236,7 +236,10 @@ def _get_valid_client_credentials_token(is_first_call: bool) -> str:
 
     with refresh_lock_sync:
         # Re-check inside the lock in case another thread just minted a token.
-        cached = _is_cached_2lo_token_valid(is_first_call)
+        # is_first_call is deliberately not honoured here: it means "don't trust
+        # the seeded placeholder", which the placeholder check below already
+        # covers, and passing it through would make this re-check dead code.
+        cached = _is_cached_2lo_token_valid(is_first_call=False)
         if cached is not None:
             return cached
 
@@ -260,6 +263,7 @@ def get_valid_jira_token_sync(
         return _get_valid_client_credentials_token(is_first_call)
 
     expires_at, access_token = _get_cached_token_data(fallback_token)
+    token_before_lock = access_token
 
     if time.time() < (expires_at - 300) and access_token and not is_first_call:
         return access_token
@@ -269,8 +273,17 @@ def get_valid_jira_token_sync(
 
         expires_at, access_token = _get_cached_token_data(fallback_token)
 
-        # Check one more time in case the disk load yielded a fresh, valid token
-        if time.time() < (expires_at - 300) and access_token and not is_first_call:
+        # Check one more time in case the disk load yielded a fresh, valid token,
+        # or a peer thread refreshed while we were blocked on the lock. A changed
+        # access token can only have come from such a peer (the disk cache holds
+        # the refresh token only), and it satisfies our is_first_call obligation
+        # to obtain a freshly fetched token just as our own refresh would.
+        refreshed_by_peer = access_token != token_before_lock
+        if (
+            time.time() < (expires_at - 300)
+            and access_token
+            and (not is_first_call or refreshed_by_peer)
+        ):
             return access_token
 
         refresh_token = str(token_store.get("refresh_token", ""))

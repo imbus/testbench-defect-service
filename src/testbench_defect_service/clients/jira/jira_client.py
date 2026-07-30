@@ -53,18 +53,15 @@ class JiraConnectionError(ConnectionError):
 class JiraClient:
     def __init__(self, config: JiraDefectClientConfig, principal: Login | None = None):
         self.config = config
-        self._options: dict[str, Any] = {"verify": self.config.ssl_verify}
         if self.config.ssl_verify is False:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        if self.config.client_cert is not None:
-            self._options["client_cert"] = self.config.client_cert
         self._proxies: dict[str, str] | None = None
         if self.config.proxy_url:
             self._proxies = {
                 "http": self.config.proxy_url,
                 "https": self.config.proxy_url,
             }
-            self._options["proxies"] = self._proxies
+        self._options: dict[str, Any] = self._build_jira_options()
         self._uses_gateway: bool = False
         self._gateway_url: str | None = None
         if principal:
@@ -250,9 +247,17 @@ class JiraClient:
         raise NotImplementedError(f"Unsupported auth_type {self.config.auth_type}")
 
     def _build_jira_options(self) -> dict[str, Any]:
+        """Build the JIRA client ``options`` dict shared by every connection path.
+
+        Used both for the shared/service connection (via ``_create_jira_instance``)
+        and for per-user connections (via ``self._options``), so a configured
+        ``proxy_url`` applies uniformly to all Jira API traffic.
+        """
         options: dict[str, Any] = {"verify": self.config.ssl_verify}
         if self.config.client_cert is not None:
             options["client_cert"] = self.config.client_cert
+        if self._proxies is not None:
+            options["proxies"] = self._proxies
         return options
 
     def _verify_connection(self, jira: JIRA) -> bool:

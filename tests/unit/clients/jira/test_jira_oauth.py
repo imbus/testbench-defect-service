@@ -1,5 +1,6 @@
 import io
 import json
+import threading
 import time
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
@@ -378,3 +379,100 @@ class TestGetValidJiraTokenSyncClientCredentials:
 
         assert not isolated_env.exists()
         assert jira_oauth.token_store["access_token"] == "minted"
+
+
+def _run_concurrent_first_calls(fetch_name: str, response: dict[str, object]) -> tuple[list, list]:
+    """Race two ``is_first_call=True`` callers and record token fetches and results.
+
+    Returns ``(fetch_calls, tokens)``. Both threads are released from a barrier
+    simultaneously, and the patched fetch sleeps briefly so the loser is
+    guaranteed to be waiting on ``refresh_lock_sync`` while the winner is still
+    in flight — the exact window the double-checked lock exists to close.
+    """
+    fetch_calls: list[int] = []
+    tokens: list[str] = []
+    gate = threading.Barrier(2)
+
+    def fake_fetch() -> dict[str, object]:
+        fetch_calls.append(1)
+        time.sleep(0.05)
+        return response
+
+    def worker() -> None:
+        gate.wait()
+        tokens.append(jira_oauth.get_valid_jira_token_sync(is_first_call=True))
+
+    with patch.object(jira_oauth, fetch_name, side_effect=fake_fetch):
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+    return fetch_calls, tokens
+
+
+class TestConcurrentFirstCalls:
+    """Two threads cold-starting at once must trigger exactly one token fetch.
+
+    Regression tests for the double-checked-locking defect where the post-lock
+    re-check honoured ``is_first_call`` and therefore always fell through, making
+    both racing threads perform a live token request against Atlassian.
+    """
+
+    def test_3lo_refreshes_only_once(self, isolated_env):
+        jira_oauth._oauth2_settings["grant_type"] = jira_oauth.GRANT_REFRESH_TOKEN
+        jira_oauth.token_store.update(
+            {
+                "access_token": "YOUR_CURRENT_ACCESS_TOKEN",
+                "refresh_token": "real_refresh",
+                "expires_at": time.time() + 3600,
+            }
+        )
+
+        fetch_calls, tokens = _run_concurrent_first_calls(
+            "_refresh_jira_token_sync",
+            {"access_token": "fresh", "refresh_token": "next_refresh", "expires_in": 3600},
+        )
+
+        assert len(fetch_calls) == 1
+        assert tokens == ["fresh", "fresh"]
+
+    def test_2lo_mints_only_once(self, isolated_env):
+        jira_oauth._oauth2_settings["grant_type"] = jira_oauth.GRANT_CLIENT_CREDENTIALS
+        jira_oauth.token_store.update(
+            {"access_token": "YOUR_CURRENT_ACCESS_TOKEN", "expires_at": time.time() + 3600}
+        )
+
+        fetch_calls, tokens = _run_concurrent_first_calls(
+            "_mint_client_credentials_token_sync",
+            {"access_token": "minted", "expires_in": 3600},
+        )
+
+        assert len(fetch_calls) == 1
+        assert tokens == ["minted", "minted"]
+
+    def test_3lo_single_first_call_still_forces_refresh(self, isolated_env):
+        """A lone first call must not be short-circuited by the peer-refresh check."""
+        jira_oauth._oauth2_settings["grant_type"] = jira_oauth.GRANT_REFRESH_TOKEN
+        jira_oauth.token_store.update(
+            {
+                "access_token": "stale_but_unexpired",
+                "refresh_token": "real_refresh",
+                "expires_at": time.time() + 3600,
+            }
+        )
+
+        with patch.object(
+            jira_oauth,
+            "_refresh_jira_token_sync",
+            return_value={
+                "access_token": "fresh",
+                "refresh_token": "next_refresh",
+                "expires_in": 3600,
+            },
+        ) as mock_refresh:
+            token = jira_oauth.get_valid_jira_token_sync(is_first_call=True)
+
+        assert mock_refresh.called
+        assert token == "fresh"
