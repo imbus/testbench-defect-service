@@ -71,6 +71,17 @@ class JiraDefectClientConfig(BaseModel):
             "oauth2 2LO (service account, client credentials), or "
             "oauth2 3LO (user account, authorization code)"
         ),
+        json_schema_extra={
+            # The wizard shows only the descriptive labels; the short forms
+            # ("oauth2 2LO"/"oauth2 3LO") remain valid when written in the TOML.
+            "wizard_choices": [
+                "basic",
+                "token",
+                "oauth1",
+                "oauth2 2LO (service account)",
+                "oauth2 3LO (user account)",
+            ],
+        },
     )
 
     username: str | None = Field(

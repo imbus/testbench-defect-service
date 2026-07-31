@@ -23,6 +23,7 @@ SCHEMA_KEYS = {
     "LABEL": "label",
     "REQUIRED": "required",
     "PATH_TYPE": "path_type",  # "file" or "directory" (default: "directory")
+    "WIZARD_CHOICES": "wizard_choices",  # subset of Literal values shown in the wizard
 }
 
 
@@ -899,9 +900,19 @@ def handle_plain_dict(
     return prompt_key_value_dict(value_type, item_label, key_label, field_value, schema_extra)
 
 
-def prompt_literal_field(field_type: type, description: str, default: Any) -> Any:
-    choices = list(get_args(field_type))
-    default_val = default if default in choices else choices[0]
+def prompt_literal_field(
+    field_type: type, description: str, default: Any, choices: list[Any] | None = None
+) -> Any:
+    choices = list(choices) if choices else list(get_args(field_type))
+    if default in choices:
+        default_val = default
+    else:
+        # A stored value may be a short alias of a displayed choice
+        # (e.g. "oauth2 2LO" vs "oauth2 2LO (service account)").
+        default_val = next(
+            (c for c in choices if isinstance(c, str) and c.startswith(str(default))),
+            choices[0],
+        )
     return questionary.select(f"{description}:", choices=choices, default=default_val).ask()
 
 
@@ -952,7 +963,10 @@ def prompt_single_field(  # noqa: C901, PLR0912, PLR0913
             raw_answer: Any = None
 
             if origin is Literal:
-                raw_answer = prompt_literal_field(field_type, description, default_value)
+                wizard_choices = get_field_extra(field_info).get(SCHEMA_KEYS["WIZARD_CHOICES"])
+                raw_answer = prompt_literal_field(
+                    field_type, description, default_value, wizard_choices
+                )
             elif field_type is bool:
                 raw_answer = prompt_bool_field(description, default_value)
             elif field_type is Path:
