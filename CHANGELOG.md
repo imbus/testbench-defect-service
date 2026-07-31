@@ -26,10 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `client_credentials` grant (e.g. via a marketplace app).
 - Jira: the short `auth_type` values `"oauth2 2LO"` and `"oauth2 3LO"` are
   accepted as aliases for the descriptive long forms.
-- OAuth2 2LO (service account) authentication for the Jira backend, using the
-  `client_credentials` grant. The access token is minted from the client
-  id/secret alone — no refresh token, no user authorization — and kept in memory
-  (re-minted on expiry, never written to disk).
 
 
 ### Changed
