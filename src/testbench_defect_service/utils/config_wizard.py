@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 
 import click
 import questionary
@@ -742,9 +743,10 @@ def _run_jira_dc_code_exchange(client_config: dict) -> str | None:
     if not all(isinstance(v, str) and v for v in (code, code_verifier, redirect_uri)):
         return None
 
+    token_url = data_center_token_url(server_url)
     try:
         return exchange_authorization_code_sync(
-            token_url=data_center_token_url(server_url),
+            token_url=token_url,
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
@@ -755,5 +757,19 @@ def _run_jira_dc_code_exchange(client_config: dict) -> str | None:
         click.echo(
             "Token exchange failed (HTTP 400/401). Authorization codes are single-use "
             "and short-lived — generate a new code and try again."
+        )
+        return None
+    except HTTPError as exc:
+        click.echo(
+            f"Token exchange failed: HTTP {exc.code} from {token_url}. "
+            "Check that an incoming OAuth 2.0 application link is configured in Jira "
+            "Data Center and that server_url is correct."
+        )
+        return None
+    except URLError as exc:
+        click.echo(
+            f"Token exchange failed: could not reach {token_url} ({exc.reason}). "
+            "Check that server_url is correct and the Jira Data Center instance is "
+            "reachable."
         )
         return None

@@ -380,7 +380,9 @@ class JiraClient:
             raise ConnectionError(
                 f"OAuth2 2LO (client_credentials) is not supported on Jira Data Center "
                 f"('{self.config.server_url}'). Use 'oauth2 3LO (user account)' or another "
-                "auth_type."
+                "auth_type. If this is a Jira Cloud site, ensure "
+                f"'{self.config.server_url}{_TENANT_INFO_PATH}' is reachable so the service "
+                "can detect Cloud."
             )
 
         token_url = data_center_token_url(self.config.server_url)

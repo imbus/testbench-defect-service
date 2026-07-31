@@ -1,4 +1,6 @@
+import io
 import os
+import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -69,9 +71,7 @@ def _mock_questionary(select_answer: str, text_answers: list[str], confirm_answe
 
 @pytest.mark.unit
 def test_wizard_refresh_token_path_returns_pasted_token() -> None:
-    questionary = _mock_questionary(
-        "Enter a refresh token (Jira Cloud)", ["pasted-refresh-token"]
-    )
+    questionary = _mock_questionary("Enter a refresh token (Jira Cloud)", ["pasted-refresh-token"])
     with patch(f"{_WIZARD}.questionary", questionary):
         result = run_jira_oauth_wizard(_DC_CLIENT_CONFIG)
 
@@ -134,6 +134,51 @@ def test_wizard_dc_path_failed_exchange_without_retry_returns_none() -> None:
         patch(
             f"{_WIZARD}.exchange_authorization_code_sync",
             side_effect=JiraAuthExpiredError,
+        ),
+    ):
+        result = run_jira_oauth_wizard(_DC_CLIENT_CONFIG)
+
+    assert result is None
+
+
+@pytest.mark.unit
+def test_wizard_dc_path_http_error_without_retry_returns_none() -> None:
+    questionary = _mock_questionary(
+        "Exchange an authorization code (Jira Data Center)",
+        ["auth-code-1", "verifier-1", "https://localhost/callback"],
+        confirm_answer=False,
+    )
+    http_error = urllib.error.HTTPError(
+        "https://jira.example.com/rest/oauth2/1.0/token",
+        404,
+        "Not Found",
+        {},
+        io.BytesIO(b""),
+    )
+    with (
+        patch(f"{_WIZARD}.questionary", questionary),
+        patch(
+            f"{_WIZARD}.exchange_authorization_code_sync",
+            side_effect=http_error,
+        ),
+    ):
+        result = run_jira_oauth_wizard(_DC_CLIENT_CONFIG)
+
+    assert result is None
+
+
+@pytest.mark.unit
+def test_wizard_dc_path_url_error_without_retry_returns_none() -> None:
+    questionary = _mock_questionary(
+        "Exchange an authorization code (Jira Data Center)",
+        ["auth-code-1", "verifier-1", "https://localhost/callback"],
+        confirm_answer=False,
+    )
+    with (
+        patch(f"{_WIZARD}.questionary", questionary),
+        patch(
+            f"{_WIZARD}.exchange_authorization_code_sync",
+            side_effect=urllib.error.URLError("connection refused"),
         ),
     ):
         result = run_jira_oauth_wizard(_DC_CLIENT_CONFIG)

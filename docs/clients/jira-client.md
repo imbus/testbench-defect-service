@@ -367,6 +367,9 @@ https://jira.example.com/rest/oauth2/latest/authorize?
   code_challenge_method=S256
 ```
 
+(`latest` is an alias for `1.0`, the same API version used by the token
+endpoint below.)
+
 After the user approves, the browser is redirected to
 `YOUR_REDIRECT_URI?code=AUTHORIZATION_CODE`.
 
@@ -380,6 +383,14 @@ and the redirect URI. The wizard exchanges them at
 token in `tmp/oauth2_tokens.toml`. Access tokens are refreshed automatically
 from there; Data Center rotates the refresh token on every refresh, and the
 service persists each new one.
+
+:::warning
+On Data Center, do not leave `JIRA_OAUTH2_REFRESH_TOKEN` set permanently: the
+token rotates on every refresh, and a stale value from the environment would
+override the newer token cached in `tmp/oauth2_tokens.toml` on the next
+restart. Prefer the wizard flow; if you set the variable for the first start,
+remove it afterwards.
+:::
 
 ---
 
