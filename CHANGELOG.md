@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Jira: OAuth 2.0 3LO support for Jira Data Center — automatic Data Center
+  detection, token requests against `{server_url}/rest/oauth2/1.0/token`
+  (form-encoded, PKCE authorization-code exchange in the setup wizard), and
+  API requests sent directly to the configured server URL instead of the
+  Atlassian gateway.
 - OAuth2 2LO (service account) authentication for the Jira backend, using the
   `client_credentials` grant. The access token is minted from the client
   id/secret alone — no refresh token, no user authorization — and kept in memory

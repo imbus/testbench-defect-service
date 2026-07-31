@@ -334,6 +334,53 @@ Refer to the Atlassian REST API documentation to confirm which scopes individual
 - [Jira Cloud platform REST API](https://developer.atlassian.com/cloud/jira/platform/rest)
 - [Jira Software Cloud REST API](https://developer.atlassian.com/cloud/jira/software/rest/intro/)
 
+### OAuth 2.0 (3LO) auth — user account (Jira Data Center)
+
+Jira Data Center supports the same 3-Legged OAuth flow with an *incoming*
+OAuth 2.0 application link (**Administration → Applications → Application
+links**, type "External application", direction "Incoming"). Configure it with
+a redirect URL you control and take note of the generated client ID and client
+secret. The same `auth_type` is used as on Jira Cloud — the service detects
+Data Center automatically and sends token and API requests directly to your
+`server_url` instead of the Atlassian gateway.
+
+```toml
+[testbench-defect-service.client_config]
+server_url   = "https://jira.example.com"
+auth_type    = "oauth2 3LO (user account)"
+oauth2_client_id = "YOUR_CLIENT_ID"
+```
+
+**Step 1 — Direct the user to the authorization URL**
+
+Data Center requires PKCE. Generate a random `code_verifier` (43–128
+characters) and its `code_challenge` (Base64-URL-encoded SHA-256 hash of the
+verifier), then open:
+
+```
+https://jira.example.com/rest/oauth2/latest/authorize?
+  client_id=YOUR_CLIENT_ID&
+  redirect_uri=YOUR_REDIRECT_URI&
+  response_type=code&
+  scope=WRITE&
+  code_challenge=YOUR_CODE_CHALLENGE&
+  code_challenge_method=S256
+```
+
+After the user approves, the browser is redirected to
+`YOUR_REDIRECT_URI?code=AUTHORIZATION_CODE`.
+
+**Step 2 — Exchange the code in the setup wizard**
+
+Authorization codes are single-use and short-lived. When the service starts
+without a stored refresh token, the wizard offers *"Exchange an authorization
+code (Jira Data Center)"* — paste the authorization code, the `code_verifier`,
+and the redirect URI. The wizard exchanges them at
+`{server_url}/rest/oauth2/1.0/token` and stores only the resulting refresh
+token in `tmp/oauth2_tokens.toml`. Access tokens are refreshed automatically
+from there; Data Center rotates the refresh token on every refresh, and the
+service persists each new one.
+
 ---
 
 ### Environment variables
@@ -349,9 +396,9 @@ To avoid storing credentials in the config file, use environment variables inste
 | `JIRA_USERNAME`             | Username (basic auth)                                |
 | `JIRA_PASSWORD`             | API token (basic auth)                               |
 | `JIRA_BEARER_TOKEN`         | Personal Access Token (token auth, Jira Data Center) |
-| `JIRA_OAUTH2_CLIENT_ID`     | OAuth 2.0 client ID (2LO and 3LO, Jira Cloud)        |
-| `JIRA_OAUTH2_CLIENT_SECRET` | OAuth 2.0 client secret (2LO and 3LO, Jira Cloud)    |
-| `JIRA_OAUTH2_REFRESH_TOKEN` | OAuth 2.0 refresh token (3LO only, Jira Cloud)       |
+| `JIRA_OAUTH2_CLIENT_ID`     | OAuth 2.0 client ID (2LO and 3LO, Jira Cloud; 3LO, Jira Data Center) |
+| `JIRA_OAUTH2_CLIENT_SECRET` | OAuth 2.0 client secret (2LO and 3LO, Jira Cloud; 3LO, Jira Data Center) |
+| `JIRA_OAUTH2_REFRESH_TOKEN` | OAuth 2.0 refresh token (3LO only)       |
 
 ---
 
