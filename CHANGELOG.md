@@ -14,22 +14,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `client_credentials` grant. The access token is minted from the client
   id/secret alone — no refresh token, no user authorization — and kept in memory
   (re-minted on expiry, never written to disk).
-
-### Changed
-
-- Split the Jira `auth_type` OAuth2 option into
-  `"oauth2 2LO (service account)"` and `"oauth2 3LO (user account)"` (previously
-  a single `"oauth2"` value), and updated the client, wizard, and validation to
-  recognize both flows.
-- OAuth2 access tokens are now held in memory only and are never written to
-  `tmp/oauth2_tokens.toml`. Only the 3LO refresh token is persisted to disk.
-
----
-
-## [Unreleased]
-
-### Added
-
 - Jira: OAuth 2.0 3LO support for Jira Data Center — automatic Data Center
   detection, token requests against `{server_url}/rest/oauth2/1.0/token`
   (form-encoded, PKCE authorization-code exchange in the setup wizard), and
@@ -47,8 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   id/secret alone — no refresh token, no user authorization — and kept in memory
   (re-minted on expiry, never written to disk).
 
+
 ### Changed
 
+- Split the Jira `auth_type` OAuth2 option into
+  `"oauth2 2LO (service account)"` and `"oauth2 3LO (user account)"` (previously
+  a single `"oauth2"` value), and updated the client, wizard, and validation to
+  recognize both flows.
+- OAuth2 access tokens are now held in memory only and are never written to
+  `tmp/oauth2_tokens.toml`. Only the 3LO refresh token is persisted to disk.
 - Split the Jira `auth_type` OAuth2 option into
   `"oauth2 2LO (service account)"` and `"oauth2 3LO (user account)"` (previously
   a single `"oauth2"` value), and updated the client, wizard, and validation to
