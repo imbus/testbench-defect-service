@@ -122,8 +122,8 @@ readonly       = false
 | `username`             | String  | Jira username for basic auth. Can also be set via`JIRA_USERNAME`.                                         | No       | —          |
 | `password`             | String  | Jira API token for basic auth. Can also be set via`JIRA_PASSWORD`.                                        | No       | —          |
 | `token`                | String  | Personal Access Token for token auth (Jira Data Center). Can also be set via`JIRA_BEARER_TOKEN`.          | No       | —          |
-| `oauth2_client_id`     | String  | OAuth 2.0 client ID for both oauth2 flows (Jira Cloud). Can also be set via `JIRA_OAUTH2_CLIENT_ID`.         | No       | —          |
-| `oauth2_client_secret` | String  | OAuth 2.0 client secret for both oauth2 flows (Jira Cloud). Always stored via the `JIRA_OAUTH2_CLIENT_SECRET` environment variable (`.env`), never in `config.toml`. | No       | —          |
+| `oauth2_client_id`     | String  | OAuth 2.0 client ID for both oauth2 flows (Jira Cloud; 3LO also on Jira Data Center). Can also be set via `JIRA_OAUTH2_CLIENT_ID`.         | No       | —          |
+| `oauth2_client_secret` | String  | OAuth 2.0 client secret for both oauth2 flows (Jira Cloud; 3LO also on Jira Data Center). Always stored via the `JIRA_OAUTH2_CLIENT_SECRET` environment variable (`.env`), never in `config.toml`. | No       | —          |
 | `enable_shared_auth`   | Boolean | Use service account credentials for all projects instead of per-user auth.                                  | No       | —          |
 
 There are two OAuth 2.0 flows:
@@ -459,7 +459,7 @@ The client automatically detects whether it is connected to Jira Cloud or Jira D
 
 | Feature              | Jira Cloud                             | Jira Data Center                    |
 | -------------------- | -------------------------------------- | ----------------------------------- |
-| Authentication       | Basic (email + API token) or OAuth 2.0 | Token (PAT) or Basic                |
+| Authentication       | Basic (email + API token) or OAuth 2.0 | Token (PAT), Basic, or OAuth 2.0 3LO |
 | Pagination           | `nextPageToken` cursor               | `startAt` offset                  |
 | Issue types endpoint | Standard                               | `issuetypes` endpoint (DC ≥ 8.4) |
 | API base path        | `/rest/api/3/`                       | `/rest/api/2/`                    |
