@@ -5,6 +5,7 @@ import threading
 import time
 from pathlib import Path
 from urllib import error, request
+from urllib.parse import urlencode
 
 import tomli_w
 
@@ -34,10 +35,27 @@ _CLIENT_SECRET = os.getenv("JIRA_OAUTH2_CLIENT_SECRET", "YOUR_CLIENT_SECRET")
 GRANT_REFRESH_TOKEN = "refresh_token"
 GRANT_CLIENT_CREDENTIALS = "client_credentials"
 
+# Token endpoint targets:
+# - Jira Cloud uses the central Atlassian identity endpoint with JSON bodies.
+# - Jira Data Center serves its own endpoint under the site base URL and
+#   expects application/x-www-form-urlencoded bodies (RFC 6749).
+CLOUD_TOKEN_URL = "https://auth.atlassian.com/oauth/token"
+_DC_TOKEN_PATH = "/rest/oauth2/1.0/token"
+BODY_FORMAT_JSON = "json"
+BODY_FORMAT_FORM = "form"
+
+
+def data_center_token_url(server_url: str) -> str:
+    """Return the Jira Data Center OAuth2 token endpoint for *server_url*."""
+    return server_url.rstrip("/") + _DC_TOKEN_PATH
+
+
 _oauth2_settings = {
     "client_id": _CLIENT_ID,
     "client_secret": _CLIENT_SECRET,
     "grant_type": GRANT_REFRESH_TOKEN,
+    "token_url": CLOUD_TOKEN_URL,
+    "body_format": BODY_FORMAT_JSON,
 }
 
 
@@ -119,7 +137,7 @@ class JiraAuthExpiredError(Exception):
     """Raised when Jira OAuth refresh fails due to invalid or expired authorization."""
 
 
-def configure_oauth2_runtime(  # noqa: PLR0913
+def configure_oauth2_runtime(  # noqa: PLR0913, C901
     *,
     access_token: str | None = None,
     refresh_token: str | None = None,
@@ -127,6 +145,8 @@ def configure_oauth2_runtime(  # noqa: PLR0913
     client_secret: str | None = None,
     expires_at: int | None = None,
     grant_type: str | None = None,
+    token_url: str | None = None,
+    body_format: str | None = None,
 ) -> None:
     """Apply OAuth2 runtime values from config/environment to token refresh state."""
     if grant_type != GRANT_CLIENT_CREDENTIALS:
@@ -142,6 +162,10 @@ def configure_oauth2_runtime(  # noqa: PLR0913
         _oauth2_settings["client_id"] = client_id
     if client_secret:
         _oauth2_settings["client_secret"] = client_secret
+    if token_url:
+        _oauth2_settings["token_url"] = token_url
+    if body_format:
+        _oauth2_settings["body_format"] = body_format
 
     if access_token and not _is_placeholder(access_token):
         token_store["access_token"] = access_token
@@ -154,16 +178,34 @@ def configure_oauth2_runtime(  # noqa: PLR0913
         _persist_token_store_to_disk()
 
 
-def _post_oauth_token_request(payload: dict[str, str]) -> dict[str, object]:
-    """POST *payload* to the Atlassian OAuth token endpoint and return the JSON body.
+def _post_oauth_token_request(
+    payload: dict[str, str],
+    token_url: str | None = None,
+    body_format: str | None = None,
+) -> dict[str, object]:
+    """POST *payload* to the configured OAuth token endpoint and return the JSON body.
+
+    Explicit *token_url* / *body_format* arguments override the runtime settings
+    (used for the one-time authorization-code exchange, which runs before the
+    OAuth2 runtime is configured). Cloud uses JSON bodies; Data Center expects
+    application/x-www-form-urlencoded.
 
     Raises ``JiraAuthExpiredError`` on HTTP 400/401 (invalid/expired grant), and
     re-raises any other HTTP error unchanged.
     """
+    url = token_url or str(_oauth2_settings.get("token_url", CLOUD_TOKEN_URL))
+    fmt = body_format or str(_oauth2_settings.get("body_format", BODY_FORMAT_JSON))
+    if fmt == BODY_FORMAT_FORM:
+        data = urlencode(payload).encode("utf-8")
+        content_type = "application/x-www-form-urlencoded"
+    else:
+        data = json.dumps(payload).encode("utf-8")
+        content_type = "application/json"
+
     req = request.Request(
-        "https://auth.atlassian.com/oauth/token",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        url,
+        data=data,
+        headers={"Content-Type": content_type},
         method="POST",
     )
 
@@ -175,10 +217,10 @@ def _post_oauth_token_request(payload: dict[str, str]) -> dict[str, object]:
             raise JiraAuthExpiredError from exc
         raise
 
-    data = json.loads(raw_data)
-    if not isinstance(data, dict):
+    data_obj = json.loads(raw_data)
+    if not isinstance(data_obj, dict):
         raise RuntimeError("Unexpected token response format from Jira OAuth endpoint")
-    return data
+    return data_obj
 
 
 def _refresh_jira_token_sync() -> dict[str, object]:
