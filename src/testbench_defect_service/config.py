@@ -170,7 +170,7 @@ class AppConfig(Config):
         ):
             return
 
-        refresh_token = run_jira_oauth_wizard()
+        refresh_token = run_jira_oauth_wizard(client_config)
         if not refresh_token:
             return
 
