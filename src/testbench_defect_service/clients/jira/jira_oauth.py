@@ -133,6 +133,51 @@ def seed_oauth2_refresh_token(refresh_token: str) -> None:
     _persist_token_store_to_disk()
 
 
+def exchange_authorization_code_sync(  # noqa: PLR0913
+    *,
+    token_url: str,
+    client_id: str,
+    client_secret: str,
+    redirect_uri: str,
+    code: str,
+    code_verifier: str,
+) -> str:
+    """Exchange a 3LO authorization code (with PKCE verifier) for tokens (Jira DC).
+
+    Performs the one-time ``authorization_code`` grant against *token_url*
+    (``{server_url}/rest/oauth2/1.0/token`` on Jira Data Center), stores the
+    resulting access and refresh tokens in the in-memory token store, persists
+    the refresh token to the on-disk cache, and returns the refresh token.
+
+    Raises ``JiraAuthExpiredError`` on HTTP 400/401 (invalid, expired, or
+    already-used code; verifier mismatch) or when the response contains no
+    refresh token.
+    """
+    payload = {
+        "grant_type": "authorization_code",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": redirect_uri,
+        "code": code,
+        "code_verifier": code_verifier,
+    }
+    data = _post_oauth_token_request(
+        payload, token_url=token_url, body_format=BODY_FORMAT_FORM
+    )
+
+    refresh_token = str(data.get("refresh_token", ""))
+    if not refresh_token:
+        raise JiraAuthExpiredError(
+            "Jira OAuth2 token response did not contain a refresh token"
+        )
+
+    token_store["access_token"] = str(data.get("access_token", ""))
+    token_store["refresh_token"] = refresh_token
+    token_store["expires_at"] = time.time() + int(str(data.get("expires_in", 0)))
+    _persist_token_store_to_disk()
+    return refresh_token
+
+
 class JiraAuthExpiredError(Exception):
     """Raised when Jira OAuth refresh fails due to invalid or expired authorization."""
 

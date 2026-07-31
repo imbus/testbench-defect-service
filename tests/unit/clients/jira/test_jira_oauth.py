@@ -2,6 +2,7 @@ import io
 import json
 import threading
 import time
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
 from urllib.parse import parse_qs
@@ -479,6 +480,73 @@ class TestConcurrentFirstCalls:
 
         assert mock_refresh.called
         assert token == "fresh"
+
+
+class TestExchangeAuthorizationCode:
+    """Tests for the one-time authorization_code + PKCE exchange (Jira DC)."""
+
+    _KWARGS: ClassVar[dict[str, str]] = {
+        "token_url": "https://jira.example.com/rest/oauth2/1.0/token",
+        "client_id": "cid",
+        "client_secret": "csec",
+        "redirect_uri": "https://localhost/callback",
+        "code": "auth-code-1",
+        "code_verifier": "verifier-1",
+    }
+
+    @patch("urllib.request.urlopen")
+    def test_success_sends_form_payload_and_persists_refresh_token(
+        self, mock_urlopen, isolated_env
+    ):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"access_token": "acc-1", "refresh_token": "ref-1", "expires_in": 3600}
+        ).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        refresh = jira_oauth.exchange_authorization_code_sync(**self._KWARGS)
+
+        assert refresh == "ref-1"
+        assert jira_oauth.token_store["access_token"] == "acc-1"
+        assert jira_oauth.token_store["refresh_token"] == "ref-1"
+
+        sent_request = mock_urlopen.call_args.args[0]
+        assert sent_request.full_url == "https://jira.example.com/rest/oauth2/1.0/token"
+        assert sent_request.get_header("Content-type") == "application/x-www-form-urlencoded"
+        sent_body = parse_qs(sent_request.data.decode("utf-8"))
+        assert sent_body == {
+            "grant_type": ["authorization_code"],
+            "client_id": ["cid"],
+            "client_secret": ["csec"],
+            "redirect_uri": ["https://localhost/callback"],
+            "code": ["auth-code-1"],
+            "code_verifier": ["verifier-1"],
+        }
+
+        # Refresh token (and only the refresh token) is persisted to disk.
+        with isolated_env.open("rb") as f:
+            data = jira_oauth.tomllib.load(f)
+        section = data[jira_oauth._TOKEN_CACHE_SECTION]
+        assert section["refresh_token"] == "ref-1"
+        assert "access_token" not in section
+
+    @patch("urllib.request.urlopen")
+    def test_http_400_raises_auth_expired(self, mock_urlopen):
+        mock_urlopen.side_effect = HTTPError("url", 400, "Bad Request", {}, io.BytesIO(b""))
+
+        with pytest.raises(jira_oauth.JiraAuthExpiredError):
+            jira_oauth.exchange_authorization_code_sync(**self._KWARGS)
+
+    @patch("urllib.request.urlopen")
+    def test_missing_refresh_token_in_response_raises(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"access_token": "acc-1", "expires_in": 3600}
+        ).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        with pytest.raises(jira_oauth.JiraAuthExpiredError, match="refresh token"):
+            jira_oauth.exchange_authorization_code_sync(**self._KWARGS)
 
 
 class TestDataCenterTokenUrl:
