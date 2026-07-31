@@ -333,7 +333,7 @@ class JiraClient:
         )
 
         if is_oauth2(self.config.auth_type):
-            is_2lo = self.config.auth_type == AUTH_OAUTH2_2LO
+            is_2lo = self.config.auth_type.startswith(AUTH_OAUTH2_2LO)
             configure_oauth2_runtime(
                 grant_type=GRANT_CLIENT_CREDENTIALS if is_2lo else GRANT_REFRESH_TOKEN,
                 refresh_token=None if is_2lo else self.config.oauth2_refresh_token,
@@ -369,35 +369,38 @@ class JiraClient:
         return jira
 
     def _connect_direct_oauth2(self) -> JIRA:
-        """Connect to Jira Data Center directly with OAuth2 (3LO).
+        """Connect to Jira Data Center directly with OAuth2 (3LO or 2LO).
 
         Jira DC has no Atlassian gateway: tokens come from
         ``{server_url}/rest/oauth2/1.0/token`` (form-encoded bodies) and API
-        requests go straight to the configured server URL.  Only the 3LO
-        (refresh_token) grant is supported on Data Center.
+        requests go straight to the configured server URL.  3LO exchanges the
+        stored refresh token; 2LO mints tokens via the client_credentials
+        grant, which requires the DC instance to support that grant (vanilla
+        Jira DC only offers authorization-code flows).
         """
-        if self.config.auth_type == AUTH_OAUTH2_2LO:
-            raise ConnectionError(
-                f"OAuth2 2LO (client_credentials) is not supported on Jira Data Center "
-                f"('{self.config.server_url}'). Use 'oauth2 3LO (user account)' or another "
-                "auth_type. If this is a Jira Cloud site, ensure "
-                f"'{self.config.server_url}{_TENANT_INFO_PATH}' is reachable so the service "
-                "can detect Cloud."
-            )
-
+        is_2lo = self.config.auth_type.startswith(AUTH_OAUTH2_2LO)
         token_url = data_center_token_url(self.config.server_url)
         configure_oauth2_runtime(
-            grant_type=GRANT_REFRESH_TOKEN,
-            refresh_token=self.config.oauth2_refresh_token,
+            grant_type=GRANT_CLIENT_CREDENTIALS if is_2lo else GRANT_REFRESH_TOKEN,
+            refresh_token=None if is_2lo else self.config.oauth2_refresh_token,
             client_id=self.config.oauth2_client_id,
             client_secret=self.config.oauth2_client_secret,
-            expires_at=self.config.oauth2_expires_at,
+            expires_at=None if is_2lo else self.config.oauth2_expires_at,
             token_url=token_url,
             body_format=BODY_FORMAT_FORM,
         )
         try:
             initial_oauth2_token = get_valid_jira_token_sync(is_first_call=True)
         except JiraAuthExpiredError as exc:
+            if is_2lo:
+                raise ConnectionError(
+                    "Jira OAuth2 client_credentials token request failed while establishing "
+                    f"the initial connection to '{self.config.server_url}' (treated as Jira "
+                    "Data Center). Verify the OAuth2 client id/secret and that the instance "
+                    "supports the client_credentials grant — or, if this is a Jira Cloud "
+                    f"site, ensure '{self.config.server_url}{_TENANT_INFO_PATH}' is "
+                    "reachable so the service can detect Cloud."
+                ) from exc
             raise ConnectionError(
                 "Jira OAuth2 authorization failed while establishing the initial connection "
                 f"to '{self.config.server_url}' (treated as Jira Data Center). Re-run the "
@@ -421,10 +424,14 @@ class JiraClient:
         self._patch_session_for_oauth2_token(jira._session)
 
         if not self._verify_connection(jira):
+            remedy = (
+                "Verify the OAuth2 client id/secret."
+                if is_2lo
+                else "Please re-run the setup wizard to authorize Jira OAuth2."
+            )
             raise JiraConnectionError(
                 f"OAuth2 authentication failed against Jira Data Center at "
-                f"'{self.config.server_url}'. Please re-run the setup wizard to "
-                "authorize Jira OAuth2.",
+                f"'{self.config.server_url}'. {remedy}",
                 status_code=HTTPStatus.UNAUTHORIZED,
             )
         return jira

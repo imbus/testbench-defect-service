@@ -858,9 +858,23 @@ def _make_oauth2_3lo_config(**overrides) -> JiraDefectClientConfig:
     return JiraDefectClientConfig(**defaults)
 
 
+def _make_oauth2_2lo_config(**overrides) -> JiraDefectClientConfig:
+    defaults: dict[str, Any] = {
+        "server_url": "https://jira.example.com",
+        "auth_type": "oauth2 2LO (service account)",
+        "oauth2_client_id": "cid",
+        "oauth2_client_secret": "csec",
+        "attributes": ["title", "status"],
+        "readonly": False,
+        "show_change_history": False,
+    }
+    defaults.update(overrides)
+    return JiraDefectClientConfig(**defaults)
+
+
 @pytest.mark.unit
 class TestConnectDirectOauth2:
-    """OAuth2 3LO against Jira Data Center: no cloud_id -> direct connection."""
+    """OAuth2 (3LO and 2LO) against Jira Data Center: no cloud_id -> direct connection."""
 
     def _connect(self, config: JiraDefectClientConfig) -> tuple[JiraClient, Mock, Mock]:
         """Build a JiraClient on the DC path with all externals mocked."""
@@ -901,21 +915,50 @@ class TestConnectDirectOauth2:
         # _patch_session_for_oauth2_token replaces session.send with a closure.
         assert client.jira._session.send.__name__ == "_oauth2_send"
 
-    def test_2lo_without_cloud_id_raises(self):
+    def test_2lo_connects_directly_against_server_url(self):
+        client, mock_jira_cls, _ = self._connect(_make_oauth2_2lo_config())
+
+        _, kwargs = mock_jira_cls.call_args
+        assert kwargs["server"] == "https://jira.example.com"
+        assert kwargs["token_auth"] == "tok-1"
+        assert client._uses_gateway is False
+        assert client._gateway_url is None
+
+    def test_2lo_configures_client_credentials_grant_with_form_encoding(self):
+        _, _, mock_configure = self._connect(_make_oauth2_2lo_config())
+
+        _, kwargs = mock_configure.call_args
+        assert kwargs["token_url"] == "https://jira.example.com/rest/oauth2/1.0/token"
+        assert kwargs["body_format"] == "form"
+        assert kwargs["grant_type"] == "client_credentials"
+        assert kwargs["client_id"] == "cid"
+        assert kwargs["client_secret"] == "csec"
+        assert kwargs["refresh_token"] is None
+        assert kwargs["expires_at"] is None
+
+    def test_2lo_session_send_is_patched_for_bearer_injection(self):
+        client, _, _ = self._connect(_make_oauth2_2lo_config())
+
+        assert client.jira._session.send.__name__ == "_oauth2_send"
+
+    def test_2lo_auth_expired_raises_connection_error_with_credentials_hint(self):
         prefix = "testbench_defect_service.clients.jira.jira_client"
-        config = _make_config(
-            auth_type="oauth2 2LO (service account)",
-            username=None,
-            password=None,
-            oauth2_client_id="cid",
-            oauth2_client_secret="csec",
-        )
         with (
             patch(f"{prefix}.JIRA"),
             patch.object(JiraClient, "_fetch_cloud_id", return_value=None),
-            pytest.raises(ConnectionError, match="2LO"),
+            patch(f"{prefix}.configure_oauth2_runtime"),
+            patch(
+                f"{prefix}.get_valid_jira_token_sync",
+                side_effect=JiraAuthExpiredError("expired"),
+            ),
+            pytest.raises(ConnectionError) as exc_info,
         ):
-            JiraClient(config)
+            JiraClient(_make_oauth2_2lo_config())
+
+        message = str(exc_info.value)
+        assert "client_credentials" in message
+        assert "client" in message.lower()
+        assert "Cloud" in message
 
     def test_auth_expired_raises_connection_error_with_misdetection_hint(self):
         prefix = "testbench_defect_service.clients.jira.jira_client"

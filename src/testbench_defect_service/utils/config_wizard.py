@@ -1,3 +1,4 @@
+import contextlib
 import os
 from pathlib import Path
 from typing import Any
@@ -174,10 +175,8 @@ def store_client_secret_in_env(
         return
 
     set_key(str(dotenv_path), JIRA_CLIENT_SECRET_ENV_VAR, secret)
-    try:
+    with contextlib.suppress(OSError):
         dotenv_path.chmod(0o600)
-    except OSError:
-        pass
     os.environ[JIRA_CLIENT_SECRET_ENV_VAR] = secret
     client_config.pop("oauth2_client_secret", None)
 
@@ -224,7 +223,9 @@ def configure_client(
     if client_config is None:
         return None
 
-    if client_type == "jira" and client_config.get("auth_type") == AUTH_OAUTH2_3LO:
+    if client_type == "jira" and str(client_config.get("auth_type") or "").startswith(
+        AUTH_OAUTH2_3LO
+    ):
         refresh_token = client_config.get("oauth2_refresh_token")
         if isinstance(refresh_token, str) and refresh_token:
             seed_oauth2_refresh_token(refresh_token)

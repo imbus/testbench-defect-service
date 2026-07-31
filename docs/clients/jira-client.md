@@ -118,12 +118,12 @@ readonly       = false
 
 | Option                   | Type    | Description                                                                                                 | Required | Default     |
 | ------------------------ | ------- | ----------------------------------------------------------------------------------------------------------- | -------- | ----------- |
-| `auth_type`            | String  | Authentication method. One of `"basic"`, `"token"`, `"oauth1"`, `"oauth2 2LO (service account)"`, or `"oauth2 3LO (user account)"`. | No       | `"basic"` |
+| `auth_type`            | String  | Authentication method. One of `"basic"`, `"token"`, `"oauth1"`, `"oauth2 2LO (service account)"`, or `"oauth2 3LO (user account)"`. The short forms `"oauth2 2LO"` and `"oauth2 3LO"` are accepted aliases. | No       | `"basic"` |
 | `username`             | String  | Jira username for basic auth. Can also be set via`JIRA_USERNAME`.                                         | No       | —          |
 | `password`             | String  | Jira API token for basic auth. Can also be set via`JIRA_PASSWORD`.                                        | No       | —          |
 | `token`                | String  | Personal Access Token for token auth (Jira Data Center). Can also be set via`JIRA_BEARER_TOKEN`.          | No       | —          |
-| `oauth2_client_id`     | String  | OAuth 2.0 client ID for both oauth2 flows (Jira Cloud; 3LO also on Jira Data Center). Can also be set via `JIRA_OAUTH2_CLIENT_ID`.         | No       | —          |
-| `oauth2_client_secret` | String  | OAuth 2.0 client secret for both oauth2 flows (Jira Cloud; 3LO also on Jira Data Center). Always stored via the `JIRA_OAUTH2_CLIENT_SECRET` environment variable (`.env`), never in `config.toml`. | No       | —          |
+| `oauth2_client_id`     | String  | OAuth 2.0 client ID for both oauth2 flows (Jira Cloud and Jira Data Center). Can also be set via `JIRA_OAUTH2_CLIENT_ID`.         | No       | —          |
+| `oauth2_client_secret` | String  | OAuth 2.0 client secret for both oauth2 flows (Jira Cloud and Jira Data Center). Always stored via the `JIRA_OAUTH2_CLIENT_SECRET` environment variable (`.env`), never in `config.toml`. | No       | —          |
 | `enable_shared_auth`   | Boolean | Use service account credentials for all projects instead of per-user auth.                                  | No       | —          |
 
 There are two OAuth 2.0 flows:
@@ -392,6 +392,30 @@ restart. Prefer the wizard flow; if you set the variable for the first start,
 remove it afterwards.
 :::
 
+### OAuth 2.0 (2LO) auth — service account (Jira Data Center)
+
+The 2-Legged `client_credentials` grant also works against Jira Data Center:
+the service detects Data Center automatically and mints access tokens directly
+from `{server_url}/rest/oauth2/1.0/token` (form-encoded) instead of the
+Atlassian identity endpoint. As on Jira Cloud there is no wizard step, no
+refresh token, and nothing is written to disk.
+
+```toml
+[testbench-defect-service.client_config]
+server_url       = "https://jira.example.com"
+auth_type        = "oauth2 2LO (service account)"
+oauth2_client_id = "YOUR_CLIENT_ID"
+```
+
+:::warning
+Vanilla Jira Data Center's incoming OAuth 2.0 application links only offer the
+authorization-code (+PKCE) flows — they do not issue tokens for the
+`client_credentials` grant. Use this auth_type only when your instance
+provides that grant (for example through a marketplace app that adds it).
+Otherwise the token request fails with HTTP 400 and the service reports a
+connection error; use *OAuth 2.0 (3LO)* or token auth instead.
+:::
+
 ---
 
 ### Environment variables
@@ -407,8 +431,8 @@ To avoid storing credentials in the config file, use environment variables inste
 | `JIRA_USERNAME`             | Username (basic auth)                                |
 | `JIRA_PASSWORD`             | API token (basic auth)                               |
 | `JIRA_BEARER_TOKEN`         | Personal Access Token (token auth, Jira Data Center) |
-| `JIRA_OAUTH2_CLIENT_ID`     | OAuth 2.0 client ID (2LO and 3LO, Jira Cloud; 3LO, Jira Data Center) |
-| `JIRA_OAUTH2_CLIENT_SECRET` | OAuth 2.0 client secret (2LO and 3LO, Jira Cloud; 3LO, Jira Data Center) |
+| `JIRA_OAUTH2_CLIENT_ID`     | OAuth 2.0 client ID (2LO and 3LO, Jira Cloud and Jira Data Center) |
+| `JIRA_OAUTH2_CLIENT_SECRET` | OAuth 2.0 client secret (2LO and 3LO, Jira Cloud and Jira Data Center) |
 | `JIRA_OAUTH2_REFRESH_TOKEN` | OAuth 2.0 refresh token (3LO only)       |
 
 ---
@@ -470,7 +494,7 @@ The client automatically detects whether it is connected to Jira Cloud or Jira D
 
 | Feature              | Jira Cloud                             | Jira Data Center                    |
 | -------------------- | -------------------------------------- | ----------------------------------- |
-| Authentication       | Basic (email + API token) or OAuth 2.0 | Token (PAT), Basic, or OAuth 2.0 3LO |
+| Authentication       | Basic (email + API token) or OAuth 2.0 | Token (PAT), Basic, or OAuth 2.0 (3LO; 2LO where the instance supports `client_credentials`) |
 | Pagination           | `nextPageToken` cursor               | `startAt` offset                  |
 | Issue types endpoint | Standard                               | `issuetypes` endpoint (DC ≥ 8.4) |
 | API base path        | `/rest/api/3/`                       | `/rest/api/2/`                    |

@@ -161,7 +161,7 @@ class AppConfig(Config):
         """Prompt for a Jira OAuth2 refresh token when starting the service."""
         if "testbench_defect_service.clients.JiraDefectClient" not in self.CLIENT_CLASS:
             return
-        if client_config.get("auth_type") != AUTH_OAUTH2_3LO:
+        if not str(client_config.get("auth_type") or "").startswith(AUTH_OAUTH2_3LO):
             return
         if (
             client_config.get("oauth2_refresh_token")
