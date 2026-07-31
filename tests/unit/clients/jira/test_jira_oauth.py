@@ -548,6 +548,20 @@ class TestExchangeAuthorizationCode:
         with pytest.raises(jira_oauth.JiraAuthExpiredError, match="refresh token"):
             jira_oauth.exchange_authorization_code_sync(**self._KWARGS)
 
+    @patch("urllib.request.urlopen")
+    def test_null_refresh_token_in_response_raises(self, mock_urlopen, isolated_env):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"access_token": "acc-1", "refresh_token": None, "expires_in": 3600}
+        ).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        with pytest.raises(jira_oauth.JiraAuthExpiredError, match="refresh token"):
+            jira_oauth.exchange_authorization_code_sync(**self._KWARGS)
+
+        # Verify nothing was persisted to disk
+        assert not isolated_env.exists()
+
 
 class TestDataCenterTokenUrl:
     """Tests for the data_center_token_url helper."""

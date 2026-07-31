@@ -165,8 +165,8 @@ def exchange_authorization_code_sync(  # noqa: PLR0913
         payload, token_url=token_url, body_format=BODY_FORMAT_FORM
     )
 
-    refresh_token = str(data.get("refresh_token", ""))
-    if not refresh_token:
+    refresh_token = data.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token:
         raise JiraAuthExpiredError(
             "Jira OAuth2 token response did not contain a refresh token"
         )
