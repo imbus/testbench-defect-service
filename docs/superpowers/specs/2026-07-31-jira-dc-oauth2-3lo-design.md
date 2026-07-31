@@ -53,8 +53,13 @@ Today a failed cloud_id fetch is a hard error for OAuth2; it becomes the DC
 signal (logged at info level).
 
 **Misdetection failure mode:** a Cloud site whose `/_edge/tenant_info` is
-blocked (e.g. by a proxy) is treated as DC, hits the DC token endpoint, gets a
-404/400, and fails with an error message naming both possibilities.
+blocked (e.g. by a proxy) is treated as DC and hits the DC token endpoint.
+The resulting error depends on how that endpoint responds: a 404 (no such
+route) surfaces the dual-possibility hint directly — application link not
+configured in Jira DC, or `/_edge/tenant_info` unreachable on a Cloud site. A
+400 (`JiraAuthExpiredError`) surfaces as an authorization-failure message that
+likewise names the possible Cloud-misdetection cause and points at
+`/_edge/tenant_info` reachability.
 
 ## 2. Token module (`jira_oauth.py`)
 

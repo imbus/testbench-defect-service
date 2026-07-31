@@ -6,13 +6,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 
 import pytest
 from jira import JIRAError
 from sanic import NotFound
 
 from testbench_defect_service.clients.jira.config import JiraDefectClientConfig
-from testbench_defect_service.clients.jira.jira_client import JiraClient
+from testbench_defect_service.clients.jira.jira_client import JiraClient, JiraConnectionError
+from testbench_defect_service.clients.jira.jira_oauth import JiraAuthExpiredError
 from testbench_defect_service.models.defects import Defect, Login, SyncContext
 
 _SYNC_CONTEXT = SyncContext(iTBProject=None)
@@ -914,6 +916,58 @@ class TestConnectDirectOauth2:
             pytest.raises(ConnectionError, match="2LO"),
         ):
             JiraClient(config)
+
+    def test_auth_expired_raises_connection_error_with_misdetection_hint(self):
+        prefix = "testbench_defect_service.clients.jira.jira_client"
+        with (
+            patch(f"{prefix}.JIRA"),
+            patch.object(JiraClient, "_fetch_cloud_id", return_value=None),
+            patch(f"{prefix}.configure_oauth2_runtime"),
+            patch(
+                f"{prefix}.get_valid_jira_token_sync",
+                side_effect=JiraAuthExpiredError("expired"),
+            ),
+            pytest.raises(ConnectionError) as exc_info,
+        ):
+            JiraClient(_make_oauth2_3lo_config())
+
+        message = str(exc_info.value)
+        assert "setup wizard" in message
+        assert "Cloud" in message
+
+    def test_token_endpoint_404_raises_connection_error_with_both_hints(self):
+        prefix = "testbench_defect_service.clients.jira.jira_client"
+        http_error = HTTPError(
+            "https://jira.example.com/rest/oauth2/1.0/token", 404, "Not Found", None, None
+        )
+        with (
+            patch(f"{prefix}.JIRA"),
+            patch.object(JiraClient, "_fetch_cloud_id", return_value=None),
+            patch(f"{prefix}.configure_oauth2_runtime"),
+            patch(f"{prefix}.get_valid_jira_token_sync", side_effect=http_error),
+            pytest.raises(ConnectionError) as exc_info,
+        ):
+            JiraClient(_make_oauth2_3lo_config())
+
+        message = str(exc_info.value)
+        assert "rest/oauth2/1.0/token" in message
+        assert "application link" in message
+        assert "_edge/tenant_info" in message
+
+    def test_verify_connection_failure_raises_401(self):
+        prefix = "testbench_defect_service.clients.jira.jira_client"
+        with patch(f"{prefix}.JIRA") as mock_jira_cls:
+            mock_jira_cls.return_value = _make_jira(is_cloud=False, version=(9, 0, 0))
+            with (
+                patch.object(JiraClient, "_fetch_cloud_id", return_value=None),
+                patch(f"{prefix}.configure_oauth2_runtime"),
+                patch(f"{prefix}.get_valid_jira_token_sync", return_value="tok-1"),
+                patch.object(JiraClient, "_verify_connection", return_value=False),
+                pytest.raises(JiraConnectionError) as exc_info,
+            ):
+                JiraClient(_make_oauth2_3lo_config())
+
+        assert exc_info.value.status_code == 401
 
 
 @pytest.mark.unit

@@ -397,8 +397,11 @@ class JiraClient:
             initial_oauth2_token = get_valid_jira_token_sync(is_first_call=True)
         except JiraAuthExpiredError as exc:
             raise ConnectionError(
-                "Jira OAuth2 authorization expired while establishing the initial connection. "
-                "Please re-run the setup wizard to authorize Jira OAuth2."
+                "Jira OAuth2 authorization failed while establishing the initial connection "
+                f"to '{self.config.server_url}' (treated as Jira Data Center). Re-run the "
+                "setup wizard to authorize Jira OAuth2 — or, if this is a Jira Cloud site, "
+                f"ensure '{self.config.server_url}{_TENANT_INFO_PATH}' is reachable so the "
+                "service can detect Cloud."
             ) from exc
         except urllib_error.HTTPError as exc:
             if exc.code == HTTPStatus.NOT_FOUND:
