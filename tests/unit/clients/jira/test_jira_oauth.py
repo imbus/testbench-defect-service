@@ -2,8 +2,10 @@ import io
 import json
 import threading
 import time
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
+from urllib.parse import parse_qs
 
 import pytest
 import tomli_w
@@ -36,6 +38,8 @@ def isolated_env(tmp_path, monkeypatch):
         {
             "client_id": "YOUR_CLIENT_ID",
             "client_secret": "YOUR_CLIENT_SECRET",
+            "token_url": jira_oauth.CLOUD_TOKEN_URL,
+            "body_format": jira_oauth.BODY_FORMAT_JSON,
         }
     )
 
@@ -476,3 +480,207 @@ class TestConcurrentFirstCalls:
 
         assert mock_refresh.called
         assert token == "fresh"
+
+
+class TestExchangeAuthorizationCode:
+    """Tests for the one-time authorization_code + PKCE exchange (Jira DC)."""
+
+    _KWARGS: ClassVar[dict[str, str]] = {
+        "token_url": "https://jira.example.com/rest/oauth2/1.0/token",
+        "client_id": "cid",
+        "client_secret": "csec",
+        "redirect_uri": "https://localhost/callback",
+        "code": "auth-code-1",
+        "code_verifier": "verifier-1",
+    }
+
+    @patch("urllib.request.urlopen")
+    def test_success_sends_form_payload_and_persists_refresh_token(
+        self, mock_urlopen, isolated_env
+    ):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"access_token": "acc-1", "refresh_token": "ref-1", "expires_in": 3600}
+        ).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        refresh = jira_oauth.exchange_authorization_code_sync(**self._KWARGS)
+
+        assert refresh == "ref-1"
+        assert jira_oauth.token_store["access_token"] == "acc-1"
+        assert jira_oauth.token_store["refresh_token"] == "ref-1"
+
+        sent_request = mock_urlopen.call_args.args[0]
+        assert sent_request.full_url == "https://jira.example.com/rest/oauth2/1.0/token"
+        assert sent_request.get_header("Content-type") == "application/x-www-form-urlencoded"
+        sent_body = parse_qs(sent_request.data.decode("utf-8"))
+        assert sent_body == {
+            "grant_type": ["authorization_code"],
+            "client_id": ["cid"],
+            "client_secret": ["csec"],
+            "redirect_uri": ["https://localhost/callback"],
+            "code": ["auth-code-1"],
+            "code_verifier": ["verifier-1"],
+        }
+
+        # Refresh token (and only the refresh token) is persisted to disk.
+        with isolated_env.open("rb") as f:
+            data = jira_oauth.tomllib.load(f)
+        section = data[jira_oauth._TOKEN_CACHE_SECTION]
+        assert section["refresh_token"] == "ref-1"
+        assert "access_token" not in section
+
+    @patch("urllib.request.urlopen")
+    def test_http_400_raises_auth_expired(self, mock_urlopen):
+        mock_urlopen.side_effect = HTTPError("url", 400, "Bad Request", {}, io.BytesIO(b""))
+
+        with pytest.raises(jira_oauth.JiraAuthExpiredError):
+            jira_oauth.exchange_authorization_code_sync(**self._KWARGS)
+
+    @patch("urllib.request.urlopen")
+    def test_missing_refresh_token_in_response_raises(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"access_token": "acc-1", "expires_in": 3600}
+        ).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        with pytest.raises(jira_oauth.JiraAuthExpiredError, match="refresh token"):
+            jira_oauth.exchange_authorization_code_sync(**self._KWARGS)
+
+    @patch("urllib.request.urlopen")
+    def test_null_refresh_token_in_response_raises(self, mock_urlopen, isolated_env):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"access_token": "acc-1", "refresh_token": None, "expires_in": 3600}
+        ).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        with pytest.raises(jira_oauth.JiraAuthExpiredError, match="refresh token"):
+            jira_oauth.exchange_authorization_code_sync(**self._KWARGS)
+
+        # Verify nothing was persisted to disk
+        assert not isolated_env.exists()
+
+
+class TestDataCenterTokenUrl:
+    """Tests for the data_center_token_url helper."""
+
+    def test_builds_dc_token_endpoint(self):
+        assert (
+            jira_oauth.data_center_token_url("https://jira.example.com")
+            == "https://jira.example.com/rest/oauth2/1.0/token"
+        )
+
+    def test_strips_trailing_slash(self):
+        assert (
+            jira_oauth.data_center_token_url("https://jira.example.com/")
+            == "https://jira.example.com/rest/oauth2/1.0/token"
+        )
+
+
+class TestPostOauthTokenRequestEncoding:
+    """Tests for token_url / body_format handling in _post_oauth_token_request."""
+
+    def _mock_response(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"access_token": "a"}).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+    @patch("urllib.request.urlopen")
+    def test_defaults_to_cloud_url_and_json(self, mock_urlopen):
+        self._mock_response(mock_urlopen)
+
+        jira_oauth._post_oauth_token_request({"grant_type": "refresh_token"})
+
+        sent_request = mock_urlopen.call_args.args[0]
+        assert sent_request.full_url == jira_oauth.CLOUD_TOKEN_URL
+        assert sent_request.get_header("Content-type") == "application/json"
+        assert json.loads(sent_request.data.decode("utf-8")) == {"grant_type": "refresh_token"}
+
+    @patch("urllib.request.urlopen")
+    def test_form_encoding_against_configured_dc_url(self, mock_urlopen):
+        self._mock_response(mock_urlopen)
+        jira_oauth._oauth2_settings.update(
+            {
+                "token_url": "https://jira.example.com/rest/oauth2/1.0/token",
+                "body_format": jira_oauth.BODY_FORMAT_FORM,
+            }
+        )
+
+        jira_oauth._post_oauth_token_request({"grant_type": "refresh_token", "client_id": "id"})
+
+        sent_request = mock_urlopen.call_args.args[0]
+        assert sent_request.full_url == "https://jira.example.com/rest/oauth2/1.0/token"
+        assert sent_request.get_header("Content-type") == "application/x-www-form-urlencoded"
+        sent_body = parse_qs(sent_request.data.decode("utf-8"))
+        assert sent_body == {"grant_type": ["refresh_token"], "client_id": ["id"]}
+
+    @patch("urllib.request.urlopen")
+    def test_explicit_args_override_settings(self, mock_urlopen):
+        self._mock_response(mock_urlopen)
+
+        jira_oauth._post_oauth_token_request(
+            {"grant_type": "authorization_code"},
+            token_url="https://dc.example.com/rest/oauth2/1.0/token",
+            body_format=jira_oauth.BODY_FORMAT_FORM,
+        )
+
+        sent_request = mock_urlopen.call_args.args[0]
+        assert sent_request.full_url == "https://dc.example.com/rest/oauth2/1.0/token"
+        assert sent_request.get_header("Content-type") == "application/x-www-form-urlencoded"
+
+
+class TestConfigureOauth2RuntimeTokenUrl:
+    """configure_oauth2_runtime must apply token_url and body_format."""
+
+    def test_sets_token_url_and_body_format(self):
+        jira_oauth.configure_oauth2_runtime(
+            token_url="https://jira.example.com/rest/oauth2/1.0/token",
+            body_format=jira_oauth.BODY_FORMAT_FORM,
+        )
+        assert (
+            jira_oauth._oauth2_settings["token_url"]
+            == "https://jira.example.com/rest/oauth2/1.0/token"
+        )
+        assert jira_oauth._oauth2_settings["body_format"] == jira_oauth.BODY_FORMAT_FORM
+
+    def test_defaults_remain_cloud(self):
+        jira_oauth.configure_oauth2_runtime(client_id="id")
+        assert jira_oauth._oauth2_settings["token_url"] == jira_oauth.CLOUD_TOKEN_URL
+        assert jira_oauth._oauth2_settings["body_format"] == jira_oauth.BODY_FORMAT_JSON
+
+
+class TestRefreshUsesConfiguredDcEndpoint:
+    """3LO refresh must hit the configured DC endpoint with a form body."""
+
+    @patch("urllib.request.urlopen")
+    def test_refresh_payload_form_encoded_to_dc(self, mock_urlopen):
+        jira_oauth._oauth2_settings.update(
+            {
+                "client_id": "cid",
+                "client_secret": "csec",
+                "token_url": "https://jira.example.com/rest/oauth2/1.0/token",
+                "body_format": jira_oauth.BODY_FORMAT_FORM,
+            }
+        )
+        jira_oauth.token_store["refresh_token"] = "rt-1"
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"access_token": "new_acc", "refresh_token": "rt-2", "expires_in": 3600}
+        ).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        data = jira_oauth._refresh_jira_token_sync()
+
+        assert data["access_token"] == "new_acc"
+        sent_request = mock_urlopen.call_args.args[0]
+        assert sent_request.full_url == "https://jira.example.com/rest/oauth2/1.0/token"
+        sent_body = parse_qs(sent_request.data.decode("utf-8"))
+        assert sent_body == {
+            "grant_type": ["refresh_token"],
+            "client_id": ["cid"],
+            "client_secret": ["csec"],
+            "refresh_token": ["rt-1"],
+        }

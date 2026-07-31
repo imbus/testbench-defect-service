@@ -3,6 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
+from urllib import error as urllib_error
 from urllib.parse import urlparse
 
 import requests
@@ -18,10 +19,12 @@ from testbench_defect_service.clients.jira.config import (
 )
 from testbench_defect_service.clients.jira.defect_mapping_service import DefectToJiraMapper
 from testbench_defect_service.clients.jira.jira_oauth import (
+    BODY_FORMAT_FORM,
     GRANT_CLIENT_CREDENTIALS,
     GRANT_REFRESH_TOKEN,
     JiraAuthExpiredError,
     configure_oauth2_runtime,
+    data_center_token_url,
     get_valid_jira_token_sync,
 )
 from testbench_defect_service.clients.jira.utils import (
@@ -136,10 +139,23 @@ class JiraClient:
         - ``token`` and ``oauth1`` are only used on Jira Data Center / Server,
           which has no gateway.
         - A 401 on DC basic auth means wrong credentials, not a scoped token.
+
+        For OAuth2, a probe for the Atlassian Cloud ID decides the path up
+        front: a cloud_id means Jira Cloud, connected via the gateway; no
+        cloud_id means Jira Data Center, connected directly against
+        ``config.server_url`` (see ``_connect_direct_oauth2``).
         """
         try:
             if is_oauth2(self.config.auth_type):
-                return self._connect_via_gateway()
+                cloud_id = self._fetch_cloud_id()
+                if cloud_id:
+                    return self._connect_via_gateway(cloud_id)
+                logger.info(
+                    "No Atlassian Cloud ID found for '%s' — treating the instance as "
+                    "Jira Data Center and connecting directly (OAuth2).",
+                    self.config.server_url,
+                )
+                return self._connect_direct_oauth2()
 
             jira = self._create_jira_instance(self.config.server_url)
         except NotImplementedError:
@@ -295,15 +311,16 @@ class JiraClient:
                 ) from e
             raise
 
-    def _connect_via_gateway(self) -> JIRA:
+    def _connect_via_gateway(self, cloud_id: str | None = None) -> JIRA:
         """Connect to Jira Cloud through the Atlassian API gateway.
 
-        Fetches the Cloud ID, then creates a JIRA instance against the gateway URL.
+        Uses *cloud_id* when given (already fetched by the caller), otherwise
+        fetches it. Creates a JIRA instance against the gateway URL.
 
         Raises ``ConnectionError`` when the Cloud ID cannot be fetched or the
         gateway connection fails.
         """
-        cloud_id = self._fetch_cloud_id()
+        cloud_id = cloud_id or self._fetch_cloud_id()
         if not cloud_id:
             raise ConnectionError(
                 f"Could not obtain Atlassian Cloud ID for '{self.config.server_url}'. "
@@ -316,7 +333,7 @@ class JiraClient:
         )
 
         if is_oauth2(self.config.auth_type):
-            is_2lo = self.config.auth_type == AUTH_OAUTH2_2LO
+            is_2lo = self.config.auth_type.startswith(AUTH_OAUTH2_2LO)
             configure_oauth2_runtime(
                 grant_type=GRANT_CLIENT_CREDENTIALS if is_2lo else GRANT_REFRESH_TOKEN,
                 refresh_token=None if is_2lo else self.config.oauth2_refresh_token,
@@ -349,6 +366,74 @@ class JiraClient:
         self._gateway_url = gateway_url
         self._patch_session_for_gateway(jira._session, gateway_url)
 
+        return jira
+
+    def _connect_direct_oauth2(self) -> JIRA:
+        """Connect to Jira Data Center directly with OAuth2 (3LO or 2LO).
+
+        Jira DC has no Atlassian gateway: tokens come from
+        ``{server_url}/rest/oauth2/1.0/token`` (form-encoded bodies) and API
+        requests go straight to the configured server URL.  3LO exchanges the
+        stored refresh token; 2LO mints tokens via the client_credentials
+        grant, which requires the DC instance to support that grant (vanilla
+        Jira DC only offers authorization-code flows).
+        """
+        is_2lo = self.config.auth_type.startswith(AUTH_OAUTH2_2LO)
+        token_url = data_center_token_url(self.config.server_url)
+        configure_oauth2_runtime(
+            grant_type=GRANT_CLIENT_CREDENTIALS if is_2lo else GRANT_REFRESH_TOKEN,
+            refresh_token=None if is_2lo else self.config.oauth2_refresh_token,
+            client_id=self.config.oauth2_client_id,
+            client_secret=self.config.oauth2_client_secret,
+            expires_at=None if is_2lo else self.config.oauth2_expires_at,
+            token_url=token_url,
+            body_format=BODY_FORMAT_FORM,
+        )
+        try:
+            initial_oauth2_token = get_valid_jira_token_sync(is_first_call=True)
+        except JiraAuthExpiredError as exc:
+            if is_2lo:
+                raise ConnectionError(
+                    "Jira OAuth2 client_credentials token request failed while establishing "
+                    f"the initial connection to '{self.config.server_url}' (treated as Jira "
+                    "Data Center). Verify the OAuth2 client id/secret and that the instance "
+                    "supports the client_credentials grant — or, if this is a Jira Cloud "
+                    f"site, ensure '{self.config.server_url}{_TENANT_INFO_PATH}' is "
+                    "reachable so the service can detect Cloud."
+                ) from exc
+            raise ConnectionError(
+                "Jira OAuth2 authorization failed while establishing the initial connection "
+                f"to '{self.config.server_url}' (treated as Jira Data Center). Re-run the "
+                "setup wizard to authorize Jira OAuth2 — or, if this is a Jira Cloud site, "
+                f"ensure '{self.config.server_url}{_TENANT_INFO_PATH}' is reachable so the "
+                "service can detect Cloud."
+            ) from exc
+        except urllib_error.HTTPError as exc:
+            if exc.code == HTTPStatus.NOT_FOUND:
+                raise ConnectionError(
+                    f"Jira OAuth2 token endpoint not found at '{token_url}' (HTTP 404). "
+                    "Ensure an incoming OAuth 2.0 application link is configured in Jira "
+                    "Data Center — or, if this is a Jira Cloud site, that "
+                    f"'{self.config.server_url}{_TENANT_INFO_PATH}' is reachable."
+                ) from exc
+            raise
+
+        jira = self._create_jira_instance(
+            self.config.server_url, token_override=initial_oauth2_token
+        )
+        self._patch_session_for_oauth2_token(jira._session)
+
+        if not self._verify_connection(jira):
+            remedy = (
+                "Verify the OAuth2 client id/secret."
+                if is_2lo
+                else "Please re-run the setup wizard to authorize Jira OAuth2."
+            )
+            raise JiraConnectionError(
+                f"OAuth2 authentication failed against Jira Data Center at "
+                f"'{self.config.server_url}'. {remedy}",
+                status_code=HTTPStatus.UNAUTHORIZED,
+            )
         return jira
 
     def _patch_session_for_gateway(self, session: Any, gateway_url: str) -> None:
