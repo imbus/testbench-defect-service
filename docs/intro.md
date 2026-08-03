@@ -40,11 +40,11 @@ The service runs a [Sanic](https://sanic.dev)-based HTTP server and delegates al
 │                (Sanic)               │
 ├──────────────────────────────────────┤
 │            DefectClient              │
-├───────────────────┬──────────────────┤
-│        JSONL      │       Jira       │
-└──────────┬────────┴────────┬─────────┘
-           │                 │
-     .jsonl files      Jira REST API
+├────────────┬────────────┬────────────┤
+│   JSONL    │   Excel    │    Jira    │
+└──────┬─────┴──────┬─────┴──────┬─────┘
+       │            │            │
+ .jsonl files  spreadsheets  Jira REST API
 ```
 
 ## Supported Backends
@@ -52,6 +52,7 @@ The service runs a [Sanic](https://sanic.dev)-based HTTP server and delegates al
 | Backend | Class | Description |
 |---------|-------|-------------|
 | [**JSONL**](clients/jsonl-client.md) | `testbench_defect_service.clients.JsonlDefectClient` | Stores defects as newline-delimited JSON files on disk. No external dependencies. Ideal for local use and testing. |
+| [**Excel**](clients/excel-client.md) | `testbench_defect_service.clients.ExcelDefectClient` | Reads and writes defects in `.xlsx`, `.xls`, `.csv`, `.tsv` and `.txt` files using a configurable column mapping. Requires the optional `[excel]` extra. |
 | [**Jira**](clients/jira-client.md) | `testbench_defect_service.clients.JiraDefectClient` | Full integration with Jira Cloud or Jira Data Center / Server. Requires the optional `[jira]` extra. |
 
 The backend is selected via the `client_class` configuration key and can be switched at any time by updating the config file and restarting the service.
@@ -60,7 +61,7 @@ The backend is selected via the `client_class` configuration key and can be swit
 
 - **New here?** Start with the [Installation](getting-started/installation.md) and [Quickstart](getting-started/quickstart.md) guides.
 - **Configuring the service?** See the [Configuration](configuration.md) page.
-- **Choosing a client?** Check the [Clients overview](clients/index.md), then dive into [JSONL](clients/jsonl-client.md) or [Jira](clients/jira-client.md).
+- **Choosing a client?** Check the [Clients overview](clients/index.md), then dive into [JSONL](clients/jsonl-client.md), [Excel](clients/excel-client.md) or [Jira](clients/jira-client.md).
 - **Running as a Windows service?** See the [Windows service guide](windows-service-installation.md).
 - **CLI reference?** See the [CLI commands](cli.md) page.
 

@@ -4,13 +4,14 @@ title: Clients
 ---
 # Clients
 
-A **client** is a pluggable component that connects the service's generic defect API to a specific backend — such as a file system or a project management tool. The service ships with two built-in clients and supports [custom clients](custom-client.md).
+A **client** is a pluggable component that connects the service's generic defect API to a specific backend — such as a file system or a project management tool. The service ships with three built-in clients and supports [custom clients](custom-client.md).
 
 ## Built-in clients
 
 | Client | Data source | Extra dependencies | Best for |
 |--------|---------------------|-------------------|----------|
 | [**JSONL**](jsonl-client.md) | `.jsonl` files on disk | None (included in base install) | Simple file-based setup; no external service required |
+| [**Excel**](excel-client.md) | `.xlsx`, `.xls`, `.csv`, `.tsv`, `.txt` files on disk | `pip install testbench-defect-service[excel]` | Defects that already live in a spreadsheet with a fixed column layout |
 | [**Jira**](jira-client.md) | Jira REST API | `pip install testbench-defect-service[jira]` | Teams managing defects in Jira Cloud or Jira Data Center |
 
 ## Choosing a client
@@ -23,6 +24,17 @@ Use the [**JSONL client**](jsonl-client.md) when:
 - Your defect data lives in plain files that other tools also read.
 
 **Get started:** [JSONL Client](jsonl-client.md)
+
+---
+
+### Excel client
+
+Use the [**Excel client**](excel-client.md) when:
+- Your defects are already maintained in a spreadsheet or a delimited text file.
+- The file layout is fixed, but each defect field can be mapped to a column number.
+- You are migrating from the legacy DMProxy Excel connector and want to reuse its `.properties` file.
+
+**Get started:** [Excel Client](excel-client.md)
 
 ---
 
@@ -52,7 +64,7 @@ Set `client_class` in your `config.toml` and provide client-specific settings un
 ```toml
 # config.toml
 [testbench-defect-service]
-client_class = "JsonlDefectClient"   # or JiraDefectClient
+client_class = "JsonlDefectClient"   # or ExcelDefectClient / JiraDefectClient
 
 [testbench-defect-service.client_config]
 # client-specific settings go here
