@@ -105,14 +105,14 @@ def _normalize_legacy_excel_config(data: dict[str, Any]) -> dict[str, Any]:
         "simpleDateFormat": "simple_date_format",
         "defects.header.line": "defects_data_header_line",
         "defects.data.startingLine": "defects_data_starting_line",
-        "separator": "seperator",
+        "separator": "separator",
         "defect.id.columnNo": "id_column_no",
         "defect.title.columnNo": "title_column_no",
         "defect.references.columnNo": "references_column_no",
         "defect.discoverer.columnNo": "discoverer_column_no",
         "defect.lastedited.columnNo": "lastedit_column_no",
         "defect.description.columnNo": "description_column_no",
-        "defect.references.separator": "references_seperator",
+        "defect.references.separator": "references_separator",
         "defect.id.prefix": "id_prefix",
         "defect.id.startingValue": "defect_id_starting_value",
         "defect.id.digitNumber": "defect_id_digit_numbers",
@@ -187,23 +187,23 @@ class ProjectConfig(BaseModel):
     worksheet_name: str | None = Field(
         default=None,
         validation_alias=AliasChoices("worksheet_name", "worksheetName"),
-        descriptions="Name of the worksheet in the Excel file that contains the defects data.",
+        description="Name of the worksheet in the Excel file that contains the defects data.",
     )
     file_type: str | None = Field(
         default=None,
         validation_alias=AliasChoices("file_type", "fileType"),
-        descriptions="Type of the Excel file (e.g., '.xlsx', '.xls', '.csv', '.txt').",
+        description="Type of the Excel file (e.g., '.xlsx', '.xls', '.csv', '.txt').",
     )
     simple_date_format: str | None = Field(
         default=None,
         validation_alias=AliasChoices("simple_date_format", "simpleDateFormat"),
-        descriptions="Date format used in the Excel file (e.g., 'yyyy-MM-dd').",
+        description="Date format used in the Excel file (e.g., 'yyyy-MM-dd').",
     )
 
     defects_data_header_line: int | None = Field(
         default=None,
         validation_alias=AliasChoices("defects_data_header_line", "defects.header.line"),
-        descriptions="Line number in the Excel file where the table header is located.",
+        description="Line number in the Excel file where the table header is located.",
     )
     defects_data_starting_line: int | None = Field(
         default=None,
@@ -211,64 +211,62 @@ class ProjectConfig(BaseModel):
             "defects_data_starting_line",
             "defects.data.startingLine",
         ),
-        descriptions="Line number in the Excel file where the defects data starts.",
+        description="Line number in the Excel file where the defects data starts.",
     )
 
-    seperator: str | None = Field(
+    separator: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("seperator", "separator"),
-        descriptions="Character used to separate values in the file (e.g., ',', ';', '\\t')."
+        validation_alias=AliasChoices("separator", "separator"),
+        description="Character used to separate values in the file (e.g., ',', ';', '\\t').",
     )
     control_fields: list[ControlFields] | None = Field(
-        default_factory=None,
-        descriptions="List of control fields for this project."
+        default=None, description="List of control fields for this project."
     )
 
     id_column_no: int | None = Field(
         default=None,
         validation_alias=AliasChoices("id_column_no", "defect.id.columnNo"),
-        descriptions="Column number in the Excel file that contains the defect ID.",
+        description="Column number in the Excel file that contains the defect ID.",
     )
     title_column_no: int | None = Field(
         default=None,
         validation_alias=AliasChoices("title_column_no", "defect.title.columnNo"),
-        descriptions="Column number in the Excel file that contains the defect title.",
+        description="Column number in the Excel file that contains the defect title.",
     )
     references_column_no: int | None = Field(
         default=None,
         validation_alias=AliasChoices("references_column_no", "defect.references.columnNo"),
-        descriptions="Column number in the Excel file that contains the defect references.",
+        description="Column number in the Excel file that contains the defect references.",
     )
     discoverer_column_no: int | None = Field(
         default=None,
         validation_alias=AliasChoices("discoverer_column_no", "defect.discoverer.columnNo"),
-        descriptions="Column number in the Excel file that contains the defect discoverer.",
+        description="Column number in the Excel file that contains the defect discoverer.",
     )
     lastedit_column_no: int | None = Field(
         default=None,
         validation_alias=AliasChoices("lastedit_column_no", "defect.lastedit.columnNo"),
-        descriptions="Column number in the Excel file that contains the defect last edit.",
+        description="Column number in the Excel file that contains the defect last edit.",
     )
     description_column_no: int | None = Field(
         default=None,
         validation_alias=AliasChoices("description_column_no", "defect.description.columnNo"),
-        descriptions="Column number in the Excel file that contains the defect description.",
+        description="Column number in the Excel file that contains the defect description.",
     )
 
-    references_seperator: str | None = Field(
+    references_separator: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
-            "references_seperator",
             "references_separator",
             "defect.references.separator",
         ),
-        descriptions="Character used to separate multiple references in the references column.",
+        description="Character used to separate multiple references in the references column.",
     )
     attributes: list[str] | None = Field(None, description="Attributes for this project")
     id_prefix: str | None = Field(
         default=None,
         validation_alias=AliasChoices("id_prefix", "defect.id.prefix"),
-        descriptions="Prefix used for defect IDs in this project.",
+        description="Prefix used for defect IDs in this project.",
     )
     defect_id_starting_value: str | None = Field(
         default=None,
@@ -276,7 +274,7 @@ class ProjectConfig(BaseModel):
             "defect_id_starting_value",
             "defect.id.startingValue",
         ),
-        descriptions="Starting value for defect IDs in this project.",
+        description="Starting value for defect IDs in this project.",
     )
     defect_id_digit_numbers: int | None = Field(
         default=None,
@@ -284,16 +282,15 @@ class ProjectConfig(BaseModel):
             "defect_id_digit_numbers",
             "defect.id.digitNumber",
         ),
-        descriptions="Number of digits for defect IDs in this project.",
+        description="Number of digits for defect IDs in this project.",
     )
 
     transitions: list[Transition] | None = Field(
-        default_factory=None,
-        descriptions="List of state transitions for defects in this project."
+        default=None, description="List of state transitions for defects in this project."
     )
     udfs: list[UserDefiendAttributes] | None = Field(
-        default_factory=None,
-        descriptions="List of user-defined attributes for defects in this project."
+        default=None,
+        description="List of user-defined attributes for defects in this project.",
     )
 
     buffer_cleanup_interval_minutes: float | None = Field(
@@ -302,17 +299,17 @@ class ProjectConfig(BaseModel):
             "buffer_cleanup_interval_minutes",
             "bufferCleanupIntervalMinutes",
         ),
-        descriptions="Interval in minutes for cleaning up the buffer for this project."
+        description="Interval in minutes for cleaning up the buffer for this project.",
     )
     buffer_max_age_minutes: float | None = Field(
         default=None,
         validation_alias=AliasChoices("buffer_max_age_minutes", "bufferMaxAgeMinutes"),
-        descriptions="Maximum age in minutes for the buffer for this project."
+        description="Maximum age in minutes for the buffer for this project.",
     )
     buffer_max_size_mib: float | None = Field(
         default=None,
         validation_alias=AliasChoices("buffer_max_size_mib", "bufferMaxSizeMiB"),
-        descriptions="Maximum size in MiB for the buffer for this project."
+        description="Maximum size in MiB for the buffer for this project.",
     )
 
     @property
@@ -330,39 +327,38 @@ class ExcelDefectClientConfig(BaseModel):
     system_name: str = Field(
         default="DefectService",
         validation_alias=AliasChoices("system_name", "systemName"),
-        descriptions="Name of the defect management system."
+        description="Name of the defect management system.",
     )
     readonly: bool = Field(
         default=False,
         validation_alias=AliasChoices("readonly", "readOnly"),
-        descriptions="Indicates if the Excel file is read-only."
+        description="Indicates if the Excel file is read-only.",
     )
     excel_file_path: Path = Field(
-        default=None,
         validation_alias=AliasChoices("excel_file_path", "excelFilePath"),
-        descriptions="Path to the Excel file containing defect data."
+        description="Path to the Excel file containing defect data.",
     )
     worksheet_name: str | None = Field(
         default=None,
         validation_alias=AliasChoices("worksheet_name", "worksheetName"),
-        descriptions="Name of the worksheet in the Excel file."
+        description="Name of the worksheet in the Excel file.",
     )
 
-    file_type: str = Field(
+    file_type: str | None = Field(
         default=None,
         validation_alias=AliasChoices("file_type", "fileType"),
-        descriptions="Type of the Excel file (e.g., '.xlsx', '.xls', '.csv', '.txt')."
+        description="Type of the Excel file (e.g., '.xlsx', '.xls', '.csv', '.txt').",
     )
-    simple_date_format: str = Field(
+    simple_date_format: str | None = Field(
         default=None,
         validation_alias=AliasChoices("simple_date_format", "simpleDateFormat"),
-        descriptions="Date format used in the Excel file (e.g., 'yyyy-MM-dd')."
+        description="Date format used in the Excel file (e.g., 'yyyy-MM-dd').",
     )
 
     defects_data_header_line: int = Field(
         default=1,
         validation_alias=AliasChoices("defects_data_header_line", "defects.header.line"),
-        descriptions="Line number in the Excel file where the table header is located.",
+        description="Line number in the Excel file where the table header is located.",
     )
     defects_data_starting_line: int = Field(
         default=2,
@@ -370,48 +366,47 @@ class ExcelDefectClientConfig(BaseModel):
             "defects_data_starting_line",
             "defects.data.startingLine",
         ),
-        descriptions="Line number in the Excel file where the defect data starts.",
+        description="Line number in the Excel file where the defect data starts.",
     )
 
-    seperator: str = Field(
+    separator: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("seperator", "separator"),
-        descriptions="Separator used in the file."
+        validation_alias=AliasChoices("separator", "separator"),
+        description="Separator used in the file.",
     )
     control_fields: list[ControlFields] = Field(
-        default_factory=list,
-        descriptions="List of control fields."
+        default_factory=list, description="List of control fields."
     )
 
     id_column_no: int = Field(
         default=1,
         validation_alias=AliasChoices("id_column_no", "defect.id.columnNo"),
-        descriptions="Column number in the Excel file that contains the defect ID.",
+        description="Column number in the Excel file that contains the defect ID.",
     )
     title_column_no: int = Field(
         default=2,
         validation_alias=AliasChoices("title_column_no", "defect.title.columnNo"),
-        descriptions="Column number in the Excel file that contains the defect title.",
+        description="Column number in the Excel file that contains the defect title.",
     )
     references_column_no: int = Field(
         default=3,
         validation_alias=AliasChoices("references_column_no", "defect.references.columnNo"),
-        descriptions="Column number in the Excel file that contains the defect references.",
+        description="Column number in the Excel file that contains the defect references.",
     )
     discoverer_column_no: int = Field(
         default=4,
         validation_alias=AliasChoices("discoverer_column_no", "defect.discoverer.columnNo"),
-        descriptions="Column number in the Excel file that contains the defect discoverer.",
+        description="Column number in the Excel file that contains the defect discoverer.",
     )
     lastedit_column_no: int = Field(
         default=5,
         validation_alias=AliasChoices("lastedit_column_no", "defect.lastedit.columnNo"),
-        descriptions="Column number in the Excel file that contains the defect last edit.",
+        description="Column number in the Excel file that contains the defect last edit.",
     )
     description_column_no: int = Field(
         default=6,
         validation_alias=AliasChoices("description_column_no", "defect.description.columnNo"),
-        descriptions="Column number in the Excel file that contains the defect description.",
+        description="Column number in the Excel file that contains the defect description.",
     )
 
     references_separator: str = Field(
@@ -420,22 +415,22 @@ class ExcelDefectClientConfig(BaseModel):
             "references_separator",
             "defect.references.separator",
         ),
-        descriptions="Character used to separate multiple references in the references column."
+        description="Character used to separate multiple references in the references column.",
     )
     id_prefix: str = Field(
         default="BUG",
         validation_alias=AliasChoices("id_prefix", "defect.id.prefix"),
-        descriptions="Prefix used for defect IDs in this project.",
-        )
+        description="Prefix used for defect IDs in this project.",
+    )
     defect_id_starting_value: str = Field(
         default="1",
         validation_alias=AliasChoices("defect_id_starting_value", "defect.id.startingValue"),
-        descriptions="Starting value for defect IDs in this project.",
+        description="Starting value for defect IDs in this project.",
     )
     defect_id_digit_numbers: int = Field(
         default=4,
         validation_alias=AliasChoices("defect_id_digit_numbers", "defect.id.digitNumber"),
-        descriptions="Number of digits for defect IDs in this project.",
+        description="Number of digits for defect IDs in this project.",
     )
 
     attributes: list[str] = Field(
@@ -445,15 +440,14 @@ class ExcelDefectClientConfig(BaseModel):
 
     transitions: list[Transition] = Field(
         default_factory=list,
-        descriptions="List of state transitions for defects.",
+        description="List of state transitions for defects.",
     )
     udfs: list[UserDefiendAttributes] = Field(
-        default_factory=list,
-        descriptions="List of user-defined attributes for defects."
-        )
+        default_factory=list, description="List of user-defined attributes for defects."
+    )
     projects: dict[str, ProjectConfig] = Field(
         default_factory=dict,
-        descriptions="Dictionary of project configurations, keyed by project name."
+        description="Dictionary of project configurations, keyed by project name.",
     )
 
     buffer_cleanup_interval_minutes: float = Field(

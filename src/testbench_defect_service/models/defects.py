@@ -149,7 +149,7 @@ class RemoteSyncActions(BaseModel):
 
 
 class SyncContext(BaseModel):
-    iTBProject: str | None = Field(None, description="ITB project name")
+    iTBProject: str | None = Field(default=None, description="ITB project name")
     lastSync: datetime | None = None
     statusAttribute: str | None = None
     statusSyncOption: DefectFieldSyncOption | None = None

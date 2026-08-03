@@ -389,6 +389,7 @@ def configure_client_only(config_path: Path):
             click.echo("\nConfiguration cancelled.")
             return
 
+    client_class: str | None
     if client_type == "custom" and not change_client_type:
         client_class = client_class_path
     else:

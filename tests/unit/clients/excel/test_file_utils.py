@@ -23,14 +23,14 @@ def config() -> ExcelDefectClientConfig:
         simple_date_format="yyyy-MM-dd",
         defects_data_header_line=1,
         defects_data_starting_line=2,
-        seperator=",",
+        separator=",",
         id_column_no=1,
         title_column_no=2,
         references_column_no=0,
         discoverer_column_no=0,
         lastedit_column_no=0,
         description_column_no=0,
-        references_seperator=";",
+        references_separator=";",
         id_prefix="D-",
         defect_id_starting_value="1",
         defect_id_digit_numbers=4,
@@ -103,7 +103,7 @@ class TestWriteDefectDataToExcel:
         assert call_kwargs["mode"] == "a"
         assert call_kwargs["if_sheet_exists"] == "overlay"
 
-    def test_existing_xls_uses_write_mode(
+    def test_xls_target_raises_without_opening_writer(
         self,
         tmp_path: Path,
         config: ExcelDefectClientConfig,
@@ -112,20 +112,17 @@ class TestWriteDefectDataToExcel:
         header: dict[int, str],
     ):
         defect_path = tmp_path / "existing.xls"
-        defect_path.write_bytes(b"")
+        original_bytes = b"\xd0\xcf\x11\xe0legacy-xls-content"
+        defect_path.write_bytes(original_bytes)
 
         with (
             patch(f"{_MODULE}.pd.ExcelWriter") as mock_excel_writer,
-            patch(f"{_MODULE}.resolve_visible_sheet_name", return_value="Sheet1"),
-            patch.object(pd.DataFrame, "to_excel"),
+            pytest.raises(ValueError, match=r"\.xls"),
         ):
             write_defect_data_to_excel(sync_context, defect_path, config, header, df)
 
-        mock_excel_writer.assert_called_once()
-        call_kwargs = mock_excel_writer.call_args.kwargs
-        assert call_kwargs["engine"] == "openpyxl"
-        assert "mode" not in call_kwargs
-        assert "if_sheet_exists" not in call_kwargs
+        mock_excel_writer.assert_not_called()
+        assert defect_path.read_bytes() == original_bytes
 
     def test_none_column_positions_returns_early_without_writing(
         self,

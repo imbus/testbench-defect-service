@@ -1,5 +1,7 @@
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import openpyxl
@@ -43,17 +45,17 @@ from testbench_defect_service.models.defects import (
 # ---------------------------------------------------------------------------
 
 # Fields that are the same across every config in this test module.
-_BASE_CONFIG_KWARGS = {
+_BASE_CONFIG_KWARGS: dict[str, Any] = {
     "system_name": "Excel",
     "simple_date_format": "yyyy-MM-dd",
-    "references_seperator": ";",
+    "references_separator": ";",
     "id_prefix": "D-",
     "defect_id_starting_value": "1",
     "defect_id_digit_numbers": 4,
 }
 
 # Default 1-based column positions used by most tests.
-_DEFAULT_COLUMN_KWARGS = {
+_DEFAULT_COLUMN_KWARGS: dict[str, Any] = {
     "id_column_no": 1,
     "title_column_no": 2,
     "references_column_no": 3,
@@ -71,7 +73,7 @@ def _make_csv_config(
         **_DEFAULT_COLUMN_KWARGS,
         excel_file_path=tmp_path,
         file_type=".csv",
-        seperator=separator,
+        separator=separator,
         defects_data_header_line=header_line,
         defects_data_starting_line=header_line + 1,
     )
@@ -83,14 +85,14 @@ def _make_xlsx_config(tmp_path: Path) -> ExcelDefectClientConfig:
         **_DEFAULT_COLUMN_KWARGS,
         excel_file_path=tmp_path,
         file_type=".xlsx",
-        seperator=",",
+        separator=",",
         defects_data_header_line=1,
         defects_data_starting_line=2,
     )
 
 
 @pytest.fixture
-def column_mapping_config() -> ExcelDefectClientConfig:
+def column_mapping_config() -> Callable[..., ExcelDefectClientConfig]:
     def _factory(  # noqa: PLR0913
         control_fields: list[ControlFields] | None = None,
         *,
@@ -105,7 +107,7 @@ def column_mapping_config() -> ExcelDefectClientConfig:
             **_BASE_CONFIG_KWARGS,
             excel_file_path=Path("/tmp"),
             file_type=".csv",
-            seperator=",",
+            separator=",",
             defects_data_header_line=1,
             defects_data_starting_line=2,
             id_column_no=id_column_no,
@@ -121,7 +123,7 @@ def column_mapping_config() -> ExcelDefectClientConfig:
 
 
 @pytest.fixture
-def sync_context() -> SyncContext:
+def sync_context() -> Callable[..., SyncContext]:
     def _factory(
         status: str | None = None,
         priority: str | None = None,
@@ -264,7 +266,7 @@ class TestGetColumnMappingForConfig:
 
         assert result is None
         assert protocol.generalErrors
-        assert any("status" in e.message for e in protocol.generalErrors)
+        assert any(e.message is not None and "status" in e.message for e in protocol.generalErrors)
 
     def test_missing_control_field_without_protocol_raises(
         self, column_mapping_config, sync_context
@@ -462,6 +464,14 @@ class TestGetVisibleSheets:
         with pytest.raises(ValueError, match="Unsupported Excel file format"):
             get_visible_sheets(other_file)
 
+    def test_xls_file_with_xlsx_content_raises_helpful_error(self, tmp_path: Path) -> None:
+        mislabeled_file = tmp_path / "test.xls"
+        wb = openpyxl.Workbook()
+        wb.save(mislabeled_file)
+
+        with pytest.raises(ValueError, match="xlsx content"):
+            get_visible_sheets(mislabeled_file)
+
 
 # ---------------------------------------------------------------------------
 # Tests: resolve_sheet_name
@@ -497,7 +507,9 @@ class TestResolveSheetName:
 
         assert result == "Sheet1"
         assert protocol.generalWarnings
-        assert any("Missing" in w.message for w in protocol.generalWarnings)
+        assert any(
+            w.message is not None and "Missing" in w.message for w in protocol.generalWarnings
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -531,7 +543,7 @@ class TestResolveVisibleSheetName:
             **_DEFAULT_COLUMN_KWARGS,
             excel_file_path=tmp_path,
             file_type=".xlsx",
-            seperator=",",
+            separator=",",
             defects_data_header_line=1,
             defects_data_starting_line=2,
             worksheet_name="Defects",
@@ -552,7 +564,7 @@ class TestResolveVisibleSheetName:
             **_DEFAULT_COLUMN_KWARGS,
             excel_file_path=tmp_path,
             file_type=".xlsx",
-            seperator=",",
+            separator=",",
             defects_data_header_line=1,
             defects_data_starting_line=2,
             worksheet_name="NonExistent",
@@ -942,7 +954,7 @@ def _make_config(control_fields: list[ControlFields]) -> ExcelDefectClientConfig
         **_DEFAULT_COLUMN_KWARGS,
         excel_file_path=Path("/tmp"),
         file_type=".xlsx",
-        seperator=",",
+        separator=",",
         defects_data_header_line=1,
         defects_data_starting_line=2,
         control_fields=control_fields,
@@ -995,8 +1007,10 @@ class TestValidateControlFields:
         result = validate_control_fields(defect, config, sync_context, protocol)
 
         assert result is False
+        assert protocol.errors is not None
         assert "status" in protocol.errors
         error = protocol.errors["status"][0]
+        assert error.message is not None
         assert "Invalid" in error.message
         assert error.code == ProtocolCode.UPDATE_ERROR
 
@@ -1086,7 +1100,7 @@ class TestCheckDefectTransitions:
             **_DEFAULT_COLUMN_KWARGS,
             excel_file_path=Path("/tmp"),
             file_type=".xlsx",
-            seperator=",",
+            separator=",",
             defects_data_header_line=1,
             defects_data_starting_line=2,
             transitions=transitions,
@@ -1131,8 +1145,10 @@ class TestCheckDefectTransitions:
         result = check_defect_transitions(defect, df, config, protocol)
 
         assert result is False
+        assert protocol.warnings is not None
         assert "Done" in protocol.warnings
         warning = protocol.warnings["Done"][0]
+        assert warning.message is not None
         assert "New" in warning.message
         assert "Done" in warning.message
         assert warning.code == ProtocolCode.UPDATE_ERROR
@@ -1167,6 +1183,7 @@ class TestCheckDefectTransitions:
         result = check_defect_transitions(defect, df, config, protocol)
 
         assert result is False
+        assert protocol.warnings is not None
         assert "Done" in protocol.warnings
 
     def test_same_status_transition_allowed_when_configured(self) -> None:

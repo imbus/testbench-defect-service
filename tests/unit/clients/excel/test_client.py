@@ -28,7 +28,7 @@ def config(excel_project_path: Path) -> ExcelDefectClientConfig:
         simple_date_format="yyyy-MM-dd",
         defects_data_header_line=1,
         defects_data_starting_line=2,
-        seperator=",",
+        separator=",",
         control_fields=[
             ControlFields(name="status", column_number=7, values=["Open", "Closed"]),
         ],
@@ -38,7 +38,7 @@ def config(excel_project_path: Path) -> ExcelDefectClientConfig:
         discoverer_column_no=4,
         lastedit_column_no=5,
         description_column_no=6,
-        references_seperator=";",
+        references_separator=";",
         id_prefix="D-",
         defect_id_starting_value="1",
         defect_id_digit_numbers=4,

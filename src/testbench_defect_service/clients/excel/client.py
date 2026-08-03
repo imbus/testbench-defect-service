@@ -3,7 +3,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -737,11 +737,14 @@ class ExcelDefectClient(AbstractDefectClient):
         format_mismatch_detected = False
         if format_string:
             try:
-                return pd.to_datetime(
-                    raw_value,
-                    format=format_string,
-                    utc=True,
-                ).to_pydatetime()
+                return cast(
+                    datetime,
+                    pd.to_datetime(
+                        raw_value,
+                        format=format_string,
+                        utc=True,
+                    ).to_pydatetime(),
+                )
             except ValueError:
                 format_mismatch_detected = True
                 logger.debug(
@@ -761,7 +764,7 @@ class ExcelDefectClient(AbstractDefectClient):
                     ),
                     ProtocolCode.IMPORT_WARNING,
                 )
-            parsed_dt = parsed_fallback.to_pydatetime()
+            parsed_dt = cast(datetime, parsed_fallback.to_pydatetime())
             if parsed_dt.tzinfo is None:
                 parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
             return parsed_dt.astimezone(timezone.utc)

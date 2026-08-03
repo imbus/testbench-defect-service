@@ -218,7 +218,7 @@ def _load_delimited_header_values(
     file_path: Path,
     config: ExcelDefectClientConfig,
 ) -> list[str]:
-    separator = "\t" if file_path.suffix.lower() == ".tsv" else (config.seperator or ",")
+    separator = "\t" if file_path.suffix.lower() == ".tsv" else (config.separator or ",")
     if len(separator) != 1:
         raise ValueError(f"Unsupported separator '{separator}' for '{file_path.name}'.")
 
@@ -317,6 +317,13 @@ def get_visible_sheets(file_path: Path) -> list[str]:
             xlsx_workbook.close()
 
     if suffix == ".xls":
+        with file_path.open("rb") as handle:
+            magic_bytes = handle.read(4)
+        if magic_bytes == b"PK\x03\x04":
+            raise ValueError(
+                f"File '{file_path.name}' has a .xls extension but contains xlsx content. "
+                "Rename the file to .xlsx or convert it to the legacy .xls format."
+            )
         xls_workbook = xlrd.open_workbook(str(file_path), on_demand=True)
         try:
             return [sheet.name for sheet in xls_workbook.sheets() if sheet.visibility == 0]
@@ -386,7 +393,7 @@ def create_defect_data_frame(
             "priority": [defect.priority],
             "lastEdited": [_format_last_edited(defect.lastEdited, config)],
             "references": [
-                config.references_seperator.join(defect.references if defect.references else [])
+                config.references_separator.join(defect.references if defect.references else [])
             ],
         }
     )
@@ -442,7 +449,7 @@ def optional_row_value(row: pd.Series, field_name: str) -> str | None:
 
 
 def split_references(raw_value: str, config: ExcelDefectClientConfig) -> list[str]:
-    separator = config.references_seperator or ";"
+    separator = config.references_separator or ";"
     if not raw_value:
         return []
     return [part.strip() for part in raw_value.split(separator) if part.strip()]

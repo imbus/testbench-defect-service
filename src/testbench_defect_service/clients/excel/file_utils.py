@@ -216,7 +216,7 @@ def _load_dataframe(
         engine = "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
         df = pd.read_excel(file_path, sheet_name=sheet_name, engine=engine, **read_params)
     elif file_path.suffix.lower() in (".csv", ".tsv", ".txt"):
-        separator = "\t" if file_path.suffix.lower() == ".tsv" else config.seperator
+        separator = "\t" if file_path.suffix.lower() == ".tsv" else config.separator
         try:
             df = pd.read_csv(file_path, sep=separator, **read_params)
         except UnicodeDecodeError:
@@ -238,6 +238,11 @@ def write_defect_data_to_excel(
     column_positions = get_column_mapping_for_config(config, sync_context)
     if not column_positions:
         return
+    if defect_path.suffix.lower() == ".xls":
+        raise ValueError(
+            f"Writing to legacy .xls files is not supported: '{defect_path.name}'. "
+            "Convert the file to .xlsx to create or update defects."
+        )
     sheet_name = resolve_visible_sheet_name(defect_path, config)
 
     logger.debug("Writing defect data to '%s' on sheet '%s'", defect_path, sheet_name)
@@ -348,5 +353,5 @@ def write_defect_data_to_csv(
         ].values
 
     grid_df.to_csv(
-        defect_path, mode="w", index=False, header=False, na_rep="", sep=config.seperator
+        defect_path, mode="w", index=False, header=False, na_rep="", sep=config.separator
     )
