@@ -371,7 +371,7 @@ def add_defect_to_dataframe(
     ]
     max_int = (max(numeric_ids) if numeric_ids else 0) + 1
     logger.debug("Assigning new defect ID '%s%d' (prefix: '%s')", prefix, max_int, prefix)
-    defect_id = config.id_prefix + str(max_int)
+    defect_id = config.id_prefix + str(max_int).rjust(config.defect_id_digit_numbers, "0")
 
     defect_info_data_frame = create_defect_data_frame(defect, config, defect_id, protocol)
 
