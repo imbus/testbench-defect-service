@@ -53,8 +53,8 @@ def read_data_frame_from_file_path(
         _validate_unique_constraints(df, file_path, config)
     except ValueError:
         logger.error(
-            f"Data validation failed for file: '{file_path}'. Check required columns "
-            "and unique constraints."
+            f"Data validation failed for file: '{file_path}'. "
+            "Check required columns and unique constraints."
         )
 
     bytes_used = df.memory_usage(index=True, deep=True).sum()

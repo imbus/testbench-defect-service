@@ -1029,7 +1029,14 @@ class TestValidateControlFields:
         result = validate_control_fields(defect, config, sync_context, protocol)
 
         assert result is False
-        assert not protocol.errors
+        # The reason must be recorded: create_defect aborts on a False return before anything
+        # else inspects the column mapping, so this is the only chance to report it.
+        assert protocol.errors is not None
+        assert "classification" in protocol.errors
+        error = protocol.errors["classification"][0]
+        assert error.message is not None
+        assert "not configured as a control field" in error.message
+        assert error.code == ProtocolCode.UPDATE_ERROR
 
     def test_no_required_attributes_returns_true(self) -> None:
         defect = _make_defect()

@@ -18,6 +18,21 @@ from testbench_defect_service.models.defects import (
 )
 
 
+def describe_write_error(exc: OSError | ValueError, file_path: Path) -> str:
+    """Turn a write failure into a message that says what to do about it.
+
+    A file that is open in Excel is readable but denies writers, so the raw
+    '[Errno 13] Permission denied' surfaces without hinting at the cause.
+    """
+    if isinstance(exc, PermissionError):
+        return (
+            f"Cannot write to '{file_path.name}': the file is open in another program "
+            "(for example Excel) or is write-protected. Please close the file and run the "
+            "synchronization again."
+        )
+    return str(exc)
+
+
 def read_header_columns_from_file_path(
     file_path: Path,
     config: ExcelDefectClientConfig,
@@ -512,7 +527,24 @@ def validate_control_fields(
             return False
         validated.add(control_field.name)
 
-    return validated == required_attributes
+    missing_attributes = required_attributes - validated
+    if missing_attributes:
+        # Without this the caller aborts with an empty protocol, leaving TestBench to report
+        # a failed defect with no reason attached.
+        for attribute_name in sorted(missing_attributes):
+            message = (
+                f"Sync attribute '{attribute_name}' is not configured as a control field in "
+                "the Excel client configuration."
+            )
+            logger.warning(message)
+            protocol.add_error(
+                key=attribute_name,
+                message=message,
+                protocol_code=ProtocolCode.UPDATE_ERROR,
+            )
+        return False
+
+    return True
 
 
 def check_defect_transitions(

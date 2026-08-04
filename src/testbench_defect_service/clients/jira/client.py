@@ -463,7 +463,7 @@ class JiraDefectClient(AbstractDefectClient):
                 exc.message,
                 protocol_code=ProtocolCode.READ_ACCESS_ERROR,
             )
-            return ProtocolledString(value="", protocol=protocol)
+            return ProtocolledString(value=None, protocol=protocol)
 
         if self._get_config_value("readonly", project=project):
             protocol.add_error(
@@ -474,7 +474,7 @@ class JiraDefectClient(AbstractDefectClient):
                 ),
                 protocol_code=ProtocolCode.INSERT_ACCESS_ERROR,
             )
-            return ProtocolledString(value="", protocol=protocol)
+            return ProtocolledString(value=None, protocol=protocol)
 
         try:
             project_key = self.projects[project].key
@@ -483,7 +483,7 @@ class JiraDefectClient(AbstractDefectClient):
             protocol.add_general_error(
                 f"Unknown project '{project}': {exc}", protocol_code=ProtocolCode.PROJECT_NOT_FOUND
             )
-            return ProtocolledString(value="", protocol=protocol)
+            return ProtocolledString(value=None, protocol=protocol)
 
         try:
             issue = jira_client.create_issue(project_key, defect, sync_context)

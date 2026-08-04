@@ -19,6 +19,7 @@ from testbench_defect_service.clients.excel.utils import (
     add_general_warning_once,
     check_defect_transitions,
     create_defect_data_frame,
+    describe_write_error,
     optional_row_value,
     parse_boolean_udf_value,
     read_header_columns_from_file_path,
@@ -284,11 +285,11 @@ class ExcelDefectClient(AbstractDefectClient):
                 "Excel client is configured as read-only.",
                 protocol_code=ProtocolCode.INSERT_ACCESS_ERROR,
             )
-            return ProtocolledString(value="", protocol=protocol)
+            return ProtocolledString(value=None, protocol=protocol)
 
         effective_config = self._get_effective_config(project)
         if not validate_control_fields(defect, effective_config, sync_context, protocol):
-            return ProtocolledString(value="", protocol=protocol)
+            return ProtocolledString(value=None, protocol=protocol)
 
         try:
             defect_path = self._get_file_path(project=project)
@@ -296,13 +297,13 @@ class ExcelDefectClient(AbstractDefectClient):
             df = self._get_dataframe(defect_path, effective_config, sync_context, protocol)
         except FileNotFoundError as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.PROJECT_NOT_FOUND)
-            return ProtocolledString(value="", protocol=protocol)
+            return ProtocolledString(value=None, protocol=protocol)
         except (OSError, ValueError) as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.READ_ACCESS_ERROR)
-            return ProtocolledString(value="", protocol=protocol)
+            return ProtocolledString(value=None, protocol=protocol)
 
         if protocol.generalErrors:
-            return ProtocolledString(value="", protocol=protocol)
+            return ProtocolledString(value=None, protocol=protocol)
 
         df_with_new_defect = add_defect_to_dataframe(defect, effective_config, df, protocol)
         new_defect_id = str(df_with_new_defect.iloc[-1]["id"])
@@ -317,8 +318,10 @@ class ExcelDefectClient(AbstractDefectClient):
                     sync_context, defect_path, effective_config, header, df_with_new_defect
                 )
         except (OSError, ValueError) as exc:
-            protocol.add_general_error(str(exc), protocol_code=ProtocolCode.INSERT_ERROR)
-            return ProtocolledString(value="", protocol=protocol)
+            message = describe_write_error(exc, defect_path)
+            protocol.add_general_error(message, protocol_code=ProtocolCode.INSERT_ERROR)
+            logger.error("Failed to create defect in project '%s': %s", project, exc)
+            return ProtocolledString(value=None, protocol=protocol)
 
         protocol.add_success(
             key=new_defect_id,
@@ -373,15 +376,21 @@ class ExcelDefectClient(AbstractDefectClient):
             return protocol
         new_row_df = create_defect_data_frame(defect, effective_config, defect_id, protocol)
         new_row_df.index = row_idx
-        df.update(new_row_df)
+        updated_df = df.copy()
+        updated_df.update(new_row_df)
 
         try:
             if effective_config.file_type in [".xlsx", ".xls"]:
-                write_defect_data_to_excel(sync_context, defect_path, effective_config, header, df)
+                write_defect_data_to_excel(
+                    sync_context, defect_path, effective_config, header, updated_df
+                )
             if effective_config.file_type in [".csv", ".txt"]:
-                write_defect_data_to_csv(sync_context, defect_path, effective_config, header, df)
+                write_defect_data_to_csv(
+                    sync_context, defect_path, effective_config, header, updated_df
+                )
         except (OSError, ValueError) as exc:
-            protocol.add_error(defect_id, str(exc), protocol_code=ProtocolCode.UPDATE_ERROR)
+            message = describe_write_error(exc, defect_path)
+            protocol.add_error(defect_id, message, protocol_code=ProtocolCode.UPDATE_ERROR)
             logger.error(
                 "Failed to update defect '%s' in project '%s': %s", defect_id, project, exc
             )
@@ -440,7 +449,8 @@ class ExcelDefectClient(AbstractDefectClient):
             if effective_config.file_type in [".csv", ".txt"]:
                 write_defect_data_to_csv(sync_context, defect_path, effective_config, header, df)
         except (OSError, ValueError) as exc:
-            protocol.add_general_error(str(exc), protocol_code=ProtocolCode.PUBLISH_ERROR)
+            message = describe_write_error(exc, defect_path)
+            protocol.add_general_error(message, protocol_code=ProtocolCode.PUBLISH_ERROR)
             logger.error(
                 "Failed to delete defect '%s' from project '%s': %s", defect_id, project, exc
             )

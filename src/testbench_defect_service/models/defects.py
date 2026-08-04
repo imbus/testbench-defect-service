@@ -218,7 +218,15 @@ class ProtocolledDefectSet(BaseModel):
 
 
 class ProtocolledString(BaseModel):
-    value: str = Field(..., description="ID of the newly created defect, if successful")
+    value: str | None = Field(
+        ...,
+        description=(
+            "ID of the newly created defect, or null if the defect could not be created. "
+            "Must never be an empty string: TestBench reads this field as an optional value, "
+            "so '' is taken for a successfully created defect with an empty ID and trips its "
+            "non-empty ID assertion, aborting the whole synchronization."
+        ),
+    )
     protocol: Protocol
 
 

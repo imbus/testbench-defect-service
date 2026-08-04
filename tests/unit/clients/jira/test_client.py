@@ -629,7 +629,9 @@ class TestCreateDefect:
             "Test Project (TEST)", defect, sync_context
         )
         assert result.protocol.errors
-        assert result.value == ""
+        # Must be null, not "": TestBench reads an empty string as a created defect with an
+        # empty ID and aborts the whole sync on its non-empty ID assertion.
+        assert result.value is None
 
     def test_returns_error_for_unknown_project(self, mock_jira_client_instance, sync_context):
         defect = _make_defect()
