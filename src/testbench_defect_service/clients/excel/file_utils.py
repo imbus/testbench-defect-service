@@ -9,6 +9,7 @@ from testbench_defect_service.clients.excel.utils import (
     coerce_cell_to_string,
     get_column_mapping_for_config,
     get_visible_sheets,
+    is_blank_row,
     resolve_delimited_separator,
     resolve_sheet_name,
     resolve_visible_sheet_name,
@@ -122,6 +123,13 @@ def _validate_column_mapping(
     return valid_mapping
 
 
+def _blank_row_mask(df: pd.DataFrame) -> pd.Series:
+    """Mask of rows whose every mapped cell is blank."""
+    if df.empty:
+        return pd.Series(False, index=df.index, dtype=bool)
+    return cast(pd.Series, df.apply(is_blank_row, axis=1))
+
+
 def _validate_unique_constraints(
     df: pd.DataFrame,
     file_path: Path,
@@ -132,7 +140,8 @@ def _validate_unique_constraints(
 
     errors: list[str] = []
     if "id" in df.columns:
-        duplicated_mask = df.duplicated(subset=["id"], keep=False)
+        has_id = df["id"].str.strip() != ""
+        duplicated_mask = df.duplicated(subset=["id"], keep=False) & has_id
         duplicate_ids = df.loc[duplicated_mask, ["id"]].drop_duplicates()
         for _, duplicate_row in duplicate_ids.iterrows():
             duplicate_id = duplicate_row["id"]
@@ -155,12 +164,14 @@ def _validate_required_column_values(
 ) -> None:
     first_data_file_row = config.defects_data_starting_line
     errors: list[str] = []
+    blank_rows = _blank_row_mask(df)
 
     for col in _REQUIRED_DATA_COLUMNS:
         if col not in df.columns:
             errors.append(f"  - '{col}': column is not configured or could not be found.")
             continue
-        blank_indices = df.index[df[col].str.strip() == ""].tolist()
+        missing_mask = (df[col].str.strip() == "") & ~blank_rows
+        blank_indices = df.index[missing_mask].tolist()
         if not blank_indices:
             continue
         displayed = [str(first_data_file_row + idx) for idx in blank_indices[:10]]

@@ -604,3 +604,65 @@ class TestLoadDataFrameFormats:
         df = read_data_frame_from_file_path(defect_path, udf_config, sync_context)
 
         assert df["isFixed"].iloc[0] == "true"
+
+
+@pytest.mark.unit
+class TestEmptyRowTolerance:
+    """A separator-only row is layout, not data. It must not fail the whole file.
+
+    Truly blank lines are already dropped by pandas (`skip_blank_lines=True`);
+    the breaking case is `,,` which Excel, LibreOffice and this project's own
+    CSV writer all emit.
+    """
+
+    def _write(self, tmp_path: Path, body: str) -> Path:
+        file_path = tmp_path / "defects.csv"
+        file_path.write_text(f"id,title\n{body}", encoding="utf-8")
+        return file_path
+
+    def test_empty_row_is_kept_in_the_frame_and_does_not_raise(
+        self,
+        tmp_path: Path,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        file_path = self._write(tmp_path, "D-1,First\n,\nD-2,Second\n")
+
+        df = read_data_frame_from_file_path(file_path, config, sync_context, Protocol())
+
+        # The row is preserved: the frame stays positionally aligned with the file.
+        assert df["id"].tolist() == ["D-1", "", "D-2"]
+
+    def test_several_empty_rows_do_not_trip_the_uniqueness_check(
+        self,
+        tmp_path: Path,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        file_path = self._write(tmp_path, "D-1,First\n,\n,\nD-2,Second\n")
+
+        df = read_data_frame_from_file_path(file_path, config, sync_context, Protocol())
+
+        assert df["id"].tolist() == ["D-1", "", "", "D-2"]
+
+    def test_row_with_blank_id_but_other_content_still_raises(
+        self,
+        tmp_path: Path,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        file_path = self._write(tmp_path, "D-1,First\n,Only a title\nD-2,Second\n")
+
+        with pytest.raises(ValueError, match=r"'id': empty at row 3"):
+            read_data_frame_from_file_path(file_path, config, sync_context, Protocol())
+
+    def test_real_duplicate_ids_still_raise(
+        self,
+        tmp_path: Path,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        file_path = self._write(tmp_path, "D-1,First\n,\nD-1,Duplicate\n")
+
+        with pytest.raises(ValueError, match=r"duplicate id 'D-1' at rows 2, 4"):
+            read_data_frame_from_file_path(file_path, config, sync_context, Protocol())
