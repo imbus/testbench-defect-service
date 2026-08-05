@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- An empty row in an Excel or delimited defect file no longer fails the whole
+  file. Empty rows are skipped with a single import warning per synchronization
+  and are preserved in the file when defects are created, updated or deleted.
+- Blank boolean UDF cells are reported as unset instead of being coerced to the
+  configured `falseValue`.
+
+---
+
 ## [0.3.0][0.3.0] 30.07.2026
 
 ### Added

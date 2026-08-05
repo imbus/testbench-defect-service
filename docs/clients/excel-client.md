@@ -166,6 +166,10 @@ Always set `separator` explicitly for `.csv` and `.txt` projects. When it is omi
 
 The `id` column is mandatory: if the configured column number lies outside the file, the import fails. Missing optional columns produce a warning and the field stays empty.
 
+An empty row — one where every configured column is blank — is skipped during import and reported as a single warning per synchronization. Empty rows are kept in the file: they are not removed when defects are created, updated or deleted.
+
+A row that has content but no defect ID is still an error, and is reported per row, because skipping it silently would lose a defect.
+
 **Query & fields**
 
 | Option | Type | Description | Required | Default |
