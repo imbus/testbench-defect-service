@@ -175,9 +175,8 @@ A row that has content but no defect ID is still an error, and is reported per r
 | Option | Type | Description | Required | Default |
 |--------|------|-------------|----------|---------|
 | `attributes` | List | Fields shown in the extended defect view. Use logical field names (`title`, `status`, `description`, …) or user-defined attribute names. | No | `["title", "status", "isOpen"]` |
-| `control_fields` | List of tables | Columns whose values are restricted to a fixed list. Required for `status`, `priority` and `classification`. See [Control fields](#control-fields). | No | `[]` |
+| `control_fields` | List of tables | Columns whose values are restricted to a fixed list, optionally with a transition workflow. Required for `status`, `priority` and `classification`. See [Control fields](#control-fields). | No | `[]` |
 | `udfs` | List of tables | User-defined attributes. See [User-defined attributes](#user-defined-attributes-udfs). | No | `[]` |
-| `transitions` | List of tables | Allowed status changes. See [Status transitions](#status-transitions). | No | `[]` |
 
 **Values & formatting**
 
@@ -239,33 +238,45 @@ values        = ["bug", "change_request"]
 | `name` | String | Field name as used by TestBench. `"class"` is accepted as an alias for `"classification"`. |
 | `column_number` | Integer | 1-based column of the field in the file. |
 | `values` | List | Allowed values. Presented as a dropdown in TestBench. |
+| `transitions` | List of tables | Allowed changes to this field's value. Omit to allow any change. Each entry needs `from_state` and `to_state`, and both must appear in `values`. |
 
 TestBench tells the service at sync time which attribute it uses for status, priority and classification. Each of those attribute names must match a control field `name`:
 
 - **No matching control field** — the import is rejected with `sync attribute '<name>' for '<field>' is not configured in the Excel control fields`.
 - **Value outside `values`** — create and update are rejected with the list of allowed values.
 
----
+### Transitions
 
-## Status transitions
-
-By default any status change is allowed. Declaring transitions restricts updates to an explicit workflow:
+By default any change to a control field's value is allowed. Declaring
+transitions restricts updates to an explicit workflow:
 
 ```toml
-# config.toml
-[[testbench-defect-service.client_config.transitions]]
-from_state = "open"
-to_state   = "in_progress"
-
-[[testbench-defect-service.client_config.transitions]]
-from_state = "in_progress"
-to_state   = "closed"
+[[testbench-defect-service.client_config.control_fields]]
+name          = "status"
+column_number = 7
+values        = ["open", "in_progress", "blocked", "closed"]
+transitions   = [
+    { from_state = "open",        to_state = "in_progress" },
+    { from_state = "in_progress", to_state = "closed" },
+]
 ```
 
-An update that changes the status to a state without a matching transition is rejected with a warning. Updates that leave the status unchanged are always allowed.
+An update that changes the value to a state without a matching transition is
+rejected with a warning naming the control field. Updates that leave the value
+unchanged are always allowed.
+
+Every `from_state` and `to_state` must be one of the field's `values`. A state
+outside that list is a configuration error and the service refuses to start —
+otherwise a typo would silently reject every legitimate update.
 
 :::note
 Transitions are only checked on **update**, not when a defect is created.
+:::
+
+:::warning[Deprecated]
+A top-level `transitions` list is still honoured, but applies to `status` only
+and cannot be validated against the field's `values`. Move it into the `status`
+control field. If both are present, the nested list wins.
 :::
 
 ---
@@ -459,7 +470,7 @@ Structured settings are reassembled from their numbered legacy keys:
 | Legacy pattern | Becomes |
 |---|---|
 | `controlFields`, `<field>.columnNo`, `<field>.value` | one `control_fields` entry per listed field (`class` → `classification`) |
-| `<field>.transition<n>` with a `from-to` value | one `transitions` entry each |
+| `<field>.transition<n>` with a `from-to` value | one `transitions` entry on the `<field>` control field (`class` → `classification`); a prefix naming no control field is logged and ignored |
 | `udf.attr<n>.name`, `.column`, `.type`, `.required`, `.value`, `.trueValue`, `.falseValue` | one `udfs` entry each |
 
 :::note
