@@ -162,11 +162,28 @@ class ControlFields(BaseModel):
     name: str
     column_number: int
     values: list[str] = Field(default_factory=list)
+    transitions: list[Transition] = Field(default_factory=list)
 
     @field_validator("name", mode="before")
     @classmethod
     def normalize_name(cls, value: Any) -> str:
         return _normalize_control_field_name(str(value))
+
+    @model_validator(mode="after")
+    def check_transitions_against_values(self) -> "ControlFields":
+        if not self.values:
+            return self
+        for transition in self.transitions:
+            for role, state in (
+                ("from_state", transition.from_state),
+                ("to_state", transition.to_state),
+            ):
+                if state not in self.values:
+                    raise ValueError(
+                        f"control field '{self.name}': transition {role} '{state}' is not "
+                        f"one of its values ({', '.join(self.values)})"
+                    )
+        return self
 
 
 class UserDefiendAttributes(BaseModel):
