@@ -380,7 +380,7 @@ class ExcelDefectClient(AbstractDefectClient):
             write_defect_data(sync_context, defect_path, effective_config, header, updated_df)
         except (OSError, ValueError) as exc:
             message = describe_write_error(exc, defect_path)
-            protocol.add_error(defect_id, message, protocol_code=ProtocolCode.UPDATE_ERROR)
+            protocol.add_error(defect_id, message, protocol_code=ProtocolCode.PUBLISH_ERROR)
             logger.error(
                 "Failed to update defect '%s' in project '%s': %s", defect_id, project, exc
             )

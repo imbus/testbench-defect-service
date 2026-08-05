@@ -1076,7 +1076,7 @@ class TestValidateControlFields:
         error = protocol.errors["status"][0]
         assert error.message is not None
         assert "Invalid" in error.message
-        assert error.code == ProtocolCode.UPDATE_ERROR
+        assert error.code == ProtocolCode.PUBLISH_ERROR
 
     def test_missing_control_field_for_required_attribute_returns_false(self) -> None:
         defect = _make_defect(status="New", priority="High", classification="Bug")
@@ -1100,7 +1100,7 @@ class TestValidateControlFields:
         error = protocol.errors["classification"][0]
         assert error.message is not None
         assert "not configured as a control field" in error.message
-        assert error.code == ProtocolCode.UPDATE_ERROR
+        assert error.code == ProtocolCode.PUBLISH_ERROR
 
     def test_no_required_attributes_returns_true(self) -> None:
         defect = _make_defect()
@@ -1222,7 +1222,7 @@ class TestCheckDefectTransitions:
         assert warning.message is not None
         assert "New" in warning.message
         assert "Done" in warning.message
-        assert warning.code == ProtocolCode.UPDATE_ERROR
+        assert warning.code == ProtocolCode.PUBLISH_ERROR
 
     def test_matching_transition_among_multiple_returns_true(self) -> None:
         defect = _make_defect(status="Done")

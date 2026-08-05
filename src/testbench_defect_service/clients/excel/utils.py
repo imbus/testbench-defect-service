@@ -549,7 +549,7 @@ def validate_control_fields(
                     f"Value '{value}' is not a valid option for control field "
                     f"'{control_field.name}'. Allowed values: {control_field.values}."
                 ),
-                protocol_code=ProtocolCode.UPDATE_ERROR,
+                protocol_code=ProtocolCode.PUBLISH_ERROR,
             )
             return False
         validated.add(control_field.name)
@@ -567,7 +567,7 @@ def validate_control_fields(
             protocol.add_error(
                 key=attribute_name,
                 message=message,
-                protocol_code=ProtocolCode.UPDATE_ERROR,
+                protocol_code=ProtocolCode.PUBLISH_ERROR,
             )
         return False
 
@@ -596,7 +596,7 @@ def check_defect_transitions(
             message=(
                 f"No valid transition from '{current_status}' to '{defect.status}' is configured."
             ),
-            protocol_code=ProtocolCode.UPDATE_ERROR,
+            protocol_code=ProtocolCode.INSERT_WARNING,
         )
 
         return False
