@@ -533,3 +533,35 @@ def test_get_defects_still_fails_on_a_row_with_content_but_no_id(
     ]
     assert result.protocol.generalErrors[0].message is not None
     assert "'id': empty at row 3" in result.protocol.generalErrors[0].message
+
+
+@pytest.mark.unit
+def test_create_defect_leaves_an_interior_empty_row_untouched(
+    project_path_with_empty_row: Path,
+    syncable_config: ExcelDefectClientConfig,
+    sync_context: SyncContext,
+    defect: Defect,
+):
+    """Empty rows are preserved, so the new defect lands after them.
+
+    Compacting the row away would shift every later defect up one line and
+    re-pair any unmapped column with the wrong defect.
+    """
+    client = ExcelDefectClient(syncable_config)
+
+    result = client.create_defect("demo", defect, sync_context)
+
+    assert result.value == "D-0003"
+    lines = (
+        (project_path_with_empty_row / "demo" / "defects.csv")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    assert lines == [
+        "id,title,references,reporter,lastEdited,description,status,priority,classification",
+        "D-0001,Demo,,Alice,2024-01-01,Example,Open,High,Bug",
+        ",,,,,,,,",
+        "D-0002,Second,,Bob,2024-01-02,Example,Open,High,Bug",
+        "D-0003,Locked file defect,,Alice,2024-05-01,"
+        "Created while the workbook was open,Open,High,Bug",
+    ]
