@@ -2,7 +2,6 @@ import time
 from pathlib import Path
 from typing import Any, Literal, cast
 
-import numpy as np
 import pandas as pd
 
 from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig
@@ -10,13 +9,19 @@ from testbench_defect_service.clients.excel.utils import (
     coerce_cell_to_string,
     get_column_mapping_for_config,
     get_visible_sheets,
+    resolve_delimited_separator,
     resolve_sheet_name,
     resolve_visible_sheet_name,
+    to_python_datetime_format,
 )
 from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import Protocol, ProtocolCode, SyncContext, ValueType
 
 _REQUIRED_DATA_COLUMNS: tuple[str, ...] = ("id",)
+
+_EXCEL_SUFFIXES: tuple[str, ...] = (".xlsx", ".xls")
+_DELIMITED_SUFFIXES: tuple[str, ...] = (".csv", ".tsv", ".txt")
+_DELIMITED_ENCODINGS: tuple[str, ...] = ("utf-8-sig", "windows-1252")
 
 
 def read_data_frame_from_file_path(
@@ -44,9 +49,9 @@ def read_data_frame_from_file_path(
         protocol,
     )
 
-    map_boolean_values(config, df)
-
     df = _apply_column_mapping(df, valid_mapping)
+
+    map_boolean_values(config, df)
 
     try:
         _validate_required_column_values(df, file_path, config)
@@ -56,6 +61,7 @@ def read_data_frame_from_file_path(
             f"Data validation failed for file: '{file_path}'. "
             "Check required columns and unique constraints."
         )
+        raise
 
     bytes_used = df.memory_usage(index=True, deep=True).sum()
     logger.debug(
@@ -215,17 +221,51 @@ def _load_dataframe(
         engine: Literal["openpyxl", "xlrd"]
         engine = "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
         df = pd.read_excel(file_path, sheet_name=sheet_name, engine=engine, **read_params)
-    elif file_path.suffix.lower() in (".csv", ".tsv", ".txt"):
-        separator = "\t" if file_path.suffix.lower() == ".tsv" else config.separator
-        try:
-            df = pd.read_csv(file_path, sep=separator, **read_params)
-        except UnicodeDecodeError:
-            df = pd.read_csv(file_path, sep=separator, encoding="windows-1252", **read_params)
+    elif file_path.suffix.lower() in _DELIMITED_SUFFIXES:
+        separator = resolve_delimited_separator(file_path, config)
+        df, _ = _read_delimited_dataframe(file_path, separator, **read_params)
     else:
         raise ValueError(f"Unsupported file format: {file_path.suffix}")
 
-    normalized_df = df.fillna("").apply(lambda column: column.map(coerce_cell_to_string))
+    date_format = to_python_datetime_format(config.simple_date_format)
+    normalized_df = df.apply(
+        lambda column: column.map(lambda value: coerce_cell_to_string(value, date_format))
+    )
     return cast(pd.DataFrame, normalized_df)
+
+
+def _read_delimited_dataframe(
+    file_path: Path,
+    separator: str,
+    **read_params: Any,
+) -> tuple[pd.DataFrame, str]:
+    """Read a delimited file, returning the frame and the encoding that decoded it."""
+    last_error: UnicodeDecodeError | None = None
+    for encoding in _DELIMITED_ENCODINGS:
+        try:
+            df = pd.read_csv(file_path, sep=separator, encoding=encoding, **read_params)
+            return df, encoding
+        except UnicodeDecodeError as exc:
+            last_error = exc
+    assert last_error is not None  # the loop above always runs at least once
+    raise last_error
+
+
+def write_defect_data(
+    sync_context: SyncContext,
+    defect_path: Path,
+    config: ExcelDefectClientConfig,
+    header: dict[int, str],
+    df_with_new_defect: pd.DataFrame,
+) -> None:
+    """Dispatch a defect write to the writer matching the target file's format."""
+    suffix = defect_path.suffix.lower()
+    if suffix in _EXCEL_SUFFIXES:
+        write_defect_data_to_excel(sync_context, defect_path, config, header, df_with_new_defect)
+    elif suffix in _DELIMITED_SUFFIXES:
+        write_defect_data_to_csv(sync_context, defect_path, config, header, df_with_new_defect)
+    else:
+        raise ValueError(f"Unsupported file format for writing: '{defect_path.suffix}'.")
 
 
 def write_defect_data_to_excel(
@@ -251,6 +291,7 @@ def write_defect_data_to_excel(
     if is_existing_xlsx:
         writer_kwargs["mode"] = "a"
         writer_kwargs["if_sheet_exists"] = "overlay"
+    written_column_indices: list[int] = []
     with pd.ExcelWriter(defect_path, **writer_kwargs) as writer:
         for col_idx, col_names in column_positions.items():
             col_name = col_names[0]
@@ -258,17 +299,7 @@ def write_defect_data_to_excel(
                 continue
             original_header = header.get(col_idx + 1, col_name)
 
-            for udf in config.udfs:
-                if udf.name == col_name and udf.type == ValueType.BOOLEAN:
-                    true_val: str | None = udf.trueValue
-                    false_val: str | None = udf.falseValue
-
-                    def _map_bool(
-                        v: str, tv: str | None = true_val, fv: str | None = false_val
-                    ) -> str | None:
-                        return tv if v == "true" else fv
-
-                    df_with_new_defect[col_name] = df_with_new_defect[col_name].map(_map_bool)
+            _apply_boolean_udf_write_mapping(config, df_with_new_defect, col_name)
 
             # --- STEP 1: Write ONLY the Header ---
             header_only_df = (
@@ -292,6 +323,69 @@ def write_defect_data_to_excel(
                 index=False,
                 header=False,
             )
+            written_column_indices.append(col_idx)
+
+        worksheet = writer.sheets.get(sheet_name)
+        if worksheet is not None:
+            _clear_stale_excel_rows(
+                worksheet,
+                config.defects_data_starting_line + len(df_with_new_defect),
+                written_column_indices,
+            )
+
+
+def _clear_stale_delimited_rows(
+    grid_df: pd.DataFrame,
+    end_row_idx: int,
+    written_column_indices: list[int],
+) -> pd.DataFrame:
+    """Blank leftover cells below the freshly written data.
+
+    Rows past the new data are leftovers of removed defects; blank them so a
+    deleted defect does not survive as a duplicate, then drop rows that are
+    now entirely empty.
+    """
+    if len(grid_df) <= end_row_idx:
+        return grid_df
+    for col_idx in written_column_indices:
+        grid_df.iloc[end_row_idx:, col_idx] = ""
+    while len(grid_df) > end_row_idx and grid_df.iloc[-1].eq("").all():
+        grid_df = grid_df.iloc[:-1]
+    return grid_df
+
+
+def _apply_boolean_udf_write_mapping(
+    config: ExcelDefectClientConfig,
+    df: pd.DataFrame,
+    col_name: str,
+) -> None:
+    """Convert internal 'true'/'false' values back to the configured UDF labels."""
+    for udf in config.udfs:
+        if udf.name == col_name and udf.type == ValueType.BOOLEAN:
+            true_val: str | None = udf.trueValue
+            false_val: str | None = udf.falseValue
+
+            def _map_bool(
+                v: str, tv: str | None = true_val, fv: str | None = false_val
+            ) -> str | None:
+                return tv if str(v).lower() == "true" else fv
+
+            df[col_name] = df[col_name].map(_map_bool)
+
+
+def _clear_stale_excel_rows(
+    worksheet: Any,
+    first_stale_row: int,
+    column_indices: list[int],
+) -> None:
+    """Blank leftover cells below the freshly written data.
+
+    The overlay write only covers as many rows as the new frame has; after a
+    delete the old last row would otherwise survive as a duplicate defect.
+    """
+    for row in range(first_stale_row, worksheet.max_row + 1):
+        for col_idx in column_indices:
+            worksheet.cell(row=row, column=col_idx + 1).value = None
 
 
 def write_defect_data_to_csv(
@@ -305,10 +399,26 @@ def write_defect_data_to_csv(
     if not column_positions:
         return
 
-    logger.debug("Overlaying defect data to CSV '%s'", defect_path)
+    separator = resolve_delimited_separator(defect_path, config)
+    logger.debug("Overlaying defect data to delimited file '%s'", defect_path)
 
-    is_existing_csv = defect_path.exists() and defect_path.suffix.lower() == ".csv"
-    grid_df = pd.read_csv(defect_path, header=None) if is_existing_csv else pd.DataFrame()
+    grid_df = pd.DataFrame()
+    encoding = "utf-8"
+    if defect_path.exists() and defect_path.suffix.lower() in _DELIMITED_SUFFIXES:
+        # dtype=str and keep_default_na=False keep untouched cells byte-for-byte:
+        # no "007" -> 7, no "N/A" -> NaN -> "".
+        grid_df, encoding = _read_delimited_dataframe(
+            defect_path,
+            separator,
+            header=None,
+            dtype=str,
+            keep_default_na=False,
+        )
+        # utf-8-sig also decodes plain utf-8; only write a BOM if the file had one.
+        if encoding == "utf-8-sig":
+            with defect_path.open("rb") as handle:
+                if handle.read(3) != b"\xef\xbb\xbf":
+                    encoding = "utf-8"
 
     header_row_idx = config.defects_data_header_line - 1
     start_row_idx = config.defects_data_starting_line - 1
@@ -318,11 +428,12 @@ def write_defect_data_to_csv(
     # Expand grid rows if necessary
     if len(grid_df) < required_rows:
         padding = pd.DataFrame(
-            np.nan, index=range(len(grid_df), required_rows), columns=grid_df.columns
+            "", index=range(len(grid_df), required_rows), columns=grid_df.columns
         )
         # Using concat to add the required empty rows to the bottom
         grid_df = pd.concat([grid_df, padding], ignore_index=True)
 
+    written_column_indices: list[int] = []
     for col_idx, col_names in column_positions.items():
         col_name = col_names[0]
         if col_name not in df_with_new_defect.columns:
@@ -330,28 +441,28 @@ def write_defect_data_to_csv(
 
         original_header = header.get(col_idx + 1, col_name)
 
-        # Apply UDF boolean mappings
-        for udf in config.udfs:
-            if udf.name == col_name and udf.type == ValueType.BOOLEAN:
-                true_val: str | None = udf.trueValue
-                false_val: str | None = udf.falseValue
-
-                def _map_bool(
-                    v: str, tv: str | None = true_val, fv: str | None = false_val
-                ) -> str | None:
-                    return tv if str(v).lower() == "true" else fv
-
-                df_with_new_defect[col_name] = df_with_new_defect[col_name].map(_map_bool)
+        _apply_boolean_udf_write_mapping(config, df_with_new_defect, col_name)
 
         while col_idx >= len(grid_df.columns):
-            grid_df[len(grid_df.columns)] = np.nan
+            grid_df[len(grid_df.columns)] = ""
 
         # Overlay the Header at the specific coordinate
         grid_df.iat[header_row_idx, col_idx] = original_header
         grid_df.iloc[start_row_idx : start_row_idx + num_new_rows, col_idx] = df_with_new_defect[
             col_name
         ].values
+        written_column_indices.append(col_idx)
+
+    grid_df = _clear_stale_delimited_rows(
+        grid_df, start_row_idx + num_new_rows, written_column_indices
+    )
 
     grid_df.to_csv(
-        defect_path, mode="w", index=False, header=False, na_rep="", sep=config.separator
+        defect_path,
+        mode="w",
+        index=False,
+        header=False,
+        na_rep="",
+        sep=separator,
+        encoding=encoding,
     )

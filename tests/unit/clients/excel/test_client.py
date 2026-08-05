@@ -4,7 +4,11 @@ from pathlib import Path
 import pytest
 
 from testbench_defect_service.clients.excel.client import ExcelDefectClient
-from testbench_defect_service.clients.excel.config import ControlFields, ExcelDefectClientConfig
+from testbench_defect_service.clients.excel.config import (
+    ControlFields,
+    ExcelDefectClientConfig,
+    Transition,
+)
 from testbench_defect_service.models.defects import (
     Defect,
     Login,
@@ -161,7 +165,7 @@ def test_create_defect_returns_null_id_when_file_is_locked(
         raise PermissionError(13, "Permission denied", str(locked_path))
 
     monkeypatch.setattr(
-        "testbench_defect_service.clients.excel.client.write_defect_data_to_csv",
+        "testbench_defect_service.clients.excel.client.write_defect_data",
         raise_permission_error,
     )
     client = ExcelDefectClient(syncable_config)
@@ -186,7 +190,7 @@ def test_create_defect_reports_locked_file_hint_when_permission_is_denied(
         raise PermissionError(13, "Permission denied", str(locked_path))
 
     monkeypatch.setattr(
-        "testbench_defect_service.clients.excel.client.write_defect_data_to_csv",
+        "testbench_defect_service.clients.excel.client.write_defect_data",
         raise_permission_error,
     )
     client = ExcelDefectClient(syncable_config)
@@ -271,7 +275,7 @@ def test_update_defect_does_not_poison_buffer_when_write_fails(
         raise PermissionError(13, "Permission denied", str(defect_path))
 
     monkeypatch.setattr(
-        "testbench_defect_service.clients.excel.client.write_defect_data_to_csv",
+        "testbench_defect_service.clients.excel.client.write_defect_data",
         raise_permission_error,
     )
     client = ExcelDefectClient(syncable_config)
@@ -282,3 +286,162 @@ def test_update_defect_does_not_poison_buffer_when_write_fails(
     assert protocol.errors
     buffered = client.get_defects("demo", sync_context)
     assert [d.status for d in buffered.value] == ["Open"]
+
+
+# ---------------------------------------------------------------------------
+# File-format handling of the write path
+# ---------------------------------------------------------------------------
+
+
+def _make_format_project(tmp_path: Path, file_name: str, content: str) -> Path:
+    project_path = tmp_path / "demo"
+    project_path.mkdir()
+    (project_path / file_name).write_text(content, encoding="utf-8")
+    return tmp_path
+
+
+def _make_format_config(
+    base_path: Path,
+    file_type: str,
+    transitions: list[Transition] | None = None,
+) -> ExcelDefectClientConfig:
+    return ExcelDefectClientConfig(
+        system_name="Excel",
+        excel_file_path=base_path,
+        file_type=file_type,
+        simple_date_format="yyyy-MM-dd",
+        defects_data_header_line=1,
+        defects_data_starting_line=2,
+        separator=",",
+        control_fields=[
+            ControlFields(
+                name="status",
+                column_number=3,
+                values=["New", "InProgress", "Done", "Open", "Closed"],
+            ),
+        ],
+        id_column_no=1,
+        title_column_no=2,
+        references_column_no=0,
+        discoverer_column_no=0,
+        lastedit_column_no=0,
+        description_column_no=0,
+        references_separator=";",
+        id_prefix="D-",
+        defect_id_starting_value="1",
+        defect_id_digit_numbers=4,
+        transitions=transitions or [],
+    )
+
+
+@pytest.fixture
+def status_sync_context() -> SyncContext:
+    return SyncContext(iTBProject="itb", statusAttribute="status")
+
+
+@pytest.fixture
+def status_defect() -> Defect:
+    return Defect(
+        title="New defect",
+        description="A defect",
+        reporter="Alice",
+        status="Open",
+        priority="High",
+        classification="Bug",
+        lastEdited=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        references=[],
+        principal=Login(username="", password=""),
+    )
+
+
+@pytest.mark.unit
+def test_create_defect_in_tsv_project_writes_to_file(
+    tmp_path: Path,
+    status_sync_context: SyncContext,
+    status_defect: Defect,
+):
+    base_path = _make_format_project(
+        tmp_path, "defects.tsv", "id\ttitle\tstatus\nD-0001\tDemo\tOpen\n"
+    )
+    client = ExcelDefectClient(_make_format_config(base_path, ".tsv"))
+
+    result = client.create_defect("demo", status_defect, status_sync_context)
+
+    assert result.value == "D-0002"
+    content = (base_path / "demo" / "defects.tsv").read_text(encoding="utf-8")
+    assert "D-0002" in content
+    assert "D-0002\tNew defect\tOpen" in content
+
+
+@pytest.mark.unit
+def test_create_defect_writes_when_file_type_case_differs(
+    tmp_path: Path,
+    status_sync_context: SyncContext,
+    status_defect: Defect,
+):
+    base_path = _make_format_project(tmp_path, "defects.csv", "id,title,status\nD-0001,Demo,Open\n")
+    client = ExcelDefectClient(_make_format_config(base_path, ".CSV"))
+
+    result = client.create_defect("demo", status_defect, status_sync_context)
+
+    assert result.value == "D-0002"
+    content = (base_path / "demo" / "defects.csv").read_text(encoding="utf-8")
+    assert "D-0002" in content
+
+
+@pytest.mark.unit
+def test_get_defects_accepts_file_type_without_leading_dot(tmp_path: Path):
+    base_path = _make_format_project(tmp_path, "defects.csv", "id,title\nD-0001,Demo\n")
+    client = ExcelDefectClient(_make_format_config(base_path, "csv"))
+
+    result = client.get_defects("demo", SyncContext(iTBProject="itb"))
+
+    assert [d.id.root for d in result.value] == ["D-0001"]
+
+
+@pytest.mark.unit
+def test_delete_defect_removes_row_from_csv_file(
+    tmp_path: Path,
+    status_sync_context: SyncContext,
+    status_defect: Defect,
+):
+    base_path = _make_format_project(
+        tmp_path,
+        "defects.csv",
+        "id,title,status\nD-0001,Demo,Open\nD-0002,Gone,Open\n",
+    )
+    client = ExcelDefectClient(_make_format_config(base_path, ".csv"))
+
+    protocol = client.delete_defect("demo", "D-0002", status_defect, status_sync_context)
+
+    assert protocol.successes
+    content = (base_path / "demo" / "defects.csv").read_text(encoding="utf-8")
+    assert "D-0002" not in content
+    assert "D-0001" in content
+
+
+@pytest.mark.unit
+def test_update_defect_validates_transition_against_target_row(
+    tmp_path: Path,
+    status_sync_context: SyncContext,
+    status_defect: Defect,
+):
+    base_path = _make_format_project(
+        tmp_path,
+        "defects.csv",
+        "id,title,status\nD-0001,Demo,New\nD-0002,Target,InProgress\n",
+    )
+    config = _make_format_config(
+        base_path,
+        ".csv",
+        transitions=[Transition(from_state="InProgress", to_state="Done")],
+    )
+    client = ExcelDefectClient(config)
+    status_defect.status = "Done"
+
+    protocol = client.update_defect("demo", "D-0002", status_defect, status_sync_context)
+
+    assert not protocol.warnings
+    assert protocol.successes
+    content = (base_path / "demo" / "defects.csv").read_text(encoding="utf-8")
+    assert "Done" in content

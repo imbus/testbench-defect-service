@@ -17,6 +17,17 @@ def _split_csv(raw_value: Any) -> list[str]:
     return [part.strip() for part in str(raw_value).split(",") if part.strip()]
 
 
+def _normalize_file_type(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    if not normalized.startswith("."):
+        normalized = f".{normalized}"
+    return normalized
+
+
 def _normalize_control_field_name(name: str) -> str:
     normalized_name = name.strip()
     if normalized_name == "class":
@@ -200,6 +211,11 @@ class ProjectConfig(BaseModel):
         description="Date format used in the Excel file (e.g., 'yyyy-MM-dd').",
     )
 
+    @field_validator("file_type", mode="before")
+    @classmethod
+    def normalize_file_type(cls, value: Any) -> str | None:
+        return _normalize_file_type(value)
+
     defects_data_header_line: int | None = Field(
         default=None,
         validation_alias=AliasChoices("defects_data_header_line", "defects.header.line"),
@@ -354,6 +370,11 @@ class ExcelDefectClientConfig(BaseModel):
         validation_alias=AliasChoices("simple_date_format", "simpleDateFormat"),
         description="Date format used in the Excel file (e.g., 'yyyy-MM-dd').",
     )
+
+    @field_validator("file_type", mode="before")
+    @classmethod
+    def normalize_file_type(cls, value: Any) -> str | None:
+        return _normalize_file_type(value)
 
     defects_data_header_line: int = Field(
         default=1,

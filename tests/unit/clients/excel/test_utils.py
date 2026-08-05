@@ -210,6 +210,14 @@ class TestReadHeaderColumnsFromFilePath:
         with pytest.raises(ValueError, match="Header row"):
             read_header_columns_from_file_path(csv_file, _make_csv_config(tmp_path, header_line=5))
 
+    def test_utf8_bom_is_stripped_from_first_header(self, tmp_path: Path) -> None:
+        csv_file = tmp_path / "defects.csv"
+        csv_file.write_text("id,title,status\nD-1,Bug,Open\n", encoding="utf-8-sig")
+
+        result = read_header_columns_from_file_path(csv_file, _make_csv_config(tmp_path))
+
+        assert result == {1: "id", 2: "title", 3: "status"}
+
     def test_protocol_none_does_not_raise(self, tmp_path: Path) -> None:
         csv_file = tmp_path / "defects.csv"
         csv_file.write_text("id,title\nD-1,Bug\n", encoding="utf-8")

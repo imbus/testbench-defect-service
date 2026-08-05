@@ -229,16 +229,23 @@ def _load_xls_header_values(
         workbook.release_resources()
 
 
+def resolve_delimited_separator(file_path: Path, config: ExcelDefectClientConfig) -> str:
+    if file_path.suffix.lower() == ".tsv":
+        return "\t"
+    separator = config.separator or ","
+    if len(separator) != 1:
+        raise ValueError(f"Unsupported separator '{separator}' for '{file_path.name}'.")
+    return separator
+
+
 def _load_delimited_header_values(
     file_path: Path,
     config: ExcelDefectClientConfig,
 ) -> list[str]:
-    separator = "\t" if file_path.suffix.lower() == ".tsv" else (config.separator or ",")
-    if len(separator) != 1:
-        raise ValueError(f"Unsupported separator '{separator}' for '{file_path.name}'.")
+    separator = resolve_delimited_separator(file_path, config)
 
     last_error: UnicodeDecodeError | None = None
-    for encoding in ("utf-8", "windows-1252"):
+    for encoding in ("utf-8-sig", "windows-1252"):
         try:
             return _read_delimited_header_values(
                 file_path,
@@ -299,11 +306,13 @@ def _normalize_header_values(values: list[Any] | tuple[Any, ...]) -> list[str]:
     return header_values
 
 
-def coerce_cell_to_string(value: Any) -> str:
-    if value is None:
+def coerce_cell_to_string(value: Any, date_format: str | None = None) -> str:
+    if value is None or value is pd.NaT:
         return ""
     if isinstance(value, float) and math.isnan(value):
         return ""
+    if isinstance(value, datetime) and date_format:
+        return value.strftime(date_format)
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value).strip()
