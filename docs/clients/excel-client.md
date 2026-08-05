@@ -238,7 +238,7 @@ values        = ["bug", "change_request"]
 | `name` | String | Field name as used by TestBench. `"class"` is accepted as an alias for `"classification"`. |
 | `column_number` | Integer | 1-based column of the field in the file. |
 | `values` | List | Allowed values. Presented as a dropdown in TestBench. |
-| `transitions` | List of tables | Allowed changes to this field's value. Omit to allow any change. Each entry needs `from_state` and `to_state`, and both must appear in `values`. |
+| `transitions` | List of tables | Allowed changes to this field's value. Omit to allow any change. Each entry needs `from_state` and `to_state`, and both must appear in `values` when `values` is declared. |
 
 TestBench tells the service at sync time which attribute it uses for status, priority and classification. Each of those attribute names must match a control field `name`:
 
@@ -267,7 +267,8 @@ unchanged are always allowed.
 
 Every `from_state` and `to_state` must be one of the field's `values`. A state
 outside that list is a configuration error and the service refuses to start —
-otherwise a typo would silently reject every legitimate update.
+unless `values` is empty, in which case there is nothing to validate against
+and the check is skipped.
 
 :::note
 Transitions are only checked on **update**, not when a defect is created.
