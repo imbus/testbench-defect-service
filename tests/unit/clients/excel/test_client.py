@@ -445,3 +445,91 @@ def test_update_defect_validates_transition_against_target_row(
     assert protocol.successes
     content = (base_path / "demo" / "defects.csv").read_text(encoding="utf-8")
     assert "Done" in content
+
+
+@pytest.fixture
+def project_path_with_empty_row(syncable_project_path: Path) -> Path:
+    (syncable_project_path / "demo" / "defects.csv").write_text(
+        "id,title,references,reporter,lastEdited,description,status,priority,classification\n"
+        "D-0001,Demo,,Alice,2024-01-01,Example,Open,High,Bug\n"
+        ",,,,,,,,\n"
+        "D-0002,Second,,Bob,2024-01-02,Example,Open,High,Bug\n",
+        encoding="utf-8",
+    )
+    return syncable_project_path
+
+
+@pytest.fixture
+def project_path_with_half_filled_row(syncable_project_path: Path) -> Path:
+    (syncable_project_path / "demo" / "defects.csv").write_text(
+        "id,title,references,reporter,lastEdited,description,status,priority,classification\n"
+        "D-0001,Demo,,Alice,2024-01-01,Example,Open,High,Bug\n"
+        ",Half a row,,Bob,2024-01-02,Example,Open,High,Bug\n",
+        encoding="utf-8",
+    )
+    return syncable_project_path
+
+
+@pytest.mark.unit
+def test_get_defects_skips_empty_rows_and_warns_once(
+    project_path_with_empty_row: Path,
+    syncable_config: ExcelDefectClientConfig,
+    sync_context: SyncContext,
+):
+    """One stray empty row used to return zero defects for the whole project."""
+    client = ExcelDefectClient(syncable_config)
+
+    result = client.get_defects("demo", sync_context)
+
+    assert [defect.id.root for defect in result.value] == ["D-0001", "D-0002"]
+    assert not result.protocol.generalErrors
+    assert result.protocol.generalWarnings is not None
+    assert [entry.message for entry in result.protocol.generalWarnings] == [
+        "Skipped 1 empty row(s) in 'defects.csv'."
+    ]
+    assert [entry.code for entry in result.protocol.generalWarnings] == [
+        ProtocolCode.IMPORT_WARNING
+    ]
+
+
+@pytest.mark.unit
+def test_get_defects_warns_about_empty_rows_on_a_buffered_read(
+    project_path_with_empty_row: Path,
+    syncable_config: ExcelDefectClientConfig,
+    sync_context: SyncContext,
+):
+    """The second read is served from the dataframe buffer; the warning must survive it."""
+    client = ExcelDefectClient(syncable_config)
+
+    client.get_defects("demo", sync_context)
+    result = client.get_defects("demo", sync_context)
+
+    assert [defect.id.root for defect in result.value] == ["D-0001", "D-0002"]
+    assert result.protocol.generalWarnings is not None
+    assert [entry.message for entry in result.protocol.generalWarnings] == [
+        "Skipped 1 empty row(s) in 'defects.csv'."
+    ]
+
+
+@pytest.mark.unit
+def test_get_defects_still_fails_on_a_row_with_content_but_no_id(
+    project_path_with_half_filled_row: Path,
+    syncable_config: ExcelDefectClientConfig,
+    sync_context: SyncContext,
+):
+    """A half-filled row is a data error, not layout.
+
+    Silently skipping it would lose a defect, so the reader still aborts the
+    file and `get_defects` still reports a general READ_ACCESS_ERROR.
+    """
+    client = ExcelDefectClient(syncable_config)
+
+    result = client.get_defects("demo", sync_context)
+
+    assert result.value == []
+    assert result.protocol.generalErrors is not None
+    assert [entry.code for entry in result.protocol.generalErrors] == [
+        ProtocolCode.READ_ACCESS_ERROR
+    ]
+    assert result.protocol.generalErrors[0].message is not None
+    assert "'id': empty at row 3" in result.protocol.generalErrors[0].message

@@ -19,6 +19,7 @@ from testbench_defect_service.clients.excel.utils import (
     check_defect_transitions,
     create_defect_data_frame,
     describe_write_error,
+    is_blank_row,
     optional_row_value,
     parse_boolean_udf_value,
     read_header_columns_from_file_path,
@@ -120,7 +121,9 @@ class ExcelDefectClient(AbstractDefectClient):
         if protocol.generalErrors:
             return ProtocolledDefectSet(value=[], protocol=protocol)
 
-        defects = self._build_defects_from_dataframe(df, effective_config, sync_context, protocol)
+        defects = self._build_defects_from_dataframe(
+            df, effective_config, sync_context, protocol, file_name=defect_path.name
+        )
         if not defects:
             protocol.add_general_warning(
                 f"No defects were found in '{defect_path.name}' for project '{project}'.",
@@ -602,12 +605,18 @@ class ExcelDefectClient(AbstractDefectClient):
         config: ExcelDefectClientConfig,
         sync_context: SyncContext,
         protocol: Protocol | None = None,
+        file_name: str | None = None,
     ) -> list[DefectWithID]:
         defects: list[DefectWithID] = []
         first_data_row = config.defects_data_starting_line
+        skipped_empty_rows = 0
 
         for row_offset, (_, row) in enumerate(df.iterrows()):
             row_number = first_data_row + row_offset
+            if is_blank_row(row):
+                # Layout, not data: an empty row carries nothing to import.
+                skipped_empty_rows += 1
+                continue
             defect_id = row_value(row, "id")
             if not defect_id:
                 if protocol:
@@ -633,6 +642,14 @@ class ExcelDefectClient(AbstractDefectClient):
                         message=f"Skipping defect '{defect_id}' at row {row_number}: {exc}",
                         protocol_code=ProtocolCode.IMPORT_ERROR,
                     )
+
+        if skipped_empty_rows and protocol:
+            location = f" in '{file_name}'" if file_name else ""
+            logger.debug("Skipped %d empty row(s)%s", skipped_empty_rows, location)
+            protocol.add_general_warning(
+                f"Skipped {skipped_empty_rows} empty row(s){location}.",
+                protocol_code=ProtocolCode.IMPORT_WARNING,
+            )
 
         return defects
 
