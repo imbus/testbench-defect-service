@@ -11,11 +11,14 @@ from testbench_defect_service.clients.excel.config import (
     UserDefiendAttributes,
 )
 from testbench_defect_service.clients.excel.file_utils import (
+    _apply_boolean_udf_write_mapping,
+    map_boolean_values,
     read_data_frame_from_file_path,
     write_defect_data,
     write_defect_data_to_csv,
     write_defect_data_to_excel,
 )
+from testbench_defect_service.clients.excel.utils import is_blank_row
 from testbench_defect_service.models.defects import Protocol, SyncContext, ValueType
 
 _MODULE = "testbench_defect_service.clients.excel.file_utils"
@@ -666,3 +669,63 @@ class TestEmptyRowTolerance:
 
         with pytest.raises(ValueError, match=r"duplicate id 'D-1' at rows 2, 4"):
             read_data_frame_from_file_path(file_path, config, sync_context, Protocol())
+
+
+@pytest.mark.unit
+class TestBooleanUdfBlankPreservation:
+    """An empty boolean cell is unset, not false.
+
+    Coercing it to `falseValue` also re-fills an otherwise-empty row on the next
+    write, which brings back the whole-file abort this feature removes.
+    """
+
+    @pytest.fixture
+    def boolean_config(self, config: ExcelDefectClientConfig) -> ExcelDefectClientConfig:
+        config.udfs = [
+            UserDefiendAttributes(
+                name="isOpen",
+                column=3,
+                type=ValueType.BOOLEAN,
+                trueValue="1-yes",
+                falseValue="2-no",
+            )
+        ]
+        return config
+
+    def test_read_mapping_keeps_blank_cells_blank(self, boolean_config: ExcelDefectClientConfig):
+        df = pd.DataFrame({"isOpen": ["1-yes", "2-no", "", "   "]})
+
+        map_boolean_values(boolean_config, df)
+
+        assert df["isOpen"].tolist() == ["true", "false", "", ""]
+
+    def test_write_mapping_keeps_blank_cells_blank(self, boolean_config: ExcelDefectClientConfig):
+        df = pd.DataFrame({"isOpen": ["true", "false", ""]})
+
+        _apply_boolean_udf_write_mapping(boolean_config, df, "isOpen")
+
+        assert df["isOpen"].tolist() == ["1-yes", "2-no", ""]
+
+    def test_blank_boolean_cell_round_trips_as_blank(self, boolean_config: ExcelDefectClientConfig):
+        df = pd.DataFrame({"isOpen": ["1-yes", ""]})
+
+        map_boolean_values(boolean_config, df)
+        _apply_boolean_udf_write_mapping(boolean_config, df, "isOpen")
+
+        assert df["isOpen"].tolist() == ["1-yes", ""]
+
+    def test_empty_row_stays_blank_through_a_read_with_a_boolean_udf(
+        self,
+        tmp_path: Path,
+        boolean_config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        file_path = tmp_path / "defects.csv"
+        file_path.write_text(
+            "id,title,isOpen\nD-1,First,1-yes\n,,\nD-2,Second,2-no\n", encoding="utf-8"
+        )
+
+        df = read_data_frame_from_file_path(file_path, boolean_config, sync_context, Protocol())
+
+        assert df["isOpen"].tolist() == ["true", "", "false"]
+        assert is_blank_row(df.iloc[1]) is True

@@ -9,6 +9,7 @@ from testbench_defect_service.clients.excel.utils import (
     coerce_cell_to_string,
     get_column_mapping_for_config,
     get_visible_sheets,
+    is_blank_cell,
     is_blank_row,
     resolve_delimited_separator,
     resolve_sheet_name,
@@ -73,15 +74,26 @@ def read_data_frame_from_file_path(
     return df
 
 
-def map_boolean_values(config, df):
+def map_boolean_values(config: ExcelDefectClientConfig, df: pd.DataFrame) -> None:
     for udf in config.udfs:
         if udf.type == ValueType.BOOLEAN:
             try:
                 df[udf.name] = df[udf.name].map(
-                    lambda v, t=udf.trueValue: "true" if v == t else "false"
+                    lambda v, t=udf.trueValue: _map_boolean_read_value(v, t)
                 )
             except KeyError:
                 logger.warning(f"{udf.name} not in the dataframe")
+
+
+def _map_boolean_read_value(value: Any, true_value: str | None) -> str:
+    """Map a boolean UDF cell to the internal 'true'/'false' form.
+
+    A blank cell stays blank: it is unset, not false. Coercing it would also
+    re-fill an otherwise-empty row on the next write.
+    """
+    if is_blank_cell(value):
+        return ""
+    return "true" if value == true_value else "false"
 
 
 def _validate_column_mapping(
@@ -379,6 +391,8 @@ def _apply_boolean_udf_write_mapping(
             def _map_bool(
                 v: str, tv: str | None = true_val, fv: str | None = false_val
             ) -> str | None:
+                if is_blank_cell(v):
+                    return ""
                 return tv if str(v).lower() == "true" else fv
 
             df[col_name] = df[col_name].map(_map_bool)
