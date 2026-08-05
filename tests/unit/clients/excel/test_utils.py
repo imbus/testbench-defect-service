@@ -1201,7 +1201,7 @@ class TestCheckDefectTransitions:
         df = self._make_df(current_status="New")
         protocol = Protocol()
 
-        result = check_defect_transitions(defect, df, config, protocol)
+        result = check_defect_transitions(defect, df, config, _make_sync_context(), protocol)
 
         assert result is True
         assert not protocol.warnings
@@ -1216,7 +1216,7 @@ class TestCheckDefectTransitions:
         df = self._make_df(current_status="New")
         protocol = Protocol()
 
-        result = check_defect_transitions(defect, df, config, protocol)
+        result = check_defect_transitions(defect, df, config, _make_sync_context(), protocol)
 
         assert result is True
         assert not protocol.warnings
@@ -1231,7 +1231,7 @@ class TestCheckDefectTransitions:
         df = self._make_df(current_status="New")
         protocol = Protocol()
 
-        result = check_defect_transitions(defect, df, config, protocol)
+        result = check_defect_transitions(defect, df, config, _make_sync_context(), protocol)
 
         assert result is False
         assert protocol.warnings is not None
@@ -1240,7 +1240,7 @@ class TestCheckDefectTransitions:
         assert warning.message is not None
         assert "New" in warning.message
         assert "Done" in warning.message
-        assert warning.code == ProtocolCode.PUBLISH_ERROR
+        assert warning.code == ProtocolCode.INSERT_WARNING
 
     def test_matching_transition_among_multiple_returns_true(self) -> None:
         defect = _make_defect(status="Done")
@@ -1254,7 +1254,7 @@ class TestCheckDefectTransitions:
         df = self._make_df(current_status="New")
         protocol = Protocol()
 
-        result = check_defect_transitions(defect, df, config, protocol)
+        result = check_defect_transitions(defect, df, config, _make_sync_context(), protocol)
 
         assert result is True
         assert not protocol.warnings
@@ -1269,7 +1269,7 @@ class TestCheckDefectTransitions:
         df = self._make_df(current_status="New")
         protocol = Protocol()
 
-        result = check_defect_transitions(defect, df, config, protocol)
+        result = check_defect_transitions(defect, df, config, _make_sync_context(), protocol)
 
         assert result is False
         assert protocol.warnings is not None
@@ -1285,7 +1285,7 @@ class TestCheckDefectTransitions:
         df = self._make_df(current_status="New")
         protocol = Protocol()
 
-        result = check_defect_transitions(defect, df, config, protocol)
+        result = check_defect_transitions(defect, df, config, _make_sync_context(), protocol)
 
         assert result is True
 
@@ -1301,7 +1301,147 @@ class TestCheckDefectTransitions:
         df = self._make_df(current_status="Done")
         protocol = Protocol()
 
-        result = check_defect_transitions(defect, df, config, protocol)
+        result = check_defect_transitions(defect, df, config, _make_sync_context(), protocol)
+
+        assert result is True
+        assert not protocol.warnings
+
+    def _make_full_df(
+        self, status: str = "New", priority: str = "High", classification: str = "Bug"
+    ) -> pd.DataFrame:
+        return pd.DataFrame(
+            {"status": [status], "priority": [priority], "classification": [classification]}
+        )
+
+    def test_priority_workflow_allows_declared_change(self) -> None:
+        defect = _make_defect(priority="Low")
+        config = _make_config(
+            [
+                ControlFields(
+                    name="priority",
+                    column_number=5,
+                    values=["High", "Low"],
+                    transitions=[Transition(from_state="High", to_state="Low")],
+                )
+            ]
+        )
+        protocol = Protocol()
+
+        result = check_defect_transitions(
+            defect, self._make_full_df(priority="High"), config, _make_sync_context(), protocol
+        )
+
+        assert result is True
+        assert not protocol.warnings
+
+    def test_priority_workflow_rejects_undeclared_change_and_names_the_field(self) -> None:
+        defect = _make_defect(priority="Low")
+        config = _make_config(
+            [
+                ControlFields(
+                    name="priority",
+                    column_number=5,
+                    values=["High", "Low", "Medium"],
+                    transitions=[Transition(from_state="High", to_state="Medium")],
+                )
+            ]
+        )
+        protocol = Protocol()
+
+        result = check_defect_transitions(
+            defect, self._make_full_df(priority="High"), config, _make_sync_context(), protocol
+        )
+
+        assert result is False
+        assert protocol.warnings is not None
+        warning = protocol.warnings["Low"][0]
+        assert warning.message is not None
+        assert "priority" in warning.message
+        assert "High" in warning.message
+        assert "Low" in warning.message
+        assert warning.code == ProtocolCode.INSERT_WARNING
+
+    def test_control_field_without_transitions_allows_any_change(self) -> None:
+        defect = _make_defect(priority="Low")
+        config = _make_config(
+            [ControlFields(name="priority", column_number=5, values=["High", "Low"])]
+        )
+        protocol = Protocol()
+
+        result = check_defect_transitions(
+            defect, self._make_full_df(priority="High"), config, _make_sync_context(), protocol
+        )
+
+        assert result is True
+        assert not protocol.warnings
+
+    def test_unchanged_value_allowed_even_without_a_matching_transition(self) -> None:
+        defect = _make_defect(priority="High")
+        config = _make_config(
+            [
+                ControlFields(
+                    name="priority",
+                    column_number=5,
+                    values=["High", "Low"],
+                    transitions=[Transition(from_state="Low", to_state="High")],
+                )
+            ]
+        )
+        protocol = Protocol()
+
+        result = check_defect_transitions(
+            defect, self._make_full_df(priority="High"), config, _make_sync_context(), protocol
+        )
+
+        assert result is True
+        assert not protocol.warnings
+
+    def test_resolves_control_field_name_through_sync_context(self) -> None:
+        defect = _make_defect(status="Done")
+        config = _make_config(
+            [
+                ControlFields(
+                    name="Zustand",
+                    column_number=4,
+                    values=["New", "Done"],
+                    transitions=[Transition(from_state="New", to_state="Done")],
+                )
+            ]
+        )
+        protocol = Protocol()
+
+        result = check_defect_transitions(
+            defect,
+            self._make_full_df(status="New"),
+            config,
+            _make_sync_context(status="Zustand"),
+            protocol,
+        )
+
+        assert result is True
+        assert not protocol.warnings
+
+    def test_control_field_not_referenced_by_sync_context_is_ignored(self) -> None:
+        defect = _make_defect(status="Done")
+        config = _make_config(
+            [
+                ControlFields(
+                    name="Severity",
+                    column_number=9,
+                    values=["New", "Done", "Blocked"],
+                    transitions=[Transition(from_state="New", to_state="Blocked")],
+                )
+            ]
+        )
+        protocol = Protocol()
+
+        result = check_defect_transitions(
+            defect,
+            self._make_full_df(status="New"),
+            config,
+            _make_sync_context(),
+            protocol,
+        )
 
         assert result is True
         assert not protocol.warnings

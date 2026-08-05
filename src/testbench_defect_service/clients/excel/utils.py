@@ -8,7 +8,7 @@ import openpyxl
 import pandas as pd
 import xlrd
 
-from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig
+from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig, Transition
 from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import (
     Defect,
@@ -581,31 +581,67 @@ def validate_control_fields(
     return True
 
 
+def _check_transitions_for_field(  # noqa: PLR0913, PLR0917
+    transitions: list[Transition],
+    df: pd.DataFrame,
+    defect: Defect,
+    logical_name: str,
+    display_name: str,
+    protocol: Protocol,
+) -> bool:
+    if logical_name not in df.columns:
+        return True
+    current_value = df[logical_name].values[0]
+    new_value = getattr(defect, logical_name)
+    if new_value == current_value:
+        return True
+    if any(
+        transition.from_state == current_value and transition.to_state == new_value
+        for transition in transitions
+    ):
+        return True
+    protocol.add_warning(
+        key=str(new_value),
+        message=(
+            f"No valid transition from '{current_value}' to '{new_value}' is configured "
+            f"for control field '{display_name}'."
+        ),
+        protocol_code=ProtocolCode.INSERT_WARNING,
+    )
+    return False
+
+
 def check_defect_transitions(
     defect: Defect,
     df: pd.DataFrame,
     config: ExcelDefectClientConfig,
+    sync_context: SyncContext,
     protocol: Protocol,
 ) -> bool:
-    if defect.status == df["status"].values[0]:
-        return True
+    logical_names = logical_field_names(sync_context)
+    status_has_own_transitions = False
 
-    if config.transitions:
-        for transition in config.transitions:
-            if (
-                transition.from_state == df["status"].values[0]
-                and transition.to_state == defect.status
-            ):
-                return True
-        current_status = df["status"].values[0]
-        protocol.add_warning(
-            key=defect.status,
-            message=(
-                f"No valid transition from '{current_status}' to '{defect.status}' is configured."
-            ),
-            protocol_code=ProtocolCode.INSERT_WARNING,
+    for control_field in config.control_fields:
+        logical_name = logical_names.get(control_field.name)
+        if logical_name is None or not control_field.transitions:
+            continue
+        if logical_name == "status":
+            status_has_own_transitions = True
+        if not _check_transitions_for_field(
+            control_field.transitions,
+            df,
+            defect,
+            logical_name,
+            control_field.name,
+            protocol,
+        ):
+            return False
+
+    if not status_has_own_transitions and config.transitions:
+        # Deprecated top-level list: status only, kept for configs written before
+        # transitions moved inside the control field.
+        return _check_transitions_for_field(
+            config.transitions, df, defect, "status", "status", protocol
         )
-
-        return False
 
     return True

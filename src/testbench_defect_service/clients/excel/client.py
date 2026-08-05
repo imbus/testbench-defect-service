@@ -369,7 +369,9 @@ class ExcelDefectClient(AbstractDefectClient):
             )
             return protocol
 
-        if not check_defect_transitions(defect, df.loc[row_idx], effective_config, protocol):
+        if not check_defect_transitions(
+            defect, df.loc[row_idx], effective_config, sync_context, protocol
+        ):
             return protocol
         new_row_df = create_defect_data_frame(defect, effective_config, defect_id, protocol)
         new_row_df.index = row_idx

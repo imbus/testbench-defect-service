@@ -7,6 +7,7 @@ from testbench_defect_service.clients.excel.client import ExcelDefectClient
 from testbench_defect_service.clients.excel.config import (
     ControlFields,
     ExcelDefectClientConfig,
+    ProjectConfig,
     Transition,
 )
 from testbench_defect_service.models.defects import (
@@ -562,6 +563,42 @@ def test_create_defect_leaves_an_interior_empty_row_untouched(
         "D-0001,Demo,,Alice,2024-01-01,Example,Open,High,Bug",
         ",,,,,,,,",
         "D-0002,Second,,Bob,2024-01-02,Example,Open,High,Bug",
-        "D-0003,Locked file defect,,Alice,2024-05-01,"
-        "Created while the workbook was open,Open,High,Bug",
+        (
+            "D-0003,Locked file defect,,Alice,2024-05-01,"
+            "Created while the workbook was open,Open,High,Bug"
+        ),
     ]
+
+
+@pytest.mark.unit
+def test_project_override_uses_its_own_control_field_transitions(
+    config: ExcelDefectClientConfig,
+) -> None:
+    config.control_fields = [
+        ControlFields(
+            name="status",
+            column_number=7,
+            values=["Open", "Closed"],
+            transitions=[Transition(from_state="Open", to_state="Closed")],
+        )
+    ]
+    config.projects = {
+        "demo": ProjectConfig(
+            control_fields=[
+                ControlFields(
+                    name="status",
+                    column_number=7,
+                    values=["Open", "Blocked"],
+                    transitions=[Transition(from_state="Open", to_state="Blocked")],
+                )
+            ],
+            attributes=None,
+        )
+    }
+    client = ExcelDefectClient(config)
+
+    effective = client._get_effective_config("demo")
+
+    status_field = next(field for field in effective.control_fields if field.name == "status")
+    assert status_field.values == ["Open", "Blocked"]
+    assert status_field.transitions == [Transition(from_state="Open", to_state="Blocked")]
