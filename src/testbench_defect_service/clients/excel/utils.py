@@ -472,6 +472,24 @@ def optional_row_value(row: pd.Series, field_name: str) -> str | None:
     return value or None
 
 
+def is_blank_cell(value: Any) -> bool:
+    """True when a cell holds no content: None, NaT, NaN, or whitespace only."""
+    if value is None or value is pd.NaT:
+        return True
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    return str(value).strip() == ""
+
+
+def is_blank_row(row: pd.Series) -> bool:
+    """True when every mapped cell in the row is blank.
+
+    An empty row in a defect file is layout, not data. The reader, the defect
+    builder and the write mappers all have to agree on what counts as one.
+    """
+    return all(is_blank_cell(value) for value in row)
+
+
 def split_references(raw_value: str, config: ExcelDefectClientConfig) -> list[str]:
     separator = config.references_separator or ";"
     if not raw_value:

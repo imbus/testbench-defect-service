@@ -20,6 +20,8 @@ from testbench_defect_service.clients.excel.utils import (
     create_defect_data_frame,
     get_column_mapping_for_config,
     get_visible_sheets,
+    is_blank_cell,
+    is_blank_row,
     map_and_rename_columns,
     optional_row_value,
     parse_boolean_udf_value,
@@ -808,6 +810,60 @@ class TestOptionalRowValue:
         value = optional_row_value(row, "title")
 
         assert value == "title_1"
+
+
+# ---------------------------------------------------------------------------
+# Tests: is_blank_cell
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestIsBlankCell:
+    def test_empty_string_is_blank(self):
+        assert is_blank_cell("") is True
+
+    def test_whitespace_is_blank(self):
+        assert is_blank_cell("   ") is True
+
+    def test_none_is_blank(self):
+        assert is_blank_cell(None) is True
+
+    def test_nan_is_blank(self):
+        assert is_blank_cell(float("nan")) is True
+
+    def test_value_is_not_blank(self):
+        assert is_blank_cell("D-1") is False
+
+    def test_zero_is_not_blank(self):
+        assert is_blank_cell(0) is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: is_blank_row
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestIsBlankRow:
+    def test_all_cells_empty(self):
+        row = pd.Series({"id": "", "title": "", "status": ""})
+        assert is_blank_row(row) is True
+
+    def test_whitespace_only_cells(self):
+        row = pd.Series({"id": " ", "title": "\t", "status": ""})
+        assert is_blank_row(row) is True
+
+    def test_missing_and_none_cells(self):
+        row = pd.Series({"id": None, "title": float("nan"), "status": ""})
+        assert is_blank_row(row) is True
+
+    def test_one_populated_cell_is_not_blank(self):
+        row = pd.Series({"id": "", "title": "Only a title", "status": ""})
+        assert is_blank_row(row) is False
+
+    def test_populated_id_is_not_blank(self):
+        row = pd.Series({"id": "D-1", "title": "", "status": ""})
+        assert is_blank_row(row) is False
 
 
 # ---------------------------------------------------------------------------
