@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.fields import FieldInfo
 
+from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import ValueType
 
 
@@ -51,8 +52,8 @@ def _parse_legacy_control_fields(data: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _parse_legacy_transitions(data: dict[str, Any]) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
+def _parse_legacy_transitions(data: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
+    result: dict[str, list[dict[str, str]]] = {}
     for key in sorted(data):
         if key.endswith(".transition.number"):
             continue
@@ -63,13 +64,32 @@ def _parse_legacy_transitions(data: dict[str, Any]) -> list[dict[str, Any]]:
         if "-" not in raw_transition:
             continue
         from_state, to_state = raw_transition.split("-", 1)
-        result.append(
-            {
-                "from_state": from_state.strip(),
-                "to_state": to_state.strip(),
-            }
+        field_name = _normalize_control_field_name(match.group(1))
+        result.setdefault(field_name, []).append(
+            {"from_state": from_state.strip(), "to_state": to_state.strip()}
         )
     return result
+
+
+def _attach_legacy_transitions(
+    normalized: dict[str, Any], legacy_transitions: dict[str, list[dict[str, str]]]
+) -> None:
+    control_fields = normalized.get("control_fields") or []
+    by_name = {
+        field["name"]: field
+        for field in control_fields
+        if isinstance(field, dict) and "name" in field
+    }
+    for field_name, transitions in legacy_transitions.items():
+        target = by_name.get(field_name)
+        if target is None:
+            logger.warning(
+                "Ignoring legacy transitions for '%s': not configured as a control field.",
+                field_name,
+            )
+            continue
+        if not target.get("transitions"):
+            target["transitions"] = transitions
 
 
 def _parse_legacy_udfs(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -140,10 +160,9 @@ def _normalize_legacy_excel_config(data: dict[str, Any]) -> dict[str, Any]:
         if control_fields:
             normalized["control_fields"] = control_fields
 
-    if "transitions" not in normalized:
-        transitions = _parse_legacy_transitions(data)
-        if transitions:
-            normalized["transitions"] = transitions
+    legacy_transitions = _parse_legacy_transitions(data)
+    if legacy_transitions:
+        _attach_legacy_transitions(normalized, legacy_transitions)
 
     if "udfs" not in normalized:
         udfs = _parse_legacy_udfs(data)

@@ -1,7 +1,11 @@
 import pytest
 from pydantic import ValidationError
 
-from testbench_defect_service.clients.excel.config import ControlFields, Transition
+from testbench_defect_service.clients.excel.config import (
+    ControlFields,
+    Transition,
+    _normalize_legacy_excel_config,
+)
 
 
 @pytest.mark.unit
@@ -64,3 +68,81 @@ class TestControlFieldTransitions:
         )
 
         assert control_field.name == "classification"
+
+
+@pytest.mark.unit
+class TestLegacyTransitionNormalization:
+    def _legacy_data(self, **overrides: str) -> dict[str, str]:
+        data = {
+            "controlFields": "status,priority",
+            "status.columnNo": "4",
+            "status.value": "New,InProgress,Done",
+            "priority.columnNo": "5",
+            "priority.value": "Low,High",
+            "status.transition.number": "2",
+            "status.transition1": "New-InProgress",
+            "status.transition2": "InProgress-Done",
+        }
+        data.update(overrides)
+        return data
+
+    def test_status_transitions_land_on_the_status_control_field(self) -> None:
+        normalized = _normalize_legacy_excel_config(self._legacy_data())
+
+        by_name = {field["name"]: field for field in normalized["control_fields"]}
+        assert by_name["status"]["transitions"] == [
+            {"from_state": "New", "to_state": "InProgress"},
+            {"from_state": "InProgress", "to_state": "Done"},
+        ]
+        assert "transitions" not in by_name["priority"]
+
+    def test_priority_transitions_land_on_the_priority_control_field(self) -> None:
+        normalized = _normalize_legacy_excel_config(
+            self._legacy_data(**{"priority.transition1": "Low-High"})
+        )
+
+        by_name = {field["name"]: field for field in normalized["control_fields"]}
+        assert by_name["priority"]["transitions"] == [{"from_state": "Low", "to_state": "High"}]
+        assert len(by_name["status"]["transitions"]) == 2
+
+    def test_class_prefix_normalizes_to_classification(self) -> None:
+        data = {
+            "controlFields": "class",
+            "class.columnNo": "6",
+            "class.value": "Crash,Other",
+            "class.transition1": "Crash-Other",
+        }
+
+        normalized = _normalize_legacy_excel_config(data)
+
+        by_name = {field["name"]: field for field in normalized["control_fields"]}
+        assert by_name["classification"]["transitions"] == [
+            {"from_state": "Crash", "to_state": "Other"}
+        ]
+
+    def test_transition_number_key_is_not_parsed_as_a_transition(self) -> None:
+        normalized = _normalize_legacy_excel_config(self._legacy_data())
+
+        by_name = {field["name"]: field for field in normalized["control_fields"]}
+        assert len(by_name["status"]["transitions"]) == 2
+
+    def test_orphan_prefix_is_dropped_and_the_rest_still_loads(self) -> None:
+        normalized = _normalize_legacy_excel_config(
+            self._legacy_data(**{"severity.transition1": "Low-High"})
+        )
+
+        by_name = {field["name"]: field for field in normalized["control_fields"]}
+        assert set(by_name) == {"status", "priority"}
+        assert len(by_name["status"]["transitions"]) == 2
+
+    def test_explicit_control_fields_are_left_alone(self) -> None:
+        data = {
+            "control_fields": [{"name": "status", "column_number": 4, "values": ["New", "Done"]}],
+            "status.transition1": "New-Done",
+        }
+
+        normalized = _normalize_legacy_excel_config(data)
+
+        assert normalized["control_fields"][0]["transitions"] == [
+            {"from_state": "New", "to_state": "Done"}
+        ]
