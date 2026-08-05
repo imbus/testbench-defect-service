@@ -22,6 +22,7 @@ from testbench_defect_service.clients.excel.utils import (
     get_visible_sheets,
     is_blank_cell,
     is_blank_row,
+    logical_field_names,
     map_and_rename_columns,
     optional_row_value,
     parse_boolean_udf_value,
@@ -1035,6 +1036,23 @@ def _make_sync_context(
         priorityAttribute=priority,
         classAttribute=classification,
     )
+
+
+@pytest.mark.unit
+class TestLogicalFieldNames:
+    def test_maps_each_attribute_to_its_logical_field(self) -> None:
+        sync_context = _make_sync_context(status="Zustand", priority="Prio", classification="Art")
+
+        assert logical_field_names(sync_context) == {
+            "Zustand": "status",
+            "Prio": "priority",
+            "Art": "classification",
+        }
+
+    def test_omits_unset_attributes(self) -> None:
+        sync_context = _make_sync_context(status="status", priority=None, classification=None)
+
+        assert logical_field_names(sync_context) == {"status": "status"}
 
 
 @pytest.mark.unit

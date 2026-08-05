@@ -524,24 +524,31 @@ def add_general_warning_once(
     protocol.add_general_warning(message, protocol_code=protocol_code)
 
 
+def logical_field_names(sync_context: SyncContext) -> dict[str, str]:
+    """Map each configured sync attribute name to the logical defect field it feeds."""
+    mapping = {
+        sync_context.statusAttribute: "status",
+        sync_context.priorityAttribute: "priority",
+        sync_context.classAttribute: "classification",
+    }
+    return {name: logical for name, logical in mapping.items() if name is not None}
+
+
 def validate_control_fields(
     defect: Defect,
     config: ExcelDefectClientConfig,
     sync_context: SyncContext,
     protocol: Protocol,
 ) -> bool:
-    field_map: dict[str | None, str] = {
-        sync_context.statusAttribute: defect.status,
-        sync_context.priorityAttribute: defect.priority,
-        sync_context.classAttribute: defect.classification,
-    }
-    required_attributes = {name for name in field_map if name is not None}
+    logical_names = logical_field_names(sync_context)
+    required_attributes = set(logical_names)
     validated: set[str] = set()
 
     for control_field in config.control_fields:
-        if control_field.name not in field_map:
+        logical = logical_names.get(control_field.name)
+        if logical is None:
             continue
-        value = field_map[control_field.name]
+        value = getattr(defect, logical)
         if value not in control_field.values:
             protocol.add_error(
                 key=control_field.name,
