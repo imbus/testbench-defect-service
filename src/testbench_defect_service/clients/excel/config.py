@@ -76,7 +76,7 @@ def _attach_legacy_transitions(
 ) -> None:
     control_fields = normalized.get("control_fields") or []
     by_name = {
-        field["name"]: field
+        _normalize_control_field_name(str(field["name"])): field
         for field in control_fields
         if isinstance(field, dict) and "name" in field
     }
@@ -162,7 +162,13 @@ def _normalize_legacy_excel_config(data: dict[str, Any]) -> dict[str, Any]:
 
     legacy_transitions = _parse_legacy_transitions(data)
     if legacy_transitions:
-        _attach_legacy_transitions(normalized, legacy_transitions)
+        if "transitions" in normalized:
+            logger.warning(
+                "Ignoring legacy transitions for %s: a top-level 'transitions' list is present.",
+                ", ".join(sorted(legacy_transitions)),
+            )
+        else:
+            _attach_legacy_transitions(normalized, legacy_transitions)
 
     if "udfs" not in normalized:
         udfs = _parse_legacy_udfs(data)

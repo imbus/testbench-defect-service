@@ -146,3 +146,38 @@ class TestLegacyTransitionNormalization:
         assert normalized["control_fields"][0]["transitions"] == [
             {"from_state": "New", "to_state": "Done"}
         ]
+
+    def test_explicit_top_level_transitions_beat_a_legacy_key(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        data = {
+            "control_fields": [{"name": "status", "column_number": 4, "values": ["New", "Done"]}],
+            "transitions": [{"from_state": "New", "to_state": "Done"}],
+            "status.transition1": "New-InProgress",
+        }
+
+        with caplog.at_level("WARNING", logger="testbench_defect_service"):
+            normalized = _normalize_legacy_excel_config(data)
+
+        assert normalized["transitions"] == [{"from_state": "New", "to_state": "Done"}]
+        assert "transitions" not in normalized["control_fields"][0]
+        assert any(
+            "status" in record.message and "top-level" in record.message
+            for record in caplog.records
+        )
+
+    def test_explicit_control_field_named_class_receives_its_transitions(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        data = {
+            "control_fields": [{"name": "class", "column_number": 6, "values": ["Crash", "Other"]}],
+            "class.transition1": "Crash-Other",
+        }
+
+        with caplog.at_level("WARNING", logger="testbench_defect_service"):
+            normalized = _normalize_legacy_excel_config(data)
+
+        assert normalized["control_fields"][0]["transitions"] == [
+            {"from_state": "Crash", "to_state": "Other"}
+        ]
+        assert caplog.records == []
