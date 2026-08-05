@@ -581,7 +581,7 @@ def validate_control_fields(
     return True
 
 
-def _check_transitions_for_field(  # noqa: PLR0913, PLR0917
+def _check_transitions_for_field(  # noqa
     transitions: list[Transition],
     df: pd.DataFrame,
     defect: Defect,

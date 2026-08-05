@@ -1445,3 +1445,41 @@ class TestCheckDefectTransitions:
 
         assert result is True
         assert not protocol.warnings
+
+    def test_status_control_field_without_transitions_falls_back_to_top_level_list(self) -> None:
+        # A status control field is configured but declares no transitions of its own, so the
+        # deprecated top-level list must still apply — the loop finding the field must not be
+        # mistaken for the field having its own workflow.
+        config = _make_config(
+            [ControlFields(name="status", column_number=1, values=["New", "Done", "InProgress"])]
+        )
+        config.transitions = [Transition(from_state="New", to_state="Done")]
+
+        allowed_defect = _make_defect(status="Done")
+        allowed_protocol = Protocol()
+
+        allowed_result = check_defect_transitions(
+            allowed_defect,
+            self._make_full_df(status="New"),
+            config,
+            _make_sync_context(),
+            allowed_protocol,
+        )
+
+        assert allowed_result is True
+        assert not allowed_protocol.warnings
+
+        rejected_defect = _make_defect(status="InProgress")
+        rejected_protocol = Protocol()
+
+        rejected_result = check_defect_transitions(
+            rejected_defect,
+            self._make_full_df(status="New"),
+            config,
+            _make_sync_context(),
+            rejected_protocol,
+        )
+
+        assert rejected_result is False
+        assert rejected_protocol.warnings is not None
+        assert "InProgress" in rejected_protocol.warnings
