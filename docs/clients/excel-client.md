@@ -26,18 +26,18 @@ excel/                     <- excel_file_path
 
 Within the file, one row is one defect. The row and column layout is described entirely through configuration:
 
-| Config option | Meaning |
-|---|---|
-| `defects_data_header_line` | Row containing the column headers |
-| `defects_data_starting_line` | First row containing defect data |
-| `*_column_no` | 1-based column number of a defect field |
+| Config option                  | Meaning                                 |
+| ------------------------------ | --------------------------------------- |
+| `defects_data_header_line`   | Row containing the column headers       |
+| `defects_data_starting_line` | First row containing defect data        |
+| `*_column_no`                | 1-based column number of a defect field |
 
 A minimal sheet with the default column numbers looks like this:
 
-|  | A (1) | B (2) | C (3) | D (4) | E (5) | F (6) | G (7) |
-|---|---|---|---|---|---|---|---|
-| **1** | ID | Title | References | Discoverer | Last edited | Description | Status |
-| **2** | BUG0001 | Login fails on Safari | TC-1,TC-2 | jdoe | 2026-01-14 | Clicking login does nothing | open |
+|             | A (1)   | B (2)                 | C (3)      | D (4)      | E (5)       | F (6)                       | G (7)  |
+| ----------- | ------- | --------------------- | ---------- | ---------- | ----------- | --------------------------- | ------ |
+| **1** | ID      | Title                 | References | Discoverer | Last edited | Description                 | Status |
+| **2** | BUG0001 | Login fails on Safari | TC-1,TC-2  | jdoe       | 2026-01-14  | Clicking login does nothing | open   |
 
 ---
 
@@ -71,13 +71,13 @@ The Excel client is not bundled in the [ready-to-use executable](../getting-star
 
 ### Supported file formats
 
-| Format | Read | Write | Engine |
-|---|---|---|---|
-| `.xlsx` | ✅ | ✅ | openpyxl |
-| `.xls` | ✅ | ❌ | xlrd |
-| `.csv` | ✅ | ✅ | pandas |
-| `.txt` | ✅ | ✅ | pandas (uses `separator`) |
-| `.tsv` | ✅ | ❌ | pandas (tab-separated, fixed) |
+| Format    | Read | Write | Engine                        |
+| --------- | ---- | ----- | ----------------------------- |
+| `.xlsx` | ✅   | ✅    | openpyxl                      |
+| `.xls`  | ✅   | ❌    | xlrd                          |
+| `.csv`  | ✅   | ✅    | pandas                        |
+| `.txt`  | ✅   | ✅    | pandas (uses`separator`)    |
+| `.tsv`  | ✅   | ✅    | pandas (tab-separated, fixed) |
 
 :::warning
 Legacy `.xls` files are **read-only**. Attempting to create, update or delete a defect fails with an error asking you to convert the file to `.xlsx`. Set `readonly = true` for `.xls` projects to make this explicit in TestBench.
@@ -125,18 +125,18 @@ values        = ["open", "in_progress", "closed"]
 
 **Identity**
 
-| Option | Type | Description | Required | Default |
-|--------|------|-------------|----------|---------|
-| `system_name` | String | Display name shown in TestBench. Must match the name in the DMProxy properties file or during setup. | No | `"DefectService"` |
+| Option          | Type   | Description                                                                                          | Required | Default             |
+| --------------- | ------ | ---------------------------------------------------------------------------------------------------- | -------- | ------------------- |
+| `system_name` | String | Display name shown in TestBench. Must match the name in the DMProxy properties file or during setup. | No       | `"DefectService"` |
 
 **Storage**
 
-| Option | Type | Description | Required | Default |
-|--------|------|-------------|----------|---------|
-| `excel_file_path` | String | Root directory containing one subdirectory per project. | **Yes** | — |
-| `file_type` | String | Extension of the defect file inside each project directory, including the dot (`".xlsx"`, `".xls"`, `".csv"`, `".tsv"`, `".txt"`). | **Yes** | — |
-| `worksheet_name` | String | Worksheet to read. Ignored for delimited files. When omitted — or when the sheet is missing or hidden — the first **visible** sheet is used and a warning is reported. | No | first visible sheet |
-| `separator` | String | Single character separating values in `.csv` / `.txt` files. `.tsv` always uses a tab. | For `.csv` / `.txt` | — |
+| Option              | Type   | Description                                                                                                                                                                   | Required               | Default             |
+| ------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------- |
+| `excel_file_path` | String | Root directory containing one subdirectory per project.                                                                                                                       | **Yes**          | —                  |
+| `file_type`       | String | Extension of the defect file inside each project directory, including the dot (`".xlsx"`, `".xls"`, `".csv"`, `".tsv"`, `".txt"`).                                  | **Yes**          | —                  |
+| `worksheet_name`  | String | Worksheet to read. Ignored for delimited files. When omitted — or when the sheet is missing or hidden — the first**visible** sheet is used and a warning is reported. | No                     | first visible sheet |
+| `separator`       | String | Single character separating values in`.csv` / `.txt` files. `.tsv` always uses a tab.                                                                                   | For`.csv` / `.txt` | —                  |
 
 :::warning
 `file_type` has no usable default. If it is not set, every project lookup fails with `No file_type configured for project '<name>'`.
@@ -148,21 +148,21 @@ Always set `separator` explicitly for `.csv` and `.txt` projects. When it is omi
 
 **Layout**
 
-| Option | Type | Description | Required | Default |
-|--------|------|-------------|----------|---------|
-| `defects_data_header_line` | Integer | 1-based row number of the header row. | No | `1` |
-| `defects_data_starting_line` | Integer | 1-based row number of the first data row. Rows between the header and this line are skipped. | No | `2` |
+| Option                         | Type    | Description                                                                                  | Required | Default |
+| ------------------------------ | ------- | -------------------------------------------------------------------------------------------- | -------- | ------- |
+| `defects_data_header_line`   | Integer | 1-based row number of the header row.                                                        | No       | `1`   |
+| `defects_data_starting_line` | Integer | 1-based row number of the first data row. Rows between the header and this line are skipped. | No       | `2`   |
 
 **Column mapping** (all 1-based; `0` disables the field)
 
-| Option | Type | Defect field | Required | Default |
-|--------|------|--------------|----------|---------|
-| `id_column_no` | Integer | `id` | **Yes** | `1` |
-| `title_column_no` | Integer | `title` | No | `2` |
-| `references_column_no` | Integer | `references` | No | `3` |
-| `discoverer_column_no` | Integer | `reporter` | No | `4` |
-| `lastedit_column_no` | Integer | `lastEdited` | No | `5` |
-| `description_column_no` | Integer | `description` | No | `6` |
+| Option                    | Type    | Defect field    | Required      | Default |
+| ------------------------- | ------- | --------------- | ------------- | ------- |
+| `id_column_no`          | Integer | `id`          | **Yes** | `1`   |
+| `title_column_no`       | Integer | `title`       | No            | `2`   |
+| `references_column_no`  | Integer | `references`  | No            | `3`   |
+| `discoverer_column_no`  | Integer | `reporter`    | No            | `4`   |
+| `lastedit_column_no`    | Integer | `lastEdited`  | No            | `5`   |
+| `description_column_no` | Integer | `description` | No            | `6`   |
 
 The `id` column is mandatory: if the configured column number lies outside the file, the import fails. Missing optional columns produce a warning and the field stays empty.
 
@@ -172,42 +172,42 @@ A row that has content but no defect ID is still an error, and is reported per r
 
 **Query & fields**
 
-| Option | Type | Description | Required | Default |
-|--------|------|-------------|----------|---------|
-| `attributes` | List | Fields shown in the extended defect view. Use logical field names (`title`, `status`, `description`, …) or user-defined attribute names. | No | `["title", "status", "isOpen"]` |
-| `control_fields` | List of tables | Columns whose values are restricted to a fixed list, optionally with a transition workflow. Required for `status`, `priority` and `classification`. See [Control fields](#control-fields). | No | `[]` |
-| `udfs` | List of tables | User-defined attributes. See [User-defined attributes](#user-defined-attributes-udfs). | No | `[]` |
+| Option             | Type           | Description                                                                                                                                                                                    | Required | Default                           |
+| ------------------ | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | --------------------------------- |
+| `attributes`     | List           | Fields shown in the extended defect view. Use logical field names (`title`, `status`, `description`, …) or user-defined attribute names.                                                | No       | `["title", "status", "isOpen"]` |
+| `control_fields` | List of tables | Columns whose values are restricted to a fixed list, optionally with a transition workflow. Required for`status`, `priority` and `classification`. See [Control fields](#control-fields). | No       | `[]`                            |
+| `udfs`           | List of tables | User-defined attributes. See[User-defined attributes](#user-defined-attributes-udfs).                                                                                                           | No       | `[]`                            |
 
 **Values & formatting**
 
-| Option | Type | Description | Required | Default |
-|--------|------|-------------|----------|---------|
-| `simple_date_format` | String | Date format of the last-edited column, in Java `SimpleDateFormat` notation. See [Date handling](#date-handling). | No | — (automatic) |
-| `references_separator` | String | Separates multiple references inside the references cell. | No | `","` |
-| `id_prefix` | String | Prefix of generated defect IDs. | No | `"BUG"` |
-| `defect_id_digit_numbers` | Integer | Number of digits the numeric part of a generated ID is padded to. | No | `4` |
+| Option                      | Type    | Description                                                                                                      | Required | Default        |
+| --------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------- | -------- | -------------- |
+| `simple_date_format`      | String  | Date format of the last-edited column, in Java`SimpleDateFormat` notation. See [Date handling](#date-handling). | No       | — (automatic) |
+| `references_separator`    | String  | Separates multiple references inside the references cell.                                                        | No       | `","`        |
+| `id_prefix`               | String  | Prefix of generated defect IDs.                                                                                  | No       | `"BUG"`      |
+| `defect_id_digit_numbers` | Integer | Number of digits the numeric part of a generated ID is padded to.                                                | No       | `4`          |
 
 **Behavior**
 
-| Option | Type | Description | Required | Default |
-|--------|------|-------------|----------|---------|
-| `readonly` | Boolean | When `true`, all write operations (create, update, delete) are rejected. | No | `false` |
+| Option       | Type    | Description                                                               | Required | Default   |
+| ------------ | ------- | ------------------------------------------------------------------------- | -------- | --------- |
+| `readonly` | Boolean | When`true`, all write operations (create, update, delete) are rejected. | No       | `false` |
 
 **Performance**
 
-| Option | Type | Description | Required | Default |
-|--------|------|-------------|----------|---------|
-| `buffer_max_age_minutes` | Float | How long a parsed file stays in memory. `0` disables buffering. | No | `1440` |
-| `buffer_max_size_mib` | Float | Total memory budget for buffered files. `0` disables buffering. | No | `1024` |
-| `buffer_cleanup_interval_minutes` | Float | How often the background cleanup thread runs. `0` disables it. | No | `1` |
+| Option                              | Type  | Description                                                      | Required | Default  |
+| ----------------------------------- | ----- | ---------------------------------------------------------------- | -------- | -------- |
+| `buffer_max_age_minutes`          | Float | How long a parsed file stays in memory.`0` disables buffering. | No       | `1440` |
+| `buffer_max_size_mib`             | Float | Total memory budget for buffered files.`0` disables buffering. | No       | `1024` |
+| `buffer_cleanup_interval_minutes` | Float | How often the background cleanup thread runs.`0` disables it.  | No       | `1`    |
 
 See [Buffering](#buffering) for details.
 
 **Advanced**
 
-| Option | Type | Description | Required | Default |
-|--------|------|-------------|----------|---------|
-| `projects` | Table | Per-project configuration overrides. See [Per-project overrides](#per-project-overrides). | No | `{}` |
+| Option       | Type  | Description                                                                             | Required | Default |
+| ------------ | ----- | --------------------------------------------------------------------------------------- | -------- | ------- |
+| `projects` | Table | Per-project configuration overrides. See[Per-project overrides](#per-project-overrides). | No       | `{}`  |
 
 ---
 
@@ -233,12 +233,12 @@ column_number = 9
 values        = ["bug", "change_request"]
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | String | Field name as used by TestBench. `"class"` is accepted as an alias for `"classification"`. |
-| `column_number` | Integer | 1-based column of the field in the file. |
-| `values` | List | Allowed values. Presented as a dropdown in TestBench. |
-| `transitions` | List of tables | Allowed changes to this field's value. Omit to allow any change. Each entry needs `from_state` and `to_state`, and both must appear in `values` when `values` is declared. |
+| Field             | Type           | Description                                                                                                                                                                       |
+| ----------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`          | String         | Field name as used by TestBench.`"class"` is accepted as an alias for `"classification"`.                                                                                     |
+| `column_number` | Integer        | 1-based column of the field in the file.                                                                                                                                          |
+| `values`        | List           | Allowed values. Presented as a dropdown in TestBench.                                                                                                                             |
+| `transitions`   | List of tables | Allowed changes to this field's value. Omit to allow any change. Each entry needs`from_state` and `to_state`, and both must appear in `values` when `values` is declared. |
 
 TestBench tells the service at sync time which attribute it uses for status, priority and classification. Each of those attribute names must match a control field `name`:
 
@@ -303,14 +303,14 @@ trueValue  = "yes"
 falseValue = "no"
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | String | Field name as it appears in TestBench. Also usable in `attributes`. |
-| `column` | Integer | 1-based column number of the field. |
-| `type` | `"STRING"` \| `"BOOLEAN"` | Data type of the field. |
-| `required` | Boolean | Whether the field is mandatory. |
-| `value` | String | Fallback value used when the column is not present in the file. |
-| `trueValue` / `falseValue` | String | Cell values representing `true` / `false` for `BOOLEAN` fields. Default to `"true"` / `"false"`. |
+| Field                          | Type                          | Description                                                                                               |
+| ------------------------------ | ----------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `name`                       | String                        | Field name as it appears in TestBench. Also usable in`attributes`.                                      |
+| `column`                     | Integer                       | 1-based column number of the field.                                                                       |
+| `type`                       | `"STRING"` \| `"BOOLEAN"` | Data type of the field.                                                                                   |
+| `required`                   | Boolean                       | Whether the field is mandatory.                                                                           |
+| `value`                      | String                        | Fallback value used when the column is not present in the file.                                           |
+| `trueValue` / `falseValue` | String                        | Cell values representing`true` / `false` for `BOOLEAN` fields. Default to `"true"` / `"false"`. |
 
 `BOOLEAN` values are translated in both directions: cells matching `trueValue` are read as `true`, and writes convert `true` / `false` back to `trueValue` / `falseValue`. A cell that matches neither is reported as unset.
 
@@ -320,14 +320,14 @@ falseValue = "no"
 
 `simple_date_format` uses Java `SimpleDateFormat` patterns, which are translated to Python `strftime` patterns:
 
-| Pattern | Meaning | Example |
-|---------|---------|---------|
-| `yyyy` / `yy` | Year | `2026` / `26` |
-| `MM` | Month | `08` |
-| `dd` | Day | `03` |
-| `HH` / `hh` | Hour (24 h / 12 h) | `14` / `02` |
-| `mm` | Minute (only when the pattern contains an hour) | `05` |
-| `ss` | Second | `09` |
+| Pattern           | Meaning                                         | Example           |
+| ----------------- | ----------------------------------------------- | ----------------- |
+| `yyyy` / `yy` | Year                                            | `2026` / `26` |
+| `MM`            | Month                                           | `08`            |
+| `dd`            | Day                                             | `03`            |
+| `HH` / `hh`   | Hour (24 h / 12 h)                              | `14` / `02`   |
+| `mm`            | Minute (only when the pattern contains an hour) | `05`            |
+| `ss`            | Second                                          | `09`            |
 
 ```toml
 simple_date_format = "yyyy-MM-dd HH:mm:ss"
@@ -443,36 +443,36 @@ udf.attr1.required=false
 
 ### Key mapping
 
-| Legacy key | TOML option |
-|---|---|
-| `systemName` | `system_name` |
-| `excelFilePath` | `excel_file_path` |
-| `worksheetName` | `worksheet_name` |
-| `fileType` | `file_type` |
-| `simpleDateFormat` | `simple_date_format` |
-| `separator` | `separator` |
-| `defects.header.line` | `defects_data_header_line` |
-| `defects.data.startingLine` | `defects_data_starting_line` |
-| `defect.id.columnNo` | `id_column_no` |
-| `defect.title.columnNo` | `title_column_no` |
-| `defect.references.columnNo` | `references_column_no` |
-| `defect.discoverer.columnNo` | `discoverer_column_no` |
-| `defect.lastedit.columnNo` | `lastedit_column_no` |
-| `defect.description.columnNo` | `description_column_no` |
-| `defect.references.separator` | `references_separator` |
-| `defect.id.prefix` | `id_prefix` |
-| `defect.id.digitNumber` | `defect_id_digit_numbers` |
-| `bufferMaxAgeMinutes` | `buffer_max_age_minutes` |
-| `bufferMaxSizeMiB` | `buffer_max_size_mib` |
+| Legacy key                       | TOML option                         |
+| -------------------------------- | ----------------------------------- |
+| `systemName`                   | `system_name`                     |
+| `excelFilePath`                | `excel_file_path`                 |
+| `worksheetName`                | `worksheet_name`                  |
+| `fileType`                     | `file_type`                       |
+| `simpleDateFormat`             | `simple_date_format`              |
+| `separator`                    | `separator`                       |
+| `defects.header.line`          | `defects_data_header_line`        |
+| `defects.data.startingLine`    | `defects_data_starting_line`      |
+| `defect.id.columnNo`           | `id_column_no`                    |
+| `defect.title.columnNo`        | `title_column_no`                 |
+| `defect.references.columnNo`   | `references_column_no`            |
+| `defect.discoverer.columnNo`   | `discoverer_column_no`            |
+| `defect.lastedit.columnNo`     | `lastedit_column_no`              |
+| `defect.description.columnNo`  | `description_column_no`           |
+| `defect.references.separator`  | `references_separator`            |
+| `defect.id.prefix`             | `id_prefix`                       |
+| `defect.id.digitNumber`        | `defect_id_digit_numbers`         |
+| `bufferMaxAgeMinutes`          | `buffer_max_age_minutes`          |
+| `bufferMaxSizeMiB`             | `buffer_max_size_mib`             |
 | `bufferCleanupIntervalMinutes` | `buffer_cleanup_interval_minutes` |
 
 Structured settings are reassembled from their numbered legacy keys:
 
-| Legacy pattern | Becomes |
-|---|---|
-| `controlFields`, `<field>.columnNo`, `<field>.value` | one `control_fields` entry per listed field (`class` → `classification`) |
-| `<field>.transition<n>` with a `from-to` value | one `transitions` entry on the `<field>` control field (`class` → `classification`); a prefix naming no control field is logged and ignored |
-| `udf.attr<n>.name`, `.column`, `.type`, `.required`, `.value`, `.trueValue`, `.falseValue` | one `udfs` entry each |
+| Legacy pattern                                                                                           | Becomes                                                                                                                                             |
+| -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `controlFields`, `<field>.columnNo`, `<field>.value`                                               | one`control_fields` entry per listed field (`class` → `classification`)                                                                      |
+| `<field>.transition<n>` with a `from-to` value                                                       | one`transitions` entry on the `<field>` control field (`class` → `classification`); a prefix naming no control field is logged and ignored |
+| `udf.attr<n>.name`, `.column`, `.type`, `.required`, `.value`, `.trueValue`, `.falseValue` | one`udfs` entry each                                                                                                                              |
 
 :::note
 Both spellings work in either file format — a `.toml` file may use the legacy key names and a `.properties` file may use the new ones. Where both are present, the new key wins.
@@ -492,13 +492,13 @@ Rewriting an `.xlsx` file with openpyxl does not preserve everything Excel can s
 
 ## Limitations
 
-| Limitation | Details |
-|------------|----------|
-| **`.xls` is read-only** | Creating, updating or deleting a defect in a legacy `.xls` file fails. Convert the file to `.xlsx`. |
-| **`.tsv` is read-only in practice** | Tab-separated files can be imported, but write operations leave the file unchanged. Set `readonly = true` for `.tsv` projects, or rename the file to `.txt` and set `separator = "\t"`. |
-| **CSV writes assume a comma** | When writing `.csv` / `.txt` files, the existing content is re-read as comma-separated regardless of `separator`. Only use write operations on comma-separated files. |
-| **No pre/post sync commands** | Unlike the JSONL and Jira clients, the Excel client does not support the `commands` section — `before_sync` and `after_sync` are no-ops. |
-| **No file locking** | The client does not lock the file. Avoid editing the spreadsheet in Excel while a sync is running; the last writer wins. Note that Excel itself holds an exclusive lock on an open workbook, which makes writes fail. |
-| **One file per project** | Only the first file matching `file_type` in a project directory is used. Additional files are ignored. |
-| **`defect.id.startingValue`** | The legacy `defect_id_starting_value` / `defect.id.startingValue` key is accepted for compatibility but has no effect; the next ID is always derived from the highest existing one. |
-| **Attachments** | Defect attachments are not supported. |
+| Limitation                                  | Details                                                                                                                                                                                                               |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`.xls` is read-only**             | Creating, updating or deleting a defect in a legacy`.xls` file fails. Convert the file to `.xlsx`.                                                                                                                |
+| **`.tsv` is read-only in practice** | Tab-separated files can be imported, but write operations leave the file unchanged. Set`readonly = true` for `.tsv` projects, or rename the file to `.txt` and set `separator = "\t"`.                        |
+| **CSV writes assume a comma**         | When writing`.csv` / `.txt` files, the existing content is re-read as comma-separated regardless of `separator`. Only use write operations on comma-separated files.                                            |
+| **No pre/post sync commands**         | Unlike the JSONL and Jira clients, the Excel client does not support the`commands` section — `before_sync` and `after_sync` are no-ops.                                                                        |
+| **No file locking**                   | The client does not lock the file. Avoid editing the spreadsheet in Excel while a sync is running; the last writer wins. Note that Excel itself holds an exclusive lock on an open workbook, which makes writes fail. |
+| **One file per project**              | Only the first file matching`file_type` in a project directory is used. Additional files are ignored.                                                                                                               |
+| **`defect.id.startingValue`**       | The legacy`defect_id_starting_value` / `defect.id.startingValue` key is accepted for compatibility but has no effect; the next ID is always derived from the highest existing one.                                |
+| **Attachments**                       | Defect attachments are not supported.                                                                                                                                                                                 |
