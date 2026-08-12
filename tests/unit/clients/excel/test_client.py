@@ -623,6 +623,157 @@ def test_update_defect_validates_transition_against_target_row(
     assert "Done" in content
 
 
+# ---------------------------------------------------------------------------
+# Unusable rows
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_get_defects_imports_the_good_rows_when_one_id_is_duplicated(
+    tmp_path: Path,
+    status_sync_context: SyncContext,
+):
+    base_path = _make_format_project(
+        tmp_path,
+        "defects.csv",
+        "id,title,status\nD-0001,First,Open\nD-0002,Ambiguous,Open\nD-0002,Also,Open\n"
+        "D-0003,Last,Open\n",
+    )
+    client = ExcelDefectClient(_make_format_config(base_path, ".csv"))
+
+    result = client.get_defects("demo", status_sync_context)
+
+    assert [defect.id.root for defect in result.value] == ["D-0001", "D-0003"]
+    assert result.protocol.errors is not None
+    assert "D-0002" in result.protocol.errors
+
+
+@pytest.mark.unit
+def test_a_broken_row_does_not_block_updating_a_healthy_defect(
+    tmp_path: Path,
+    status_sync_context: SyncContext,
+    status_defect: Defect,
+):
+    """The point of the change: a file with one unusable row stays repairable through the
+    service instead of only by hand. The broken rows must survive the write untouched."""
+    base_path = _make_format_project(
+        tmp_path,
+        "defects.csv",
+        "id,title,status\nD-0001,Healthy,Open\nD-0002,Twin,Open\nD-0002,Twin,Open\n"
+        ",Orphan title,Open\n",
+    )
+    client = ExcelDefectClient(_make_format_config(base_path, ".csv"))
+    status_defect.title = "Repaired"
+
+    protocol = client.update_defect("demo", "D-0001", status_defect, status_sync_context)
+
+    assert protocol.successes
+    lines = (base_path / "demo" / "defects.csv").read_text(encoding="utf-8").splitlines()
+    assert lines[1] == "D-0001,Repaired,Open"
+    assert lines[2] == "D-0002,Twin,Open"
+    assert lines[3] == "D-0002,Twin,Open"
+    assert lines[4] == ",Orphan title,Open"
+
+
+@pytest.mark.unit
+def test_update_defect_refuses_an_ambiguous_id(
+    tmp_path: Path,
+    status_sync_context: SyncContext,
+    status_defect: Defect,
+):
+    """Writing to one of two rows carrying the same id would leave the other as a stale copy
+    of the same defect, which no later sync can reconcile."""
+    body = "id,title,status\nD-0002,Twin,Open\nD-0002,Twin,Open\n"
+    base_path = _make_format_project(tmp_path, "defects.csv", body)
+    client = ExcelDefectClient(_make_format_config(base_path, ".csv"))
+    status_defect.title = "Repaired"
+
+    protocol = client.update_defect("demo", "D-0002", status_defect, status_sync_context)
+
+    assert not protocol.successes
+    assert protocol.errors is not None
+    assert "D-0002" in protocol.errors
+    assert (base_path / "demo" / "defects.csv").read_text(encoding="utf-8") == body
+
+
+@pytest.mark.unit
+def test_delete_defect_refuses_an_ambiguous_id(
+    tmp_path: Path,
+    status_sync_context: SyncContext,
+    status_defect: Defect,
+):
+    body = "id,title,status\nD-0002,Twin,Open\nD-0002,Twin,Open\n"
+    base_path = _make_format_project(tmp_path, "defects.csv", body)
+    client = ExcelDefectClient(_make_format_config(base_path, ".csv"))
+
+    protocol = client.delete_defect("demo", "D-0002", status_defect, status_sync_context)
+
+    assert not protocol.successes
+    assert (base_path / "demo" / "defects.csv").read_text(encoding="utf-8") == body
+
+
+# ---------------------------------------------------------------------------
+# Defect ID numbering
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_first_defect_id_uses_the_configured_starting_value(
+    tmp_path: Path,
+    status_sync_context: SyncContext,
+    status_defect: Defect,
+):
+    base_path = _make_format_project(tmp_path, "defects.csv", "id,title,status\n")
+    config = _make_format_config(base_path, ".csv").model_copy(
+        update={"defect_id_starting_value": "500"}
+    )
+    client = ExcelDefectClient(config)
+
+    result = client.create_defect("demo", status_defect, status_sync_context)
+
+    assert result.value == "D-0500"
+
+
+@pytest.mark.unit
+def test_starting_value_does_not_renumber_a_file_that_already_has_ids(
+    tmp_path: Path,
+    status_sync_context: SyncContext,
+    status_defect: Defect,
+):
+    """The starting value says where numbering begins, not where it jumps to. A file that
+    already carries IDs has its own numbering to continue."""
+    base_path = _make_format_project(tmp_path, "defects.csv", "id,title,status\nD-0001,Demo,Open\n")
+    config = _make_format_config(base_path, ".csv").model_copy(
+        update={"defect_id_starting_value": "500"}
+    )
+    client = ExcelDefectClient(config)
+
+    result = client.create_defect("demo", status_defect, status_sync_context)
+
+    assert result.value == "D-0002"
+
+
+@pytest.mark.unit
+def test_unusable_starting_value_falls_back_to_one(
+    tmp_path: Path,
+    status_sync_context: SyncContext,
+    status_defect: Defect,
+    caplog: pytest.LogCaptureFixture,
+):
+    """The key was accepted but ignored for years, so a config may carry any leftover in it.
+    Honouring it must not turn a working project into a failing one."""
+    base_path = _make_format_project(tmp_path, "defects.csv", "id,title,status\n")
+    config = _make_format_config(base_path, ".csv").model_copy(
+        update={"defect_id_starting_value": "not a number"}
+    )
+    client = ExcelDefectClient(config)
+
+    result = client.create_defect("demo", status_defect, status_sync_context)
+
+    assert result.value == "D-0001"
+    assert "not a number" in caplog.text
+
+
 @pytest.fixture
 def project_path_with_empty_row(syncable_project_path: Path) -> Path:
     (syncable_project_path / "demo" / "defects.csv").write_text(
@@ -688,27 +839,29 @@ def test_get_defects_warns_about_empty_rows_on_a_buffered_read(
 
 
 @pytest.mark.unit
-def test_get_defects_still_fails_on_a_row_with_content_but_no_id(
+def test_get_defects_reports_a_row_with_content_but_no_id_and_imports_the_rest(
     project_path_with_half_filled_row: Path,
     syncable_config: ExcelDefectClientConfig,
     sync_context: SyncContext,
 ):
-    """A half-filled row is a data error, not layout.
+    """A half-filled row is a data error, not layout - but it is one row's error.
 
-    Silently skipping it would lose a defect, so the reader still aborts the
-    file and `get_defects` still reports a general READ_ACCESS_ERROR.
+    Aborting the whole file over it left no way to repair anything through the service, so the
+    row is reported against its row number and skipped while every other defect still syncs.
+    Reporting is what keeps this from silently losing a defect.
     """
     client = ExcelDefectClient(syncable_config)
 
     result = client.get_defects("demo", sync_context)
 
-    assert result.value == []
-    assert result.protocol.generalErrors is not None
-    assert [entry.code for entry in result.protocol.generalErrors] == [
-        ProtocolCode.READ_ACCESS_ERROR
-    ]
-    assert result.protocol.generalErrors[0].message is not None
-    assert "'id': empty at row 3" in result.protocol.generalErrors[0].message
+    assert [defect.id.root for defect in result.value] == ["D-0001"]
+    assert not result.protocol.generalErrors
+    assert result.protocol.errors is not None
+    assert "3" in result.protocol.errors
+    assert [entry.code for entry in result.protocol.errors["3"]] == [ProtocolCode.IMPORT_ERROR]
+    message = result.protocol.errors["3"][0].message
+    assert message is not None
+    assert "no defect id" in message
 
 
 @pytest.mark.unit

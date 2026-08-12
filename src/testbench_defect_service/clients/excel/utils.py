@@ -381,6 +381,27 @@ def resolve_sheet_name(
     return visible_sheets[0]
 
 
+def _first_defect_number(config: ExcelDefectClientConfig) -> int:
+    """The number the first defect gets when the file carries no id to continue from.
+
+    Only this case consults the setting: a file that already has ids has its own numbering,
+    and jumping it to the configured value would renumber a live project. The key was accepted
+    but ignored for a long time, so a config may hold any leftover - an unusable value falls
+    back to 1 rather than failing the create.
+    """
+    raw_value = (config.defect_id_starting_value or "").strip()
+    if not raw_value:
+        return 1
+    try:
+        return int(raw_value)
+    except ValueError:
+        logger.warning(
+            "Ignoring unusable defect id starting value '%s'; numbering starts at 1.",
+            raw_value,
+        )
+        return 1
+
+
 def add_defect_to_dataframe(
     defect: Defect,
     config: ExcelDefectClientConfig,
@@ -393,9 +414,9 @@ def add_defect_to_dataframe(
         for id_val in df["id"]
         if id_val.startswith(prefix) and id_val[len(prefix) :].isdigit()
     ]
-    max_int = (max(numeric_ids) if numeric_ids else 0) + 1
-    logger.debug("Assigning new defect ID '%s%d' (prefix: '%s')", prefix, max_int, prefix)
-    defect_id = config.id_prefix + str(max_int).rjust(config.defect_id_digit_numbers, "0")
+    next_number = max(numeric_ids) + 1 if numeric_ids else _first_defect_number(config)
+    logger.debug("Assigning new defect ID '%s%d' (prefix: '%s')", prefix, next_number, prefix)
+    defect_id = config.id_prefix + str(next_number).rjust(config.defect_id_digit_numbers, "0")
 
     defect_info_data_frame = create_defect_data_frame(defect, config, defect_id, protocol)
 
@@ -491,6 +512,56 @@ def is_blank_cell(value: Any) -> bool:
     if isinstance(value, float) and math.isnan(value):
         return True
     return str(value).strip() == ""
+
+
+def duplicated_ids(df: pd.DataFrame) -> set[str]:
+    """Ids carried by more than one row, which therefore identify no single defect."""
+    if "id" not in df.columns:
+        return set()
+    ids = df["id"].astype(str).str.strip()
+    populated = ids[ids != ""]
+    return set(populated[populated.duplicated(keep=False)])
+
+
+def describe_duplicated_id_rows(
+    df: pd.DataFrame,
+    config: ExcelDefectClientConfig,
+) -> dict[str, str]:
+    """For each ambiguous id, the phrase naming the file rows that carry it.
+
+    Callers prefix the action they are refusing, so the same wording serves an import that
+    skips the defect and an update that declines to guess which row to write. Row numbers come
+    from the frame's position, which is what the file layout stays aligned to.
+    """
+    max_displayed_rows = 10
+    first_data_file_row = config.defects_data_starting_line
+    values = [str(value).strip() for value in df["id"]] if "id" in df.columns else []
+
+    locations: dict[str, str] = {}
+    for duplicate_id in sorted(duplicated_ids(df)):
+        rows = [
+            str(first_data_file_row + position)
+            for position, value in enumerate(values)
+            if value == duplicate_id
+        ]
+        overflow = len(rows) - max_displayed_rows
+        suffix = f" (and {overflow} more)" if overflow > 0 else ""
+        locations[duplicate_id] = (
+            f"the same id is used at rows {', '.join(rows[:max_displayed_rows])}{suffix}"
+        )
+    return locations
+
+
+def describe_ambiguous_id(
+    df: pd.DataFrame,
+    config: ExcelDefectClientConfig,
+    defect_id: str,
+) -> str:
+    """Where an id occurs, worded for a caller that is declining to act on it."""
+    location = describe_duplicated_id_rows(df, config).get(
+        defect_id, "the same id is used by more than one row"
+    )
+    return f"{location}. Remove the duplicate rows and synchronize again."
 
 
 def is_blank_row(row: pd.Series) -> bool:

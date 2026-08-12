@@ -143,7 +143,7 @@ values        = ["open", "in_progress", "closed"]
 :::
 
 :::note
-Always set `separator` explicitly for `.csv` and `.txt` projects. When it is omitted, the delimiter is guessed while reading data but assumed to be `,` while reading the header row, and write operations fail.
+`separator` applies to `.csv` and `.txt` only and must be a single character; a longer value fails the operation. When it is omitted, a comma is used — for the header row, the data rows and writes alike. A `.tsv` file always uses a tab and ignores `separator`.
 :::
 
 **Layout**
@@ -168,7 +168,7 @@ The `id` column is mandatory: if the configured column number lies outside the f
 
 An empty row — one where every configured column is blank — is skipped during import and reported as a single warning per synchronization. Empty rows are kept in the file: they are not removed when defects are created, updated or deleted.
 
-A row that has content but no defect ID is still an error, and is reported per row, because skipping it silently would lose a defect.
+A row the service cannot identify — one that has content but no defect ID, or one whose ID is also used by another row — is reported as an import error and skipped, while every other defect in the file still synchronizes. Such a row is never silently dropped: the report is what keeps a skipped row from quietly losing a defect. Like empty rows, these rows stay in the file untouched by later creates, updates and deletes, so they remain available to repair.
 
 **Query & fields**
 
@@ -186,6 +186,7 @@ A row that has content but no defect ID is still an error, and is reported per r
 | `references_separator`    | String  | Separates multiple references inside the references cell.                                                        | No       | `","`        |
 | `id_prefix`               | String  | Prefix of generated defect IDs.                                                                                  | No       | `"BUG"`      |
 | `defect_id_digit_numbers` | Integer | Number of digits the numeric part of a generated ID is padded to.                                                | No       | `4`          |
+| `defect_id_starting_value` | String  | Number the first generated ID uses while the file has no ID matching`id_prefix`.                               | No       | `"1"`        |
 
 **Behavior**
 
@@ -349,14 +350,17 @@ Setting `lastedit_column_no = 0` disables change timestamps for the whole client
 IDs are generated on create as `<id_prefix><number>`, where the number is the highest existing numeric suffix plus one, zero-padded to `defect_id_digit_numbers`:
 
 ```toml
-id_prefix               = "BUG"
-defect_id_digit_numbers = 4
+id_prefix                 = "BUG"
+defect_id_digit_numbers   = 4
+defect_id_starting_value  = "1"
 ```
 
 With the settings above, the first defect becomes `BUG0001`, the next `BUG0002`. IDs that do not start with `id_prefix` are ignored when determining the next number.
 
+`defect_id_starting_value` decides where numbering begins while no ID in the file matches `id_prefix` — set it to `"500"` and the first defect becomes `BUG0500`. It is consulted for that first ID only: as soon as the file carries matching IDs, the next one continues from the highest of them, so raising the value later never renumbers a project that is already in use. A value that is not a number is ignored with a warning and numbering starts at 1.
+
 :::warning
-Defect IDs must be unique and non-empty. Rows with an empty ID are skipped and reported as import errors; duplicate IDs are reported as a validation error. Do not renumber existing IDs — TestBench uses the ID to track defect identity across syncs.
+Defect IDs must be unique and non-empty. A row with an empty ID, and every row sharing an ID with another row, is reported as an import error and skipped — the rest of the file still synchronizes. An update or delete aimed at an ID that several rows use is refused rather than applied to one of them, because the others would stay behind as stale copies of the same defect. Do not renumber existing IDs — TestBench uses the ID to track defect identity across syncs.
 :::
 
 ---
@@ -462,6 +466,7 @@ udf.attr1.required=false
 | `defect.references.separator`  | `references_separator`            |
 | `defect.id.prefix`             | `id_prefix`                       |
 | `defect.id.digitNumber`        | `defect_id_digit_numbers`         |
+| `defect.id.startingValue`      | `defect_id_starting_value`        |
 | `bufferMaxAgeMinutes`          | `buffer_max_age_minutes`          |
 | `bufferMaxSizeMiB`             | `buffer_max_size_mib`             |
 | `bufferCleanupIntervalMinutes` | `buffer_cleanup_interval_minutes` |
@@ -488,6 +493,16 @@ When a defect is created, updated or deleted, the client rewrites only the **map
 Rewriting an `.xlsx` file with openpyxl does not preserve everything Excel can store. Charts, images, pivot tables and conditional formatting can be lost, and formulas in mapped columns are replaced by the written values. Keep a backup of production files, or set `readonly = true` for workbooks that contain more than a defect table.
 :::
 
+### Concurrent writers
+
+Each create, update and delete reads the file, changes one row and writes the whole file back. For the duration of that sequence the client holds an exclusive lock on the file, so two writers cannot both start from the same content and silently drop one of the two changes.
+
+The lock is enforced by the operating system, which makes it effective across worker processes (`server.single_process = false` starts one worker per core), across two service instances, and across machines that mount the same share. It lives in a `<defect file>.lock` sidecar next to the defect file, created on the first write and then left in place; the lock itself is released as soon as the write finishes or the process ends. A write that cannot take the lock within 30 seconds fails with a protocol error asking the user to run the synchronization again.
+
+:::note
+If the directory holding the defect file is not writable, the sidecar cannot be created. The client then logs a warning and writes without a lock rather than failing an otherwise working setup.
+:::
+
 ---
 
 ## Limitations
@@ -495,10 +510,10 @@ Rewriting an `.xlsx` file with openpyxl does not preserve everything Excel can s
 | Limitation                                  | Details                                                                                                                                                                                                               |
 | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`.xls` is read-only**             | Creating, updating or deleting a defect in a legacy`.xls` file fails. Convert the file to `.xlsx`.                                                                                                                |
-| **`.tsv` is read-only in practice** | Tab-separated files can be imported, but write operations leave the file unchanged. Set`readonly = true` for `.tsv` projects, or rename the file to `.txt` and set `separator = "\t"`.                        |
-| **CSV writes assume a comma**         | When writing`.csv` / `.txt` files, the existing content is re-read as comma-separated regardless of `separator`. Only use write operations on comma-separated files.                                            |
+| **`.tsv` ignores `separator`**       | A`.tsv` file is always read and written tab-separated; a configured `separator` has no effect on it. Use `.txt` with `separator = "\t"` to take the delimiter from the configuration instead.                     |
+| **Single-character separators only**  | `separator` must be exactly one character. A longer value fails the operation with`Unsupported separator '<value>' for '<file>'`, on reads as well as writes.                                                    |
 | **No pre/post sync commands**         | Unlike the JSONL and Jira clients, the Excel client does not support the`commands` section — `before_sync` and `after_sync` are no-ops.                                                                        |
-| **No file locking**                   | The client does not lock the file. Avoid editing the spreadsheet in Excel while a sync is running; the last writer wins. Note that Excel itself holds an exclusive lock on an open workbook, which makes writes fail. |
+| **Editing during a sync**             | The client locks the file against other writers, but not against a person: avoid editing the spreadsheet while a sync is running. Note that Excel itself holds an exclusive lock on an open workbook, which makes writes fail. |
 | **One file per project**              | Only the first file matching`file_type` in a project directory is used. Additional files are ignored.                                                                                                               |
-| **`defect.id.startingValue`**       | The legacy`defect_id_starting_value` / `defect.id.startingValue` key is accepted for compatibility but has no effect; the next ID is always derived from the highest existing one.                                |
+| **`defect_id_starting_value` applies once** | It sets the number of the *first* generated ID only. Once the file carries IDs matching`id_prefix`, the next ID always continues from the highest existing one.                                                    |
 | **Attachments**                       | Defect attachments are not supported.                                                                                                                                                                                 |

@@ -10,7 +10,6 @@ from testbench_defect_service.clients.excel.utils import (
     get_column_mapping_for_config,
     get_visible_sheets,
     is_blank_cell,
-    is_blank_row,
     resolve_delimited_separator,
     resolve_sheet_name,
     resolve_visible_sheet_name,
@@ -55,15 +54,9 @@ def read_data_frame_from_file_path(
 
     map_boolean_values(config, df)
 
-    try:
-        _validate_required_column_values(df, file_path, config)
-        _validate_unique_constraints(df, file_path, config)
-    except ValueError:
-        logger.error(
-            f"Data validation failed for file: '{file_path}'. "
-            "Check required columns and unique constraints."
-        )
-        raise
+    # Rows the service cannot use are not rejected here: they stay in the frame so the file
+    # layout survives the next write, and the defect builder reports and skips them.
+    _require_mapped_columns(df, file_path)
 
     bytes_used = df.memory_usage(index=True, deep=True).sum()
     logger.debug(
@@ -135,67 +128,24 @@ def _validate_column_mapping(
     return valid_mapping
 
 
-def _blank_row_mask(df: pd.DataFrame) -> pd.Series:
-    """Mask of rows whose every mapped cell is blank."""
-    if df.empty:
-        return pd.Series(False, index=df.index, dtype=bool)
-    return cast(pd.Series, df.apply(is_blank_row, axis=1))
+def _require_mapped_columns(df: pd.DataFrame, file_path: Path) -> None:
+    """Fail the read when a required column is not mapped at all.
 
-
-def _validate_unique_constraints(
-    df: pd.DataFrame,
-    file_path: Path,
-    config: ExcelDefectClientConfig,
-) -> None:
-    first_data_file_row = config.defects_data_starting_line
-    max_displayed_rows = 10
-
-    errors: list[str] = []
-    if "id" in df.columns:
-        has_id = df["id"].str.strip() != ""
-        duplicated_mask = df.duplicated(subset=["id"], keep=False) & has_id
-        duplicate_ids = df.loc[duplicated_mask, ["id"]].drop_duplicates()
-        for _, duplicate_row in duplicate_ids.iterrows():
-            duplicate_id = duplicate_row["id"]
-            indices = df.index[df["id"] == duplicate_id].tolist()
-            displayed = [str(first_data_file_row + idx) for idx in indices[:max_displayed_rows]]
-            overflow = len(indices) - max_displayed_rows
-            suffix = f" (and {overflow} more)" if overflow > 0 else ""
-            errors.append(
-                f"  - duplicate id {duplicate_id!r} at rows {', '.join(displayed)}{suffix}"
-            )
-
-    if errors:
-        raise ValueError(f"Uniqueness constraints violated in '{file_path}':\n" + "\n".join(errors))
-
-
-def _validate_required_column_values(
-    df: pd.DataFrame,
-    file_path: Path,
-    config: ExcelDefectClientConfig,
-) -> None:
-    first_data_file_row = config.defects_data_starting_line
-    errors: list[str] = []
-    blank_rows = _blank_row_mask(df)
-
-    for col in _REQUIRED_DATA_COLUMNS:
-        if col not in df.columns:
-            errors.append(f"  - '{col}': column is not configured or could not be found.")
-            continue
-        missing_mask = (df[col].str.strip() == "") & ~blank_rows
-        blank_indices = df.index[missing_mask].tolist()
-        if not blank_indices:
-            continue
-        displayed = [str(first_data_file_row + idx) for idx in blank_indices[:10]]
-        overflow = len(blank_indices) - 10
-        suffix = f" (and {overflow} more)" if overflow > 0 else ""
-        row_label = "row" if len(blank_indices) == 1 else "rows"
-        errors.append(f"  - '{col}': empty at {row_label} {', '.join(displayed)}{suffix}")
-
-    if errors:
-        raise ValueError(
-            f"Required columns contain empty values in '{file_path}':\n" + "\n".join(errors)
-        )
+    Without it no row in the file can be identified, so there is no partial result worth
+    returning - unlike a single unusable row, which is reported and skipped.
+    """
+    missing = [col for col in _REQUIRED_DATA_COLUMNS if col not in df.columns]
+    if not missing:
+        return
+    names = ", ".join(f"'{col}'" for col in missing)
+    logger.error(
+        "Required column(s) %s are not configured or could not be found in '%s'.",
+        names,
+        file_path,
+    )
+    raise ValueError(
+        f"Required column(s) {names} are not configured or could not be found in '{file_path}'."
+    )
 
 
 def _apply_column_mapping(

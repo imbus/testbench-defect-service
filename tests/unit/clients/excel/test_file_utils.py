@@ -214,8 +214,7 @@ class TestReadDataFrameFromFilePath:
             patch(f"{_MODULE}._validate_column_mapping", return_value=valid_mapping),
             patch(f"{_MODULE}.map_boolean_values"),
             patch(f"{_MODULE}._apply_column_mapping", return_value=expected_df),
-            patch(f"{_MODULE}._validate_required_column_values"),
-            patch(f"{_MODULE}._validate_unique_constraints"),
+            patch(f"{_MODULE}._require_mapped_columns"),
         ):
             result = read_data_frame_from_file_path(file_path, config, sync_context)
 
@@ -237,14 +236,13 @@ class TestReadDataFrameFromFilePath:
             patch(f"{_MODULE}._validate_column_mapping", return_value=valid_mapping),
             patch(f"{_MODULE}.map_boolean_values") as mock_map_bool,
             patch(f"{_MODULE}._apply_column_mapping", return_value=mapped_df),
-            patch(f"{_MODULE}._validate_required_column_values"),
-            patch(f"{_MODULE}._validate_unique_constraints"),
+            patch(f"{_MODULE}._require_mapped_columns"),
         ):
             read_data_frame_from_file_path(file_path, config, sync_context)
 
         mock_map_bool.assert_called_once_with(config, mapped_df)
 
-    def test_validate_required_column_values_is_called(
+    def test_required_columns_are_checked_against_the_mapped_frame(
         self,
         file_path: Path,
         config: ExcelDefectClientConfig,
@@ -260,37 +258,13 @@ class TestReadDataFrameFromFilePath:
             patch(f"{_MODULE}._validate_column_mapping", return_value=valid_mapping),
             patch(f"{_MODULE}.map_boolean_values"),
             patch(f"{_MODULE}._apply_column_mapping", return_value=mapped_df),
-            patch(f"{_MODULE}._validate_required_column_values") as mock_validate_required,
-            patch(f"{_MODULE}._validate_unique_constraints"),
+            patch(f"{_MODULE}._require_mapped_columns") as mock_require_columns,
         ):
             read_data_frame_from_file_path(file_path, config, sync_context)
 
-        mock_validate_required.assert_called_once_with(mapped_df, file_path, config)
+        mock_require_columns.assert_called_once_with(mapped_df, file_path)
 
-    def test_validate_unique_constraints_is_called(
-        self,
-        file_path: Path,
-        config: ExcelDefectClientConfig,
-        sync_context: SyncContext,
-    ):
-        loaded_df = pd.DataFrame({"id": ["x"]})
-        mapped_df = pd.DataFrame({"id": ["x"]})
-        valid_mapping = {0: ["id"]}
-
-        with (
-            patch(f"{_MODULE}._load_dataframe", return_value=loaded_df),
-            patch(f"{_MODULE}.get_column_mapping_for_config", return_value=valid_mapping),
-            patch(f"{_MODULE}._validate_column_mapping", return_value=valid_mapping),
-            patch(f"{_MODULE}.map_boolean_values"),
-            patch(f"{_MODULE}._apply_column_mapping", return_value=mapped_df),
-            patch(f"{_MODULE}._validate_required_column_values"),
-            patch(f"{_MODULE}._validate_unique_constraints") as mock_validate_unique,
-        ):
-            read_data_frame_from_file_path(file_path, config, sync_context)
-
-        mock_validate_unique.assert_called_once_with(mapped_df, file_path, config)
-
-    def test_propagates_required_column_validation_error(
+    def test_propagates_missing_required_column_error(
         self,
         file_path: Path,
         config: ExcelDefectClientConfig,
@@ -300,43 +274,17 @@ class TestReadDataFrameFromFilePath:
         mapped_df = pd.DataFrame({"id": [""]})
         valid_mapping = {0: ["id"]}
 
-        with (  # noqa: SIM117
-            patch(f"{_MODULE}._load_dataframe", return_value=loaded_df),
-            patch(f"{_MODULE}.get_column_mapping_for_config", return_value=valid_mapping),
-            patch(f"{_MODULE}._validate_column_mapping", return_value=valid_mapping),
-            patch(f"{_MODULE}.map_boolean_values"),
-            patch(f"{_MODULE}._apply_column_mapping", return_value=mapped_df),
-            patch(
-                f"{_MODULE}._validate_required_column_values",
-                side_effect=ValueError("empty value"),
-            ),
-            patch(f"{_MODULE}._validate_unique_constraints"),
-        ):
-            with pytest.raises(ValueError, match="empty value"):
-                read_data_frame_from_file_path(file_path, config, sync_context)
-
-    def test_propagates_unique_constraint_error(
-        self,
-        file_path: Path,
-        config: ExcelDefectClientConfig,
-        sync_context: SyncContext,
-    ):
-        loaded_df = pd.DataFrame({"id": ["D-1", "D-1"]})
-        mapped_df = pd.DataFrame({"id": ["D-1", "D-1"]})
-        valid_mapping = {0: ["id"]}
-
         with (
             patch(f"{_MODULE}._load_dataframe", return_value=loaded_df),
             patch(f"{_MODULE}.get_column_mapping_for_config", return_value=valid_mapping),
             patch(f"{_MODULE}._validate_column_mapping", return_value=valid_mapping),
             patch(f"{_MODULE}.map_boolean_values"),
             patch(f"{_MODULE}._apply_column_mapping", return_value=mapped_df),
-            patch(f"{_MODULE}._validate_required_column_values"),
             patch(
-                f"{_MODULE}._validate_unique_constraints",
-                side_effect=ValueError("duplicate id"),
+                f"{_MODULE}._require_mapped_columns",
+                side_effect=ValueError("column not found"),
             ),
-            pytest.raises(ValueError, match="duplicate id"),
+            pytest.raises(ValueError, match="column not found"),
         ):
             read_data_frame_from_file_path(file_path, config, sync_context)
 
@@ -359,8 +307,7 @@ class TestReadDataFrameFromFilePath:
             patch(f"{_MODULE}._validate_column_mapping", return_value=valid_mapping),
             patch(f"{_MODULE}.map_boolean_values"),
             patch(f"{_MODULE}._apply_column_mapping", return_value=mapped_df),
-            patch(f"{_MODULE}._validate_required_column_values"),
-            patch(f"{_MODULE}._validate_unique_constraints"),
+            patch(f"{_MODULE}._require_mapped_columns"),
         ):
             read_data_frame_from_file_path(file_path, config, sync_context, protocol=protocol)
 
@@ -648,7 +595,22 @@ class TestEmptyRowTolerance:
 
         assert df["id"].tolist() == ["D-1", "", "", "D-2"]
 
-    def test_row_with_blank_id_but_other_content_still_raises(
+
+@pytest.mark.unit
+class TestUnusableRowTolerance:
+    """A row the service cannot identify is one bad row, not a bad file.
+
+    Failing the read took the whole file down on every path, update and delete included, so
+    the only way out was editing the file by hand. The rows stay in the frame: dropping them
+    would shift every row below up on the next write and erase what the user has to repair.
+    """
+
+    def _write(self, tmp_path: Path, body: str) -> Path:
+        file_path = tmp_path / "defects.csv"
+        file_path.write_text(f"id,title\n{body}", encoding="utf-8")
+        return file_path
+
+    def test_row_with_blank_id_but_other_content_does_not_fail_the_file(
         self,
         tmp_path: Path,
         config: ExcelDefectClientConfig,
@@ -656,19 +618,37 @@ class TestEmptyRowTolerance:
     ):
         file_path = self._write(tmp_path, "D-1,First\n,Only a title\nD-2,Second\n")
 
-        with pytest.raises(ValueError, match=r"'id': empty at row 3"):
-            read_data_frame_from_file_path(file_path, config, sync_context, Protocol())
+        df = read_data_frame_from_file_path(file_path, config, sync_context, Protocol())
 
-    def test_real_duplicate_ids_still_raise(
+        assert df["id"].tolist() == ["D-1", "", "D-2"]
+
+    def test_duplicate_ids_do_not_fail_the_file(
         self,
         tmp_path: Path,
         config: ExcelDefectClientConfig,
         sync_context: SyncContext,
     ):
+        """The rows stay positionally aligned with the file, which is what keeps the next write
+        from shifting the rows below them up and erasing what the user has to repair."""
         file_path = self._write(tmp_path, "D-1,First\n,\nD-1,Duplicate\n")
 
-        with pytest.raises(ValueError, match=r"duplicate id 'D-1' at rows 2, 4"):
-            read_data_frame_from_file_path(file_path, config, sync_context, Protocol())
+        df = read_data_frame_from_file_path(file_path, config, sync_context, Protocol())
+
+        assert df["id"].tolist() == ["D-1", "", "D-1"]
+
+    def test_missing_id_column_still_fails_the_file(
+        self,
+        tmp_path: Path,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        """An unmapped id column is a configuration fault, not a row fault - nothing in the
+        file can be identified, so there is no partial result worth returning."""
+        file_path = self._write(tmp_path, "D-1,First\n")
+        unmapped = config.model_copy(update={"id_column_no": 0})
+
+        with pytest.raises(ValueError, match=r"'id'"):
+            read_data_frame_from_file_path(file_path, unmapped, sync_context, Protocol())
 
 
 @pytest.mark.unit

@@ -20,7 +20,10 @@ from testbench_defect_service.clients.excel.utils import (
     add_general_warning_once,
     check_defect_transitions,
     create_defect_data_frame,
+    describe_ambiguous_id,
+    describe_duplicated_id_rows,
     describe_write_error,
+    duplicated_ids,
     is_blank_row,
     optional_row_value,
     parse_boolean_udf_value,
@@ -451,6 +454,21 @@ class ExcelDefectClient(AbstractDefectClient):
             )
             return protocol
 
+        if len(row_idx) > 1:
+            protocol.add_error(
+                defect_id,
+                f"Cannot update defect '{defect_id}': "
+                f"{describe_ambiguous_id(df, target.config, defect_id)}",
+                protocol_code=ProtocolCode.PUBLISH_ERROR,
+            )
+            logger.warning(
+                "Update refused: defect '%s' is used by %d rows in project '%s'",
+                defect_id,
+                len(row_idx),
+                target.project,
+            )
+            return protocol
+
         if not check_defect_transitions(
             defect, df.loc[row_idx], target.config, sync_context, protocol
         ):
@@ -532,6 +550,22 @@ class ExcelDefectClient(AbstractDefectClient):
             )
             logger.warning(
                 "Delete failed: defect '%s' not found in project '%s'", defect_id, target.project
+            )
+            return protocol
+
+        if len(row_idx) > 1:
+            # Dropping every match would delete rows the user never asked about.
+            protocol.add_error(
+                defect_id,
+                f"Cannot delete defect '{defect_id}': "
+                f"{describe_ambiguous_id(df, target.config, defect_id)}",
+                protocol_code=ProtocolCode.PUBLISH_ERROR,
+            )
+            logger.warning(
+                "Delete refused: defect '%s' is used by %d rows in project '%s'",
+                defect_id,
+                len(row_idx),
+                target.project,
             )
             return protocol
 
@@ -715,6 +749,35 @@ class ExcelDefectClient(AbstractDefectClient):
         merged_config["projects"] = self.config.projects
         return ExcelDefectClientConfig.model_validate(merged_config)
 
+    def _report_ambiguous_ids(
+        self,
+        df: pd.DataFrame,
+        config: ExcelDefectClientConfig,
+        protocol: Protocol | None,
+    ) -> set[str]:
+        """Name every id that more than one row claims, and return them so they get skipped.
+
+        An id on several rows identifies no single defect. Importing one of them would leave the
+        others as stale copies that no later sync can reconcile. The rows stay in the file: they
+        are the user's to repair, and this way one of them is not quietly picked as the truth.
+        """
+        ambiguous_ids = duplicated_ids(df)
+        if not ambiguous_ids or protocol is None:
+            return ambiguous_ids
+
+        for duplicate_id, location in describe_duplicated_id_rows(df, config).items():
+            message = (
+                f"Skipping defect '{duplicate_id}': {location}. Remove the duplicate rows so "
+                "the defect can be identified."
+            )
+            logger.warning(message)
+            protocol.add_error(
+                key=duplicate_id,
+                message=message,
+                protocol_code=ProtocolCode.IMPORT_ERROR,
+            )
+        return ambiguous_ids
+
     def _build_defects_from_dataframe(
         self,
         df: pd.DataFrame,
@@ -726,6 +789,7 @@ class ExcelDefectClient(AbstractDefectClient):
         defects: list[DefectWithID] = []
         first_data_row = config.defects_data_starting_line
         skipped_empty_rows = 0
+        ambiguous_ids = self._report_ambiguous_ids(df, config, protocol)
 
         for row_offset, (_, row) in enumerate(df.iterrows()):
             row_number = first_data_row + row_offset
@@ -738,9 +802,13 @@ class ExcelDefectClient(AbstractDefectClient):
                 if protocol:
                     protocol.add_error(
                         key=str(row_number),
-                        message=f"Skipping row {row_number}: missing defect id.",
+                        message=(
+                            f"Skipping row {row_number}: it carries content but no defect id."
+                        ),
                         protocol_code=ProtocolCode.IMPORT_ERROR,
                     )
+                continue
+            if defect_id in ambiguous_ids:
                 continue
 
             try:
