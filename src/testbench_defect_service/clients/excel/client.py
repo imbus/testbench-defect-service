@@ -13,6 +13,7 @@ from testbench_defect_service.clients.excel.file_utils import (
     read_data_frame_from_file_path,
     write_defect_data,
 )
+from testbench_defect_service.clients.excel.locking import lock_defect_file
 from testbench_defect_service.clients.excel.utils import (
     add_defect_to_dataframe,
     add_general_warning_once,
@@ -56,6 +57,15 @@ class DataFrameBufferEntry:
     last_accessed_at: float
     file_mtime: float
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class DefectFileTarget:
+    """The file one mutation operates on, together with the config that addresses it."""
+
+    project: str
+    path: Path
+    config: ExcelDefectClientConfig
 
 
 class ExcelDefectClient(AbstractDefectClient):
@@ -203,6 +213,37 @@ class ExcelDefectClient(AbstractDefectClient):
             self._enforce_buffer_size_limit(max_size_bytes)
         return df
 
+    def _resolve_target(self, project: str, config: ExcelDefectClientConfig) -> DefectFileTarget:
+        return DefectFileTarget(
+            project=project,
+            path=self._get_file_path(project=project),
+            config=config,
+        )
+
+    def _read_dataframe_from_disk(
+        self,
+        target: DefectFileTarget,
+        sync_context: SyncContext,
+        protocol: Protocol | None = None,
+    ) -> pd.DataFrame:
+        """Read the file as it stands on disk right now.
+
+        A mutation derives the next defect id, and the row it rewrites, from this frame. A
+        buffered frame would be a frame another writer has already superseded, and the buffer
+        only notices that through st_mtime - too coarse to rely on over a network share.
+        """
+        self._invalidate_buffer(target.path)
+        return self._get_dataframe(target.path, target.config, sync_context, protocol)
+
+    def _invalidate_buffer(self, file_path: Path) -> None:
+        """Drop every buffered frame for this file, whichever sync context produced it."""
+        key_prefix = f"{file_path.as_posix()}|"
+        with self._buffer_lock:
+            stale_keys = [key for key in self._buffer_catalog if key.startswith(key_prefix)]
+            for key in stale_keys:
+                entry = self._buffer_catalog.pop(key)
+                self._buffer_size_bytes -= entry.size_bytes
+
     def _purge_expired_entries(self, max_age_seconds: float) -> None:
         if max_age_seconds <= 0:
             return
@@ -276,7 +317,7 @@ class ExcelDefectClient(AbstractDefectClient):
 
         return ProtocolledDefectSet(value=defects, protocol=defects_result.protocol)
 
-    def create_defect(  # noqa: PLR0911
+    def create_defect(
         self, project: str, defect: Defect, sync_context: SyncContext
     ) -> ProtocolledString:
 
@@ -294,12 +335,29 @@ class ExcelDefectClient(AbstractDefectClient):
             return ProtocolledString(value=None, protocol=protocol)
 
         try:
-            defect_path = self._get_file_path(project=project)
-            header = read_header_columns_from_file_path(defect_path, effective_config)
-            df = self._get_dataframe(defect_path, effective_config, sync_context, protocol)
+            target = self._resolve_target(project, effective_config)
         except FileNotFoundError as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.PROJECT_NOT_FOUND)
             return ProtocolledString(value=None, protocol=protocol)
+
+        try:
+            with lock_defect_file(target.path):
+                return self._create_defect_in_locked_file(target, defect, sync_context, protocol)
+        except TimeoutError as exc:
+            logger.error("Failed to create defect in project '%s': %s", project, exc)
+            protocol.add_general_error(str(exc), protocol_code=ProtocolCode.INSERT_ERROR)
+            return ProtocolledString(value=None, protocol=protocol)
+
+    def _create_defect_in_locked_file(
+        self,
+        target: DefectFileTarget,
+        defect: Defect,
+        sync_context: SyncContext,
+        protocol: Protocol,
+    ) -> ProtocolledString:
+        try:
+            header = read_header_columns_from_file_path(target.path, target.config)
+            df = self._read_dataframe_from_disk(target, sync_context, protocol)
         except (OSError, ValueError) as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.READ_ACCESS_ERROR)
             return ProtocolledString(value=None, protocol=protocol)
@@ -307,28 +365,29 @@ class ExcelDefectClient(AbstractDefectClient):
         if protocol.generalErrors:
             return ProtocolledString(value=None, protocol=protocol)
 
-        df_with_new_defect = add_defect_to_dataframe(defect, effective_config, df, protocol)
+        df_with_new_defect = add_defect_to_dataframe(defect, target.config, df, protocol)
         new_defect_id = str(df_with_new_defect.iloc[-1]["id"])
 
         try:
-            write_defect_data(
-                sync_context, defect_path, effective_config, header, df_with_new_defect
-            )
+            write_defect_data(sync_context, target.path, target.config, header, df_with_new_defect)
         except (OSError, ValueError) as exc:
-            message = describe_write_error(exc, defect_path)
+            message = describe_write_error(exc, target.path)
             protocol.add_general_error(message, protocol_code=ProtocolCode.INSERT_ERROR)
-            logger.error("Failed to create defect in project '%s': %s", project, exc)
+            logger.error("Failed to create defect in project '%s': %s", target.project, exc)
             return ProtocolledString(value=None, protocol=protocol)
 
+        self._invalidate_buffer(target.path)
         protocol.add_success(
             key=new_defect_id,
-            message=f"Defect '{new_defect_id}' created successfully in project '{project}'.",
+            message=(
+                f"Defect '{new_defect_id}' created successfully in project '{target.project}'."
+            ),
             protocol_code=ProtocolCode.INSERT_SUCCESS,
         )
-        logger.info("Created Excel defect '%s' in project '%s'", new_defect_id, project)
+        logger.info("Created Excel defect '%s' in project '%s'", new_defect_id, target.project)
         return ProtocolledString(value=new_defect_id, protocol=protocol)
 
-    def update_defect(  # noqa: PLR0911
+    def update_defect(
         self, project: str, defect_id: str, defect: Defect, sync_context: SyncContext
     ) -> Protocol:
         logger.debug("Updating defect '%s' in project '%s'", defect_id, project)
@@ -347,12 +406,34 @@ class ExcelDefectClient(AbstractDefectClient):
             return protocol
 
         try:
-            defect_path = self._get_file_path(project=project)
-            header = read_header_columns_from_file_path(defect_path, effective_config)
-            df = self._get_dataframe(defect_path, effective_config, sync_context, protocol)
+            target = self._resolve_target(project, effective_config)
         except FileNotFoundError as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.PROJECT_NOT_FOUND)
             return protocol
+
+        try:
+            with lock_defect_file(target.path):
+                return self._update_defect_in_locked_file(
+                    target, defect_id, defect, sync_context, protocol
+                )
+        except TimeoutError as exc:
+            logger.error(
+                "Failed to update defect '%s' in project '%s': %s", defect_id, project, exc
+            )
+            protocol.add_error(defect_id, str(exc), protocol_code=ProtocolCode.PUBLISH_ERROR)
+            return protocol
+
+    def _update_defect_in_locked_file(
+        self,
+        target: DefectFileTarget,
+        defect_id: str,
+        defect: Defect,
+        sync_context: SyncContext,
+        protocol: Protocol,
+    ) -> Protocol:
+        try:
+            header = read_header_columns_from_file_path(target.path, target.config)
+            df = self._read_dataframe_from_disk(target, sync_context, protocol)
         except (OSError, ValueError) as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.READ_ACCESS_ERROR)
             return protocol
@@ -361,45 +442,47 @@ class ExcelDefectClient(AbstractDefectClient):
         if row_idx.empty:
             protocol.add_error(
                 defect_id,
-                f"Defect '{defect_id}' not found in project '{project}'.",
+                f"Defect '{defect_id}' not found in project '{target.project}'.",
                 protocol_code=ProtocolCode.DEFECT_NOT_FOUND,
             )
             logger.warning(
-                "Update failed: defect '%s' not found in project '%s'", defect_id, project
+                "Update failed: defect '%s' not found in project '%s'", defect_id, target.project
             )
             return protocol
 
         if not check_defect_transitions(
-            defect, df.loc[row_idx], effective_config, sync_context, protocol
+            defect, df.loc[row_idx], target.config, sync_context, protocol
         ):
             return protocol
-        new_row_df = create_defect_data_frame(defect, effective_config, defect_id, protocol)
+        new_row_df = create_defect_data_frame(defect, target.config, defect_id, protocol)
         new_row_df.index = row_idx
         updated_df = df.copy()
         updated_df.update(new_row_df)
 
         try:
-            write_defect_data(sync_context, defect_path, effective_config, header, updated_df)
+            write_defect_data(sync_context, target.path, target.config, header, updated_df)
         except (OSError, ValueError) as exc:
-            message = describe_write_error(exc, defect_path)
+            message = describe_write_error(exc, target.path)
             protocol.add_error(defect_id, message, protocol_code=ProtocolCode.PUBLISH_ERROR)
             logger.error(
-                "Failed to update defect '%s' in project '%s': %s", defect_id, project, exc
+                "Failed to update defect '%s' in project '%s': %s", defect_id, target.project, exc
             )
             return protocol
 
+        self._invalidate_buffer(target.path)
         protocol.add_success(
             key=defect_id,
-            message=f"Defect '{defect_id}' updated successfully in project '{project}'.",
+            message=f"Defect '{defect_id}' updated successfully in project '{target.project}'.",
             protocol_code=ProtocolCode.UPDATE_SUCCESS,
         )
-        logger.info("Updated Excel defect '%s' in project '%s'", defect_id, project)
+        logger.info("Updated Excel defect '%s' in project '%s'", defect_id, target.project)
         return protocol
 
     def delete_defect(
         self, project: str, defect_id: str, defect: Defect, sync_context: SyncContext
     ) -> Protocol:
         logger.debug("Deleting defect '%s' from project '%s'", defect_id, project)
+        del defect
         protocol = Protocol()
         if self._get_config_value("readonly", project):
             protocol.add_error(
@@ -410,13 +493,31 @@ class ExcelDefectClient(AbstractDefectClient):
             return protocol
 
         try:
-            defect_path = self._get_file_path(project=project)
-            effective_config = self._get_effective_config(project)
-            header = read_header_columns_from_file_path(defect_path, effective_config)
-            df = self._get_dataframe(defect_path, effective_config, sync_context, protocol)
+            target = self._resolve_target(project, self._get_effective_config(project))
         except FileNotFoundError as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.PROJECT_NOT_FOUND)
             return protocol
+
+        try:
+            with lock_defect_file(target.path):
+                return self._delete_defect_in_locked_file(target, defect_id, sync_context, protocol)
+        except TimeoutError as exc:
+            logger.error(
+                "Failed to delete defect '%s' from project '%s': %s", defect_id, project, exc
+            )
+            protocol.add_general_error(str(exc), protocol_code=ProtocolCode.PUBLISH_ERROR)
+            return protocol
+
+    def _delete_defect_in_locked_file(
+        self,
+        target: DefectFileTarget,
+        defect_id: str,
+        sync_context: SyncContext,
+        protocol: Protocol,
+    ) -> Protocol:
+        try:
+            header = read_header_columns_from_file_path(target.path, target.config)
+            df = self._read_dataframe_from_disk(target, sync_context, protocol)
         except (OSError, ValueError) as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.READ_ACCESS_ERROR)
             return protocol
@@ -425,32 +526,36 @@ class ExcelDefectClient(AbstractDefectClient):
         if row_idx.empty:
             protocol.add_error(
                 defect_id,
-                f"Defect '{defect_id}' not found in project '{project}'.",
+                f"Defect '{defect_id}' not found in project '{target.project}'.",
                 protocol_code=ProtocolCode.DEFECT_NOT_FOUND,
             )
             logger.warning(
-                "Delete failed: defect '%s' not found in project '%s'", defect_id, project
+                "Delete failed: defect '%s' not found in project '%s'", defect_id, target.project
             )
             return protocol
 
         df = df.drop(index=row_idx)
 
         try:
-            write_defect_data(sync_context, defect_path, effective_config, header, df)
+            write_defect_data(sync_context, target.path, target.config, header, df)
         except (OSError, ValueError) as exc:
-            message = describe_write_error(exc, defect_path)
+            message = describe_write_error(exc, target.path)
             protocol.add_general_error(message, protocol_code=ProtocolCode.PUBLISH_ERROR)
             logger.error(
-                "Failed to delete defect '%s' from project '%s': %s", defect_id, project, exc
+                "Failed to delete defect '%s' from project '%s': %s",
+                defect_id,
+                target.project,
+                exc,
             )
             return protocol
 
+        self._invalidate_buffer(target.path)
         protocol.add_success(
             key=defect_id,
-            message=f"Defect '{defect_id}' deleted successfully from project '{project}'.",
+            message=(f"Defect '{defect_id}' deleted successfully from project '{target.project}'."),
             protocol_code=ProtocolCode.PUBLISH_SUCCESS,
         )
-        logger.info("Deleted Excel defect '%s' from project '%s'", defect_id, project)
+        logger.info("Deleted Excel defect '%s' from project '%s'", defect_id, target.project)
         return protocol
 
     def get_defect_extended(

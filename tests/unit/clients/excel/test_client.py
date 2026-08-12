@@ -1,7 +1,9 @@
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from sanic import NotFound, ServerError
 
 from testbench_defect_service.clients.excel.client import ExcelDefectClient
 from testbench_defect_service.clients.excel.config import (
@@ -287,6 +289,179 @@ def test_update_defect_does_not_poison_buffer_when_write_fails(
     assert protocol.errors
     buffered = client.get_defects("demo", sync_context)
     assert [d.status for d in buffered.value] == ["Open"]
+
+
+# ---------------------------------------------------------------------------
+# Clearing fields on update
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_update_defect_clears_fields_that_arrive_empty(
+    syncable_config: ExcelDefectClientConfig,
+    sync_context: SyncContext,
+    defect: Defect,
+):
+    """TestBench sends the full defect state on update, so a title the user cleared arrives as
+    null. Keeping the old cell would strand the file on a value nobody can see any more."""
+    defect_path = syncable_config.excel_file_path / "demo" / "defects.csv"
+    client = ExcelDefectClient(syncable_config)
+
+    protocol = client.update_defect(
+        "demo",
+        "D-0001",
+        defect.model_copy(update={"title": None, "description": None, "reporter": None}),
+        sync_context,
+    )
+
+    assert not protocol.errors
+    row = defect_path.read_text(encoding="utf-8").splitlines()[1].split(",")
+    assert row[0] == "D-0001"
+    assert row[1] == ""  # title
+    assert row[3] == ""  # reporter
+    assert row[5] == ""  # description
+
+
+@pytest.mark.unit
+def test_update_defect_leaves_columns_the_payload_never_mentions_untouched(
+    syncable_config: ExcelDefectClientConfig,
+    sync_context: SyncContext,
+    defect: Defect,
+):
+    """An absent field means 'not synced' and must keep its cell; only a field that is present
+    and empty clears one. Boolean UDFs rely on this - TestBench sends them as duplicate
+    null-and-value entries, so a null must never be able to blank a cell on its own."""
+    defect_path = syncable_config.excel_file_path / "demo" / "defects.csv"
+    defect_path.write_text(
+        "id,title,references,reporter,lastEdited,description,status,priority,classification,notes\n"
+        "D-0001,Demo,,Alice,2024-01-01,Example,Open,High,Bug,keep me\n",
+        encoding="utf-8",
+    )
+    client = ExcelDefectClient(syncable_config)
+
+    client.update_defect("demo", "D-0001", defect.model_copy(update={"title": None}), sync_context)
+
+    assert "keep me" in defect_path.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Extended defect view
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_get_defect_extended_raises_not_found_for_an_unknown_defect(
+    syncable_config: ExcelDefectClientConfig,
+    sync_context: SyncContext,
+):
+    client = ExcelDefectClient(syncable_config)
+
+    with pytest.raises(NotFound) as excinfo:
+        client.get_defect_extended("demo", "D-9999", sync_context)
+
+    assert "D-9999" in str(excinfo.value)
+
+
+@pytest.mark.unit
+def test_get_defect_extended_names_the_missing_project(
+    syncable_config: ExcelDefectClientConfig,
+    sync_context: SyncContext,
+):
+    """The bare `raise FileNotFoundError from exc` dropped the message, leaving the caller with
+    an empty exception and no way to tell a missing project from a missing file."""
+    client = ExcelDefectClient(syncable_config)
+
+    with pytest.raises(NotFound) as excinfo:
+        client.get_defect_extended("nope", "D-0001", sync_context)
+
+    assert "nope" in str(excinfo.value)
+
+
+@pytest.mark.unit
+def test_get_defect_extended_reports_why_a_read_failed(
+    syncable_config: ExcelDefectClientConfig,
+    sync_context: SyncContext,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def raise_value_error(*_args, **_kwargs):
+        raise ValueError("Uniqueness constraints violated in 'defects.csv'")
+
+    monkeypatch.setattr(
+        "testbench_defect_service.clients.excel.client.read_data_frame_from_file_path",
+        raise_value_error,
+    )
+    client = ExcelDefectClient(syncable_config)
+
+    with pytest.raises(ServerError) as excinfo:
+        client.get_defect_extended("demo", "D-0001", sync_context)
+
+    assert "Uniqueness constraints violated" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# Concurrent writers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_concurrent_creates_assign_a_distinct_id_to_every_defect(
+    syncable_config: ExcelDefectClientConfig,
+    sync_context: SyncContext,
+    defect: Defect,
+):
+    """Every mutation is a read-modify-rewrite of the whole file. Writers that read the same
+    frame all derive the same next id, and the last write wins - so defects go missing while
+    each caller is told it succeeded."""
+    writer_count = 4
+    client = ExcelDefectClient(syncable_config)
+    start = threading.Barrier(writer_count)
+    created_ids: list[str | None] = []
+    ids_lock = threading.Lock()
+
+    def create(index: int) -> None:
+        start.wait()
+        new_defect = defect.model_copy(update={"title": f"D{index}"})
+        result = client.create_defect("demo", new_defect, sync_context)
+        with ids_lock:
+            created_ids.append(result.value)
+
+    threads = [threading.Thread(target=create, args=(index,)) for index in range(writer_count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(x for x in created_ids if x is not None) == [
+        "D-0002",
+        "D-0003",
+        "D-0004",
+        "D-0005",
+    ]
+
+
+@pytest.mark.unit
+def test_concurrent_creates_keep_every_written_defect_in_the_file(
+    syncable_config: ExcelDefectClientConfig,
+    sync_context: SyncContext,
+    defect: Defect,
+):
+    writer_count = 4
+    defect_path = syncable_config.excel_file_path / "demo" / "defects.csv"
+    client = ExcelDefectClient(syncable_config)
+    start = threading.Barrier(writer_count)
+
+    def create(index: int) -> None:
+        start.wait()
+        client.create_defect("demo", defect.model_copy(update={"title": f"D{index}"}), sync_context)
+
+    threads = [threading.Thread(target=create, args=(index,)) for index in range(writer_count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    rows = defect_path.read_text(encoding="utf-8").splitlines()[1:]
+    assert sorted(row.split(",")[1] for row in rows) == ["D0", "D1", "D2", "D3", "Demo"]
 
 
 # ---------------------------------------------------------------------------
