@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pandas as pd
+from sanic import NotFound, ServerError
 
 from testbench_defect_service.clients.abstract_client import AbstractDefectClient
 from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig
@@ -566,16 +567,24 @@ class ExcelDefectClient(AbstractDefectClient):
             effective_config = self._get_effective_config(project)
             df = self._get_dataframe(defect_path, effective_config, sync_context)
         except FileNotFoundError as exc:
-            raise FileNotFoundError from exc
+            raise NotFound(str(exc)) from exc
         except (OSError, ValueError) as exc:
-            raise Exception from exc
+            logger.error("Failed to read defect '%s' for project '%s': %s", defect_id, project, exc)
+            raise ServerError(
+                f"Unable to read defect '{defect_id}' for project '{project}': {exc}"
+            ) from exc
 
         single_defect_df = df.loc[df["id"] == defect_id]
-        defect = self._build_defects_from_dataframe(
+        defects = self._build_defects_from_dataframe(
             single_defect_df, effective_config, sync_context
-        )[0]
+        )
+        if not defects:
+            logger.warning(
+                "Extended view failed: defect '%s' not found in project '%s'", defect_id, project
+            )
+            raise NotFound(f"Defect '{defect_id}' was not found in project '{project}'.")
 
-        return self._build_defect_with_attributes(defect, project, single_defect_df)
+        return self._build_defect_with_attributes(defects[0], project, single_defect_df)
 
     def _build_defect_with_attributes(
         self,

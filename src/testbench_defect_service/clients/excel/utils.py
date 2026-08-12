@@ -402,6 +402,18 @@ def add_defect_to_dataframe(
     return pd.concat([df, defect_info_data_frame], ignore_index=True)
 
 
+def _cell_for_optional_field(value: str | None) -> str:
+    """Render an optional defect field as the cell it belongs in.
+
+    ``DataFrame.update`` skips NA values, so leaving None in the frame would keep whatever the
+    file said before. TestBench sends the whole defect on update, so a field that arrives empty
+    is one the user emptied, and the cell has to follow. Note this applies to the fields the
+    payload always carries - a *missing* field means 'not synced' and is expressed by leaving
+    its column out of the frame entirely.
+    """
+    return value if value is not None else ""
+
+
 def create_defect_data_frame(
     defect: Defect, config: ExcelDefectClientConfig, defect_id: str, protocol: Protocol
 ):
@@ -409,9 +421,9 @@ def create_defect_data_frame(
     defect_info_data_frame = pd.DataFrame(
         {
             "id": [defect_id],
-            "title": [defect.title],
-            "description": [defect.description],
-            "reporter": [defect.reporter],
+            "title": [_cell_for_optional_field(defect.title)],
+            "description": [_cell_for_optional_field(defect.description)],
+            "reporter": [_cell_for_optional_field(defect.reporter)],
             "status": [defect.status],
             "classification": [defect.classification],
             "priority": [defect.priority],
