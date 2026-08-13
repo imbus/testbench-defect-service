@@ -1011,3 +1011,155 @@ class TestSyncHookCommands:
 
         run.assert_not_called()
         assert protocol.successes
+
+
+@pytest.fixture
+def sandboxed_config(tmp_path: Path) -> ExcelDefectClientConfig:
+    """A configured base directory with a readable sibling the client must not reach.
+
+    Both directories hold a matching `.csv`, so a test that resolves outside the base finds a
+    real file rather than a `FileNotFoundError` that would pass for the wrong reason.
+    """
+    base_path = tmp_path / "projects"
+    (base_path / "demo").mkdir(parents=True)
+    (base_path / "demo" / "defects.csv").write_text(
+        "id,title,references,reporter,lastEdited,description,status,priority,classification\n"
+        "D-0001,Demo,,Alice,2024-01-01,Example,Open,High,Bug\n",
+        encoding="utf-8",
+    )
+    outside_path = tmp_path / "outside"
+    outside_path.mkdir()
+    (outside_path / "secrets.csv").write_text(
+        "id,title,references,reporter,lastEdited,description,status,priority,classification\n"
+        "D-9999,Secret,,Mallory,2024-01-01,Leaked,Open,High,Bug\n",
+        encoding="utf-8",
+    )
+    return ExcelDefectClientConfig(
+        system_name="Excel",
+        excel_file_path=base_path,
+        file_type=".csv",
+        simple_date_format="yyyy-MM-dd",
+        defects_data_header_line=1,
+        defects_data_starting_line=2,
+        separator=",",
+        control_fields=[
+            ControlFields(name="status", column_number=7, values=["Open", "Closed"]),
+            ControlFields(name="priority", column_number=8, values=["High", "Low"]),
+            ControlFields(name="classification", column_number=9, values=["Bug", "Feature"]),
+        ],
+        id_column_no=1,
+        title_column_no=2,
+        references_column_no=3,
+        discoverer_column_no=4,
+        lastedit_column_no=5,
+        description_column_no=6,
+        references_separator=";",
+        id_prefix="D-",
+        defect_id_starting_value="1",
+        defect_id_digit_numbers=4,
+    )
+
+
+@pytest.mark.unit
+class TestProjectPathSandboxing:
+    """`project` comes from the request, so it must not be able to name a directory.
+
+    `Path.joinpath` honours `..` segments and discards the base entirely when the appended
+    segment is absolute, so an unguarded join lets a caller read - and through update/delete,
+    modify - spreadsheets anywhere on the host.
+    """
+
+    @pytest.mark.parametrize(
+        "project",
+        [
+            "../outside",
+            "..\\outside",
+            "demo/../../outside",
+            "./../outside",
+        ],
+        ids=["posix-parent", "windows-parent", "nested-parent", "dot-parent"],
+    )
+    def test_get_defects_rejects_a_project_that_escapes_the_base_directory(
+        self,
+        project: str,
+        sandboxed_config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        client = ExcelDefectClient(sandboxed_config)
+
+        result = client.get_defects(project, sync_context)
+
+        assert result.value == []
+        assert result.protocol.generalErrors is not None
+        assert [entry.code for entry in result.protocol.generalErrors] == [
+            ProtocolCode.PROJECT_NOT_FOUND
+        ]
+
+    def test_get_defects_rejects_an_absolute_project_path(
+        self,
+        tmp_path: Path,
+        sandboxed_config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        """`joinpath` drops the base entirely when the segment is absolute.
+
+        That is a separate escape from `..`, so it needs its own case.
+        """
+        client = ExcelDefectClient(sandboxed_config)
+
+        result = client.get_defects(str(tmp_path / "outside"), sync_context)
+
+        assert result.value == []
+        assert result.protocol.generalErrors is not None
+        assert [entry.code for entry in result.protocol.generalErrors] == [
+            ProtocolCode.PROJECT_NOT_FOUND
+        ]
+
+    def test_check_login_rejects_an_escaping_project(
+        self,
+        sandboxed_config: ExcelDefectClientConfig,
+    ):
+        """`check_login` reads `project` from a query parameter, so no route regex applies."""
+        client = ExcelDefectClient(sandboxed_config)
+
+        assert client.check_login("../outside") is False
+
+    def test_update_defect_rejects_an_escaping_project(
+        self,
+        sandboxed_config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        """The write paths resolve the same way, so the guard has to hold for them too."""
+        client = ExcelDefectClient(sandboxed_config)
+        defect = Defect(
+            title="Injected",
+            description="Injected",
+            reporter="Mallory",
+            status="Open",
+            classification="Bug",
+            priority="High",
+            lastEdited=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            principal=Login(username="u", password="p"),
+            references=[],
+        )
+
+        protocol = client.update_defect("../outside", "D-9999", defect, sync_context)
+
+        assert protocol.generalErrors is not None
+        assert [entry.code for entry in protocol.generalErrors] == [ProtocolCode.PROJECT_NOT_FOUND]
+        assert (
+            "D-9999,Secret"
+            in (sandboxed_config.excel_file_path.parent / "outside" / "secrets.csv").read_text()
+        )
+
+    def test_a_legitimate_project_still_resolves(
+        self,
+        sandboxed_config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        client = ExcelDefectClient(sandboxed_config)
+
+        result = client.get_defects("demo", sync_context)
+
+        assert [defect.id.root for defect in result.value] == ["D-0001"]
+        assert not result.protocol.generalErrors

@@ -277,8 +277,19 @@ class ExcelDefectClient(AbstractDefectClient):
         max_size_mib = float(getattr(config, "buffer_max_size_mib", 0) or 0)
         return max_age_minutes * 60, int(max_size_mib * 1024**2)
 
+    def _resolve_project_path(self, project: str) -> Path:
+        """Resolve a project directory and ensure it stays below the configured Excel path."""
+        base_path = self.config.excel_file_path.resolve()
+        project_path = (self.config.excel_file_path / project).resolve()
+        if not project_path.is_relative_to(base_path):
+            logger.warning("Rejected project name '%s': resolves outside '%s'", project, base_path)
+            raise FileNotFoundError(
+                f"Project '{project}' does not exist below '{self.config.excel_file_path}'."
+            )
+        return project_path
+
     def _get_file_path(self, project: str) -> Path:
-        project_path = self.config.excel_file_path.joinpath(project)
+        project_path = self._resolve_project_path(project)
         if not project_path.exists() or not project_path.is_dir():
             raise FileNotFoundError(
                 f"Project '{project}' does not exist below '{self.config.excel_file_path}'."

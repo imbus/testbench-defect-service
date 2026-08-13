@@ -410,7 +410,7 @@ def add_defect_to_dataframe(
 ) -> pd.DataFrame:
     prefix = config.id_prefix
     numeric_ids = [
-        int(id_val.replace(prefix, ""))
+        int(id_val[len(prefix) :])
         for id_val in df["id"]
         if id_val.startswith(prefix) and id_val[len(prefix) :].isdigit()
     ]
@@ -457,7 +457,8 @@ def create_defect_data_frame(
 
     if defect.userDefinedFields:
         for udf in defect.userDefinedFields:
-            defect_info_data_frame[udf.name] = udf.value
+            if udf.value is not None or udf.name not in defect_info_data_frame.columns:
+                defect_info_data_frame[udf.name] = _cell_for_optional_field(udf.value)
 
     return defect_info_data_frame
 
