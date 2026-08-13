@@ -180,12 +180,12 @@ A row the service cannot identify — one that has content but no defect ID, or 
 
 **Values & formatting**
 
-| Option                      | Type    | Description                                                                                                      | Required | Default        |
-| --------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------- | -------- | -------------- |
-| `simple_date_format`      | String  | Date format of the last-edited column, in Java`SimpleDateFormat` notation. See [Date handling](#date-handling). | No       | — (automatic) |
-| `references_separator`    | String  | Separates multiple references inside the references cell.                                                        | No       | `","`        |
-| `id_prefix`               | String  | Prefix of generated defect IDs.                                                                                  | No       | `"BUG"`      |
-| `defect_id_digit_numbers` | Integer | Number of digits the numeric part of a generated ID is padded to.                                                | No       | `4`          |
+| Option                       | Type    | Description                                                                                                      | Required | Default        |
+| ---------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------- | -------- | -------------- |
+| `simple_date_format`       | String  | Date format of the last-edited column, in Java`SimpleDateFormat` notation. See [Date handling](#date-handling). | No       | — (automatic) |
+| `references_separator`     | String  | Separates multiple references inside the references cell.                                                        | No       | `","`        |
+| `id_prefix`                | String  | Prefix of generated defect IDs.                                                                                  | No       | `"BUG"`      |
+| `defect_id_digit_numbers`  | Integer | Number of digits the numeric part of a generated ID is padded to.                                                | No       | `4`          |
 | `defect_id_starting_value` | String  | Number the first generated ID uses while the file has no ID matching`id_prefix`.                               | No       | `"1"`        |
 
 **Behavior**
@@ -208,6 +208,7 @@ See [Buffering](#buffering) for details.
 
 | Option       | Type  | Description                                                                             | Required | Default |
 | ------------ | ----- | --------------------------------------------------------------------------------------- | -------- | ------- |
+| `commands` | Table | Scripts run before and after a sync. See[Sync hooks](#sync-hooks).                       | No       | —      |
 | `projects` | Table | Per-project configuration overrides. See[Per-project overrides](#per-project-overrides). | No       | `{}`  |
 
 ---
@@ -278,7 +279,9 @@ Transitions are only checked on **update**, not when a defect is created.
 :::warning[Deprecated]
 A top-level `transitions` list is still honoured, but applies to `status` only
 and cannot be validated against the field's `values`. Move it into the `status`
-control field. If both are present, the nested list wins.
+control field. If both are present, the nested list wins. The configuration
+wizard no longer offers it — it asks for transitions per control field only, and
+leaves an already configured top-level list untouched.
 :::
 
 ---
@@ -398,6 +401,36 @@ The project key must match the subdirectory name under `excel_file_path`. Option
 
 ---
 
+## Sync hooks
+
+A script can be run before and after each sync — for example to check out the
+workbook from version control and check it back in afterwards:
+
+```toml
+# config.toml
+[testbench-defect-service.client_config.commands.presync]
+scheduled = "C:\\scripts\\checkout-workbook.bat"
+manual    = "C:\\scripts\\checkout-workbook.bat"
+
+[testbench-defect-service.client_config.commands.postsync]
+scheduled = "C:\\scripts\\checkin-workbook.bat"
+
+# Per-project override
+[testbench-defect-service.client_config.projects.project_1.commands.presync]
+scheduled = "C:\\scripts\\project-1-checkout.bat"
+```
+
+`scheduled`, `manual` and `partial` select the script by sync type. Each value
+must be a path to a `.bat`, `.sh` or `.exe` file; anything else is logged and
+skipped. The service waits for the script to finish before continuing, and
+passes the project key and the sync type to it as arguments.
+
+A project's `commands` table replaces the global one for that project rather
+than merging with it. See [Pre/post sync commands](../configuration.md#prepost-sync-commands)
+for the shared reference.
+
+---
+
 ## Legacy `.properties` configuration
 
 The client accepts the key names used by the legacy DMProxy Excel connector, so an existing `.properties` file can be reused as-is:
@@ -507,13 +540,11 @@ If the directory holding the defect file is not writable, the sidecar cannot be 
 
 ## Limitations
 
-| Limitation                                  | Details                                                                                                                                                                                                               |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`.xls` is read-only**             | Creating, updating or deleting a defect in a legacy`.xls` file fails. Convert the file to `.xlsx`.                                                                                                                |
-| **`.tsv` ignores `separator`**       | A`.tsv` file is always read and written tab-separated; a configured `separator` has no effect on it. Use `.txt` with `separator = "\t"` to take the delimiter from the configuration instead.                     |
-| **Single-character separators only**  | `separator` must be exactly one character. A longer value fails the operation with`Unsupported separator '<value>' for '<file>'`, on reads as well as writes.                                                    |
-| **No pre/post sync commands**         | Unlike the JSONL and Jira clients, the Excel client does not support the`commands` section — `before_sync` and `after_sync` are no-ops.                                                                        |
-| **Editing during a sync**             | The client locks the file against other writers, but not against a person: avoid editing the spreadsheet while a sync is running. Note that Excel itself holds an exclusive lock on an open workbook, which makes writes fail. |
-| **One file per project**              | Only the first file matching`file_type` in a project directory is used. Additional files are ignored.                                                                                                               |
-| **`defect_id_starting_value` applies once** | It sets the number of the *first* generated ID only. Once the file carries IDs matching`id_prefix`, the next ID always continues from the highest existing one.                                                    |
-| **Attachments**                       | Defect attachments are not supported.                                                                                                                                                                                 |
+| Limitation                                          | Details                                                                                                                                                                                                                        |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **`.xls` is read-only**                     | Creating, updating or deleting a defect in a legacy`.xls` file fails. Convert the file to `.xlsx`.                                                                                                                         |
+| **`.tsv` ignores `separator`**            | A`.tsv` file is always read and written tab-separated; a configured `separator` has no effect on it. Use `.txt` with `separator = "\t"` to take the delimiter from the configuration instead.                          |
+| **Single-character separators only**          | `separator` must be exactly one character. A longer value fails the operation with`Unsupported separator '<value>' for '<file>'`, on reads as well as writes.                                                              |
+| **Editing during a sync**                     | The client locks the file against other writers, but not against a person: avoid editing the spreadsheet while a sync is running. Note that Excel itself holds an exclusive lock on an open workbook, which makes writes fail. |
+| **One file per project**                      | Only the first file matching`file_type` in a project directory is used. Additional files are ignored.                                                                                                                        |
+| **`defect_id_starting_value` applies once** | It sets the number of the*first* generated ID only. Once the file carries IDs matching`id_prefix`, the next ID always continues from the highest existing one.                                                             |

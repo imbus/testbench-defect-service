@@ -7,6 +7,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic.fields import FieldInfo
 
 from testbench_defect_service.log import logger
+from testbench_defect_service.models.config import PhaseCommands
 from testbench_defect_service.models.defects import ValueType
 
 
@@ -184,10 +185,20 @@ class Transition(BaseModel):
 
 
 class ControlFields(BaseModel):
-    name: str
-    column_number: int
-    values: list[str] = Field(default_factory=list)
-    transitions: list[Transition] = Field(default_factory=list)
+    name: str = Field(description="Control field name (e.g. 'status', 'severity')")
+    column_number: int = Field(description="Column number in the Excel file for this field")
+    values: list[str] = Field(
+        default_factory=list, description="Allowed values for this control field (comma-separated)"
+    )
+    transitions: list[Transition] = Field(
+        default_factory=list,
+        description="Allowed state transitions for this control field",
+        json_schema_extra={
+            "item_label": "State Transition",
+            "add_prompt": "Would you like to add a state transition for this control field?",
+            "add_another_prompt": "Add another state transition for this control field?",
+        },
+    )
 
     @field_validator("name", mode="before")
     @classmethod
@@ -212,15 +223,21 @@ class ControlFields(BaseModel):
 
 
 class UserDefiendAttributes(BaseModel):
-    name: str
-    column: int
-    type: ValueType
-    required: bool = False
-    value: str | None = None
-    trueValue: str | None = None
+    name: str = Field(description="Name of the user-defined attribute")
+    column: int = Field(description="Column number in the Excel file for this attribute")
+    type: ValueType = Field(description="Value type of this attribute")
+    required: bool = Field(default=False, description="Whether this attribute is mandatory")
+    value: str | None = Field(default=None, description="Fixed default value for this attribute")
+    trueValue: str | None = Field(
+        default=None,
+        description="Cell content that represents 'true'",
+        json_schema_extra={"depends_on": {"type": ValueType.BOOLEAN.value}},
+    )
     falseValue: str | None = Field(
         default=None,
         validation_alias=AliasChoices("falseValue", "falsevalue"),
+        description="Cell content that represents 'false'",
+        json_schema_extra={"depends_on": {"type": ValueType.BOOLEAN.value}},
     )
 
     @field_validator("type", mode="before")
@@ -278,7 +295,9 @@ class ProjectConfig(BaseModel):
         description="Character used to separate values in the file (e.g., ',', ';', '\\t').",
     )
     control_fields: list[ControlFields] | None = Field(
-        default=None, description="List of control fields for this project."
+        default=None,
+        description="List of control fields for this project.",
+        json_schema_extra={"item_label": "Control Field"},
     )
 
     id_column_no: int | None = Field(
@@ -320,7 +339,7 @@ class ProjectConfig(BaseModel):
         ),
         description="Character used to separate multiple references in the references column.",
     )
-    attributes: list[str] | None = Field(None, description="Attributes for this project")
+    attributes: list[str] | None = Field(default=None, description="Attributes for this project")
     id_prefix: str | None = Field(
         default=None,
         validation_alias=AliasChoices("id_prefix", "defect.id.prefix"),
@@ -344,11 +363,21 @@ class ProjectConfig(BaseModel):
     )
 
     transitions: list[Transition] | None = Field(
-        default=None, description="List of state transitions for defects in this project."
+        default=None,
+        description=(
+            "Deprecated project-level state transitions, kept for legacy configurations. "
+            "Configure transitions on the 'status' control field instead."
+        ),
+        json_schema_extra={"skip_if_wizard": True},
     )
     udfs: list[UserDefiendAttributes] | None = Field(
         default=None,
         description="List of user-defined attributes for defects in this project.",
+        json_schema_extra={"item_label": "User-Defined Attribute"},
+    )
+
+    commands: PhaseCommands | None = Field(
+        default=None, description="Sync hook scripts for this project"
     )
 
     buffer_cleanup_interval_minutes: float | None = Field(
@@ -395,6 +424,7 @@ class ExcelDefectClientConfig(BaseModel):
     excel_file_path: Path = Field(
         validation_alias=AliasChoices("excel_file_path", "excelFilePath"),
         description="Path to the Excel file containing defect data.",
+        json_schema_extra={"path_type": "file"},
     )
     worksheet_name: str | None = Field(
         default=None,
@@ -438,7 +468,9 @@ class ExcelDefectClientConfig(BaseModel):
         description="Separator used in the file.",
     )
     control_fields: list[ControlFields] = Field(
-        default_factory=list, description="List of control fields."
+        default_factory=list,
+        description="List of control fields.",
+        json_schema_extra={"item_label": "Control Field"},
     )
 
     id_column_no: int = Field(
@@ -503,14 +535,24 @@ class ExcelDefectClientConfig(BaseModel):
 
     transitions: list[Transition] = Field(
         default_factory=list,
-        description="List of state transitions for defects.",
+        description=(
+            "Deprecated top-level state transitions, kept for legacy configurations. "
+            "Configure transitions on the 'status' control field instead."
+        ),
+        json_schema_extra={"skip_if_wizard": True},
     )
     udfs: list[UserDefiendAttributes] = Field(
-        default_factory=list, description="List of user-defined attributes for defects."
+        default_factory=list,
+        description="List of user-defined attributes for defects.",
+        json_schema_extra={"item_label": "User-Defined Attribute"},
+    )
+    commands: PhaseCommands | None = Field(
+        default=None, description="Sync hook scripts (run before and after a sync)"
     )
     projects: dict[str, ProjectConfig] = Field(
         default_factory=dict,
         description="Dictionary of project configurations, keyed by project name.",
+        json_schema_extra={"item_label": "Project", "key_label": "Project name"},
     )
 
     buffer_cleanup_interval_minutes: float = Field(

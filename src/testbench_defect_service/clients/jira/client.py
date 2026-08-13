@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import subprocess
 from http import HTTPStatus
-from pathlib import Path
 from typing import Any
 
 from jira import Issue, JIRAError, Project
@@ -20,6 +18,7 @@ from testbench_defect_service.clients.jira.utils import (
     extract_static_attributes,
     get_value_type_from_jira_field,
 )
+from testbench_defect_service.clients.utils import execute_sync_hook
 from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import (
     Defect,
@@ -693,10 +692,12 @@ class JiraDefectClient(AbstractDefectClient):
         ]
 
     def before_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
-        return self._execute_sync_hook(project, sync_type, "presync")
+        commands = self._get_config_value("sync_commands", project=project)
+        return execute_sync_hook(project, sync_type, "presync", commands)
 
     def after_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
-        return self._execute_sync_hook(project, sync_type, "postsync")
+        commands = self._get_config_value("sync_commands", project=project)
+        return execute_sync_hook(project, sync_type, "postsync", commands)
 
     def supports_changes_timestamps(self) -> bool:
         return self.config.supports_changes_timestamps
@@ -751,76 +752,6 @@ class JiraDefectClient(AbstractDefectClient):
                 return value  # type: ignore
         logger.debug("Using global config for '%s'", attr)
         return getattr(self.config, attr, None)  # type: ignore
-
-    def _execute_sync_hook(self, project: str, sync_type: str, hook_type: str) -> Protocol:
-        """Execute a pre-sync or post-sync hook command."""
-        protocol = Protocol()
-        commands = self._get_config_value("commands", project=project)
-
-        hook_commands = getattr(commands, hook_type, None)
-        command_str = getattr(hook_commands, sync_type, None) if hook_commands else None
-
-        if not command_str:
-            protocol.add_success(
-                key=str(project),
-                message=f"{hook_type.capitalize()} hook acknowledged; no command configured.",
-                protocol_code=ProtocolCode.PUBLISH_SUCCESS,
-            )
-            return protocol
-
-        command_path = Path(command_str)
-
-        # Validate command file extension
-        if command_path.suffix.lower() not in {".bat", ".sh", ".exe"}:
-            logger.warning(
-                "Hook '%s' has unsupported file extension '%s', only .bat, .sh, .exe supported",
-                command_path.name,
-                command_path.suffix,
-            )
-            return protocol
-
-        # Check if command exists
-        if not command_path.exists():
-            logger.warning("Hook command path does not exist: %s", command_path)
-            return protocol
-
-        # Execute command
-        logger.info(
-            "Executing %s hook '%s' for project '%s'", hook_type, command_path.name, project
-        )
-        try:
-            subprocess.run(
-                [str(command_path), str(project), str(sync_type)],
-                check=True,
-            )
-            logger.info(
-                "%s hook '%s' completed successfully", hook_type.capitalize(), command_path.name
-            )
-            protocol.add_success(
-                key=str(project),
-                message=(
-                    f"{hook_type.capitalize()} hook '{command_path.name}' executed successfully."
-                ),
-                protocol_code=ProtocolCode.PUBLISH_SUCCESS,
-            )
-        except subprocess.CalledProcessError as exc:
-            protocol.add_general_error(
-                protocol_code=ProtocolCode.PUBLISH_ERROR,
-                message=(
-                    f"{hook_type.capitalize()} hook '{command_path.name}'"
-                    f" failed with return code {exc.returncode}."
-                ),
-            )
-        except OSError as exc:
-            protocol.add_general_error(
-                protocol_code=ProtocolCode.PUBLISH_ERROR,
-                message=(
-                    f"{hook_type.capitalize()} hook '{command_path.name}' "
-                    f"could not be executed: {exc}."
-                ),
-            )
-
-        return protocol
 
     def _validate_and_filter_actions(
         self,

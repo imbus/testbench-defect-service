@@ -33,6 +33,7 @@ from testbench_defect_service.clients.excel.utils import (
     to_python_datetime_format,
     validate_control_fields,
 )
+from testbench_defect_service.clients.utils import execute_sync_hook
 from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import (
     Defect,
@@ -660,37 +661,21 @@ class ExcelDefectClient(AbstractDefectClient):
         return udfs
 
     def before_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
-        # TODO: implement
-        logger.debug("before_sync called for project '%s' (sync_type: '%s')", project, sync_type)
-        del sync_type, sync_context
-
-        protocol = Protocol()
-        protocol.add_success(
-            project,
-            "Excel client does not require pre-sync actions.",
-            protocol_code=ProtocolCode.PUBLISH_SUCCESS,
-        )
-        return protocol
+        commands = self._get_config_value("commands", project=project)
+        return execute_sync_hook(project, sync_type, "presync", commands)
 
     def after_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
-        # TODO: implement
-        logger.debug("after_sync called for project '%s' (sync_type: '%s')", project, sync_type)
-        del sync_type, sync_context
-
-        protocol = Protocol()
-        protocol.add_success(
-            project,
-            "Excel client does not require post-sync actions.",
-            protocol_code=ProtocolCode.PUBLISH_SUCCESS,
-        )
-        return protocol
+        commands = self._get_config_value("commands", project=project)
+        return execute_sync_hook(project, sync_type, "postsync", commands)
 
     def supports_changes_timestamps(self) -> bool:
         return self.config.lastedit_column_no > 0
 
     def correct_sync_results(self, project: str, body: Results) -> Results:
-        # TODO: implement
-        del project
+        # due to limitations of the Excel client, we cannot guarantee to filter out defects with
+        # incorrect fields, so we return the body as-is.
+        # Additionally, the reason why the defect was filtered out could not be propagated
+        # to the user.
         return body
 
     def _get_config_value(self, attr: str, project: str | None = None) -> Any:

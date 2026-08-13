@@ -272,7 +272,7 @@ file_path  = "testbench-defect-service.log"
 
 ## Pre/post sync commands
 
-The JSONL and Jira clients support running shell commands before and after TestBench syncs defects, configured under a `commands` subsection. The [Excel client](clients/excel-client.md) does not support this section.
+The built-in clients support running shell commands before and after TestBench syncs defects, configured under a `commands` subsection.
 
 | Option | Description |
 |--------|-------------|

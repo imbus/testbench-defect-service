@@ -1,10 +1,11 @@
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
-from testbench_defect_service.models.defects import DefectWithID
+from testbench_defect_service.models.defects import DefectWithID, Protocol, ProtocolCode
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -16,6 +17,7 @@ except ImportError:
     pass
 
 from testbench_defect_service.clients.abstract_client import AbstractDefectClient
+from testbench_defect_service.log import logger
 from testbench_defect_service.utils.import_utils import (
     get_project_root,
     import_class_from_file_path,
@@ -193,3 +195,66 @@ def get_defect_client(app) -> AbstractDefectClient:
         defect_client_class = get_defect_client_from_client_class_str(app.config.CLIENT_CLASS)
         app.ctx.defect_client = defect_client_class(app.config.CLIENT_CONFIG)  # type: ignore
     return app.ctx.defect_client  # type: ignore
+
+
+def execute_sync_hook(project: str, sync_type: str, hook_type: str, commands: str) -> Protocol:
+    """Execute a pre-sync or post-sync hook command."""
+    logger.debug(f"Executing {hook_type} hook for project '{project}' with sync type: {sync_type}")
+    protocol = Protocol()
+
+    hook_commands = getattr(commands, hook_type, None)
+    command_str = getattr(hook_commands, sync_type, None) if hook_commands else None
+
+    if not command_str:
+        logger.debug(f"No {hook_type} command configured for project '{project}'")
+        protocol.add_success(
+            key=str(project),
+            protocol_code=ProtocolCode.PUBLISH_SUCCESS,
+            message=f"{hook_type.capitalize()} hook acknowledged; no command configured.",
+        )
+        return protocol
+
+    command_path = Path(command_str)
+    logger.debug(f"Validating {hook_type} hook command: {command_path}")
+
+    # Validate command file extension
+    if command_path.suffix.lower() not in {".bat", ".sh", ".exe"}:
+        logger.warning(f"{hook_type} hook '{command_path.name}' has unsupported file extension")
+        return protocol
+
+    # Check if command exists
+    if not command_path.exists():
+        logger.warning(f"{hook_type} hook command file does not exist: {command_path}")
+        return protocol
+
+    # Execute command
+    logger.info(f"Executing {hook_type} hook command: {command_path}")
+    try:
+        subprocess.run([str(command_path), project, sync_type], check=True)
+        logger.info(f"{hook_type} hook '{command_path.name}' executed successfully")
+        protocol.add_success(
+            key=str(project),
+            protocol_code=ProtocolCode.PUBLISH_SUCCESS,
+            message=(f"{hook_type.capitalize()} hook '{command_path.name}' executed successfully."),
+        )
+    except subprocess.CalledProcessError as exc:
+        logger.error(
+            f"{hook_type} hook '{command_path.name}' failed with return code {exc.returncode}"
+        )
+        protocol.add_general_error(
+            protocol_code=ProtocolCode.PUBLISH_ERROR,
+            message=(
+                f"{hook_type.capitalize()} hook '{command_path.name}'"
+                f" failed with return code {exc.returncode}."
+            ),
+        )
+    except OSError as exc:
+        logger.error(f"{hook_type} hook '{command_path.name}' could not be executed: {exc}")
+        protocol.add_general_error(
+            protocol_code=ProtocolCode.PUBLISH_ERROR,
+            message=(
+                f"{hook_type.capitalize()} hook '{command_path.name}' could not be executed: {exc}."
+            ),
+        )
+
+    return protocol

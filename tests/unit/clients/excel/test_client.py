@@ -1,6 +1,7 @@
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from sanic import NotFound, ServerError
@@ -12,6 +13,7 @@ from testbench_defect_service.clients.excel.config import (
     ProjectConfig,
     Transition,
 )
+from testbench_defect_service.models.config import PhaseCommands, SyncCommandConfig
 from testbench_defect_service.models.defects import (
     Defect,
     Login,
@@ -930,3 +932,82 @@ def test_project_override_uses_its_own_control_field_transitions(
     status_field = next(field for field in effective.control_fields if field.name == "status")
     assert status_field.values == ["Open", "Blocked"]
     assert status_field.transitions == [Transition(from_state="Open", to_state="Blocked")]
+
+
+@pytest.mark.unit
+class TestSyncHookCommands:
+    """The wizard writes sync hooks to 'commands'; the client must read that same key."""
+
+    @staticmethod
+    def _script(tmp_path: Path) -> Path:
+        script = tmp_path / "hook.bat"
+        script.write_text("@echo off", encoding="utf-8")
+        return script
+
+    def test_before_sync_runs_the_configured_presync_command(
+        self,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+        tmp_path: Path,
+    ):
+        script = self._script(tmp_path)
+        config.commands = PhaseCommands(presync=SyncCommandConfig(manual=str(script)))
+        client = ExcelDefectClient(config)
+
+        with patch("testbench_defect_service.clients.utils.subprocess.run") as run:
+            protocol = client.before_sync("demo", "manual", sync_context)
+
+        run.assert_called_once_with([str(script), "demo", "manual"], check=True)
+        assert protocol.successes
+
+    def test_after_sync_runs_the_configured_postsync_command(
+        self,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+        tmp_path: Path,
+    ):
+        script = self._script(tmp_path)
+        config.commands = PhaseCommands(postsync=SyncCommandConfig(scheduled=str(script)))
+        client = ExcelDefectClient(config)
+
+        with patch("testbench_defect_service.clients.utils.subprocess.run") as run:
+            protocol = client.after_sync("demo", "scheduled", sync_context)
+
+        run.assert_called_once_with([str(script), "demo", "scheduled"], check=True)
+        assert protocol.successes
+
+    def test_project_commands_take_precedence_over_the_client_default(
+        self,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+        tmp_path: Path,
+    ):
+        default_script = self._script(tmp_path)
+        project_script = tmp_path / "project_hook.bat"
+        project_script.write_text("@echo off", encoding="utf-8")
+
+        config.commands = PhaseCommands(presync=SyncCommandConfig(manual=str(default_script)))
+        config.projects = {
+            "demo": ProjectConfig(
+                commands=PhaseCommands(presync=SyncCommandConfig(manual=str(project_script)))
+            )
+        }
+        client = ExcelDefectClient(config)
+
+        with patch("testbench_defect_service.clients.utils.subprocess.run") as run:
+            client.before_sync("demo", "manual", sync_context)
+
+        run.assert_called_once_with([str(project_script), "demo", "manual"], check=True)
+
+    def test_no_configured_command_is_acknowledged_without_running_anything(
+        self,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        client = ExcelDefectClient(config)
+
+        with patch("testbench_defect_service.clients.utils.subprocess.run") as run:
+            protocol = client.before_sync("demo", "manual", sync_context)
+
+        run.assert_not_called()
+        assert protocol.successes
