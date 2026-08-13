@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
-from pydantic.fields import FieldInfo
 
 from testbench_defect_service.log import logger
 from testbench_defect_service.models.config import PhaseCommands
@@ -127,34 +126,15 @@ def _parse_legacy_udfs(data: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _normalize_legacy_excel_config(data: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(data)
+    """Fold legacy `.properties` *structures* into their modern shape.
 
-    legacy_scalar_fields = {
-        "systemName": "system_name",
-        "excelFilePath": "excel_file_path",
-        "worksheetName": "worksheet_name",
-        "fileType": "file_type",
-        "simpleDateFormat": "simple_date_format",
-        "defects.header.line": "defects_data_header_line",
-        "defects.data.startingLine": "defects_data_starting_line",
-        "separator": "separator",
-        "defect.id.columnNo": "id_column_no",
-        "defect.title.columnNo": "title_column_no",
-        "defect.references.columnNo": "references_column_no",
-        "defect.discoverer.columnNo": "discoverer_column_no",
-        "defect.lastedited.columnNo": "lastedit_column_no",
-        "defect.description.columnNo": "description_column_no",
-        "defect.references.separator": "references_separator",
-        "defect.id.prefix": "id_prefix",
-        "defect.id.startingValue": "defect_id_starting_value",
-        "defect.id.digitNumber": "defect_id_digit_numbers",
-        "bufferCleanupIntervalMinutes": "buffer_cleanup_interval_minutes",
-        "bufferMaxAgeMinutes": "buffer_max_age_minutes",
-        "bufferMaxSizeMiB": "buffer_max_size_mib",
-    }
-    for source_key, target_key in legacy_scalar_fields.items():
-        if target_key not in normalized and source_key in data:
-            normalized[target_key] = data[source_key]
+    Only the composite keys need work here - the ones where several flat properties become one
+    nested model (control fields, transitions, UDFs). Legacy *scalar* keys are handled by the
+    `validation_alias=AliasChoices(<modern>, <legacy>)` declared on each field, on both
+    `ExcelDefectClientConfig` and `ProjectConfig`, so they need no remapping. `TestLegacyScalarKeys`
+    pins every documented scalar key against those aliases.
+    """
+    normalized = dict(data)
 
     if "control_fields" not in normalized:
         control_fields = _parse_legacy_control_fields(data)
@@ -399,14 +379,6 @@ class ProjectConfig(BaseModel):
         description="Maximum size in MiB for the buffer for this project.",
     )
 
-    @property
-    def column_settings(self) -> dict[str, FieldInfo]:
-        return {
-            field_name: field_info
-            for field_name, field_info in self.__class__.model_fields.items()
-            if field_name.endswith("_column_no")
-        }
-
 
 class ExcelDefectClientConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
@@ -577,11 +549,3 @@ class ExcelDefectClientConfig(BaseModel):
         if not isinstance(data, dict):
             return data
         return _normalize_legacy_excel_config(data)
-
-    @property
-    def column_settings(self) -> dict[str, FieldInfo]:
-        return {
-            field_name: field_info
-            for field_name, field_info in self.__class__.model_fields.items()
-            if field_name.endswith("_column_no")
-        }

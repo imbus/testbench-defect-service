@@ -1,8 +1,13 @@
+from pathlib import Path
+from typing import ClassVar
+
 import pytest
 from pydantic import ValidationError
 
 from testbench_defect_service.clients.excel.config import (
     ControlFields,
+    ExcelDefectClientConfig,
+    ProjectConfig,
     Transition,
     _normalize_legacy_excel_config,
 )
@@ -181,3 +186,89 @@ class TestLegacyTransitionNormalization:
             {"from_state": "Crash", "to_state": "Other"}
         ]
         assert caplog.records == []
+
+
+@pytest.mark.unit
+class TestLegacyScalarKeys:
+    """Every legacy `.properties` scalar key must reach its field.
+
+    The keys here are the ones `docs/clients/excel-client.md` documents, so this pins the
+    published contract rather than whatever the loader happens to accept.
+    """
+
+    LEGACY_DATA: ClassVar[dict[str, str]] = {
+        "systemName": "Legacy Excel",
+        "excelFilePath": r"C:\defects\excel",
+        "worksheetName": "Defects",
+        "fileType": ".xlsx",
+        "simpleDateFormat": "yyyy-MM-dd",
+        "defects.header.line": "1",
+        "defects.data.startingLine": "2",
+        "separator": ";",
+        "defect.id.columnNo": "1",
+        "defect.title.columnNo": "2",
+        "defect.references.columnNo": "3",
+        "defect.discoverer.columnNo": "4",
+        "defect.lastedit.columnNo": "5",
+        "defect.description.columnNo": "6",
+        "defect.references.separator": ",",
+        "defect.id.prefix": "BUG",
+        "defect.id.startingValue": "1",
+        "defect.id.digitNumber": "4",
+        "bufferCleanupIntervalMinutes": "2",
+        "bufferMaxAgeMinutes": "30",
+        "bufferMaxSizeMiB": "512",
+    }
+
+    EXPECTED: ClassVar[dict[str, object]] = {
+        "system_name": "Legacy Excel",
+        "worksheet_name": "Defects",
+        "file_type": ".xlsx",
+        "simple_date_format": "yyyy-MM-dd",
+        "defects_data_header_line": 1,
+        "defects_data_starting_line": 2,
+        "separator": ";",
+        "id_column_no": 1,
+        "title_column_no": 2,
+        "references_column_no": 3,
+        "discoverer_column_no": 4,
+        "lastedit_column_no": 5,
+        "description_column_no": 6,
+        "references_separator": ",",
+        "id_prefix": "BUG",
+        "defect_id_starting_value": "1",
+        "defect_id_digit_numbers": 4,
+        "buffer_cleanup_interval_minutes": 2.0,
+        "buffer_max_age_minutes": 30.0,
+        "buffer_max_size_mib": 512.0,
+    }
+
+    @pytest.mark.parametrize("field_name", sorted(EXPECTED))
+    def test_client_config_reads_every_documented_legacy_key(self, field_name: str) -> None:
+        config = ExcelDefectClientConfig.model_validate(self.LEGACY_DATA)
+
+        assert getattr(config, field_name) == self.EXPECTED[field_name]
+
+    def test_client_config_reads_the_legacy_file_path(self) -> None:
+        config = ExcelDefectClientConfig.model_validate(self.LEGACY_DATA)
+
+        assert config.excel_file_path == Path(r"C:\defects\excel")
+
+    @pytest.mark.parametrize(
+        "field_name",
+        sorted(set(EXPECTED) - {"system_name"}),
+    )
+    def test_project_config_reads_every_documented_legacy_key(self, field_name: str) -> None:
+        """`ProjectConfig` carries the same aliases so a project block can be legacy too."""
+        project_config = ProjectConfig.model_validate(self.LEGACY_DATA)
+
+        assert getattr(project_config, field_name) == self.EXPECTED[field_name]
+
+    def test_snake_case_keys_win_over_a_legacy_key_for_the_same_field(self) -> None:
+        """Both spellings present is ambiguous; the modern one has always taken precedence."""
+        config = ExcelDefectClientConfig.model_validate(
+            {**self.LEGACY_DATA, "id_column_no": 9, "lastedit_column_no": 8}
+        )
+
+        assert config.id_column_no == 9
+        assert config.lastedit_column_no == 8
