@@ -1163,3 +1163,72 @@ class TestProjectPathSandboxing:
 
         assert [defect.id.root for defect in result.value] == ["D-0001"]
         assert not result.protocol.generalErrors
+
+
+@pytest.mark.unit
+class TestBufferCleanupThreadSizing:
+    """The purge thread has to account for project overrides, not just the global config.
+
+    Entries are buffered against the *effective* config, so a project can turn buffering on that
+    the global config leaves off. Sizing the thread globally left those entries to be purged only
+    lazily, on the next read of that same project.
+    """
+
+    @staticmethod
+    def _started_thread_args(config: ExcelDefectClientConfig) -> tuple[float, float] | None:
+        """Return the (interval, max_age) the thread was sized with, or None if it never started."""
+        with (
+            patch.object(ExcelDefectClient, "_purge_expired_entries") as purge,
+            patch("testbench_defect_service.clients.excel.client.threading.Thread") as thread,
+            patch("testbench_defect_service.clients.excel.client.time.sleep") as sleep,
+        ):
+            # Let the loop tick exactly once: sleep, purge, then break out on the second sleep.
+            sleep.side_effect = [None, StopIteration]
+            ExcelDefectClient(config)
+            if not thread.called:
+                return None
+            loop = thread.call_args.kwargs["target"]
+            with pytest.raises(StopIteration):
+                loop()
+            return sleep.call_args.args[0], purge.call_args.args[0]
+
+    def test_a_project_override_starts_the_thread_when_the_global_config_disables_it(
+        self,
+        config: ExcelDefectClientConfig,
+    ):
+        config.buffer_cleanup_interval_minutes = 0
+        config.buffer_max_age_minutes = 0
+        config.projects = {
+            "demo": ProjectConfig(
+                buffer_cleanup_interval_minutes=2,
+                buffer_max_age_minutes=30,
+            )
+        }
+
+        assert self._started_thread_args(config) == (120.0, 1800.0)
+
+    def test_the_thread_ticks_at_the_shortest_interval_and_keeps_the_longest_age(
+        self,
+        config: ExcelDefectClientConfig,
+    ):
+        """A shorter project age must not make the thread purge other projects early."""
+        config.buffer_cleanup_interval_minutes = 10
+        config.buffer_max_age_minutes = 60
+        config.projects = {
+            "demo": ProjectConfig(
+                buffer_cleanup_interval_minutes=1,
+                buffer_max_age_minutes=5,
+            )
+        }
+
+        assert self._started_thread_args(config) == (60.0, 3600.0)
+
+    def test_no_thread_starts_when_nothing_enables_buffering(
+        self,
+        config: ExcelDefectClientConfig,
+    ):
+        config.buffer_cleanup_interval_minutes = 0
+        config.buffer_max_age_minutes = 0
+        config.projects = {"demo": ProjectConfig()}
+
+        assert self._started_thread_args(config) is None

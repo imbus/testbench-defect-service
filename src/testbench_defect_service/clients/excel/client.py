@@ -711,11 +711,30 @@ class ExcelDefectClient(AbstractDefectClient):
         return float(getattr(config, "buffer_cleanup_interval_minutes", 0) or 0) * 60
 
     def _start_buffer_cleanup_thread(self) -> None:
-        interval_seconds = self._get_buffer_cleanup_interval_seconds(self.config)
-        max_age_seconds, _ = self._get_buffer_limits(self.config)
+        """Size the cleanup thread from the global config *and* every project override.
 
-        if interval_seconds <= 0 or max_age_seconds <= 0:
+        A project can enable buffering that the global config leaves off. Sizing the thread from
+        `self.config` alone meant those entries were only ever purged lazily, on the next read of
+        that same project - so a project buffered once and never read again kept its frame for the
+        life of the process. The tick is the shortest interval anyone asked for; the age is the
+        longest, so this never purges an entry earlier than its own config allows. Each project's
+        exact age is still enforced on read, by `_purge_expired_entries` in `_get_dataframe`.
+        """
+        configs = [self.config, *(self._get_effective_config(p) for p in self.config.projects)]
+        intervals = [
+            seconds
+            for config in configs
+            if (seconds := self._get_buffer_cleanup_interval_seconds(config)) > 0
+        ]
+        max_ages = [
+            seconds for config in configs if (seconds := self._get_buffer_limits(config)[0]) > 0
+        ]
+
+        if not intervals or not max_ages:
             return
+
+        interval_seconds = min(intervals)
+        max_age_seconds = max(max_ages)
 
         def _cleanup_loop() -> None:
             while True:
