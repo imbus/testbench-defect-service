@@ -692,11 +692,11 @@ class JiraDefectClient(AbstractDefectClient):
         ]
 
     def before_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
-        commands = self._get_config_value("sync_commands", project=project)
+        commands = self._get_config_value("commands", project=project)
         return execute_sync_hook(project, sync_type, "presync", commands)
 
     def after_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
-        commands = self._get_config_value("sync_commands", project=project)
+        commands = self._get_config_value("commands", project=project)
         return execute_sync_hook(project, sync_type, "postsync", commands)
 
     def supports_changes_timestamps(self) -> bool:
