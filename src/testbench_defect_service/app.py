@@ -38,10 +38,10 @@ def register_exception_handlers(app: Sanic) -> None:
 
 def check_dependencies(app: Sanic) -> None:
     """Check and validate optional dependencies based on client type."""
-    if "ExcelDefectClient" in app.config.CLIENT_CLASS:
+    if "testbench_defect_service.clients.ExcelDefectClient" in app.config.CLIENT_CLASS:
         check_excel_dependencies(raise_on_missing=True)
 
-    if "JiraDefectClient" in app.config.CLIENT_CLASS:
+    if "testbench_defect_service.clients.JiraDefectClient" in app.config.CLIENT_CLASS:
         check_jira_dependencies(raise_on_missing=True)
 
 
