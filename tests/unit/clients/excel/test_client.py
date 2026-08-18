@@ -935,6 +935,128 @@ def test_project_override_uses_its_own_control_field_transitions(
 
 
 @pytest.mark.unit
+class TestProjectPropertiesFileOverride:
+    """A `<Project>.properties` file beside the project's data overrides the config for it.
+
+    Existence of the file is the switch - nothing enables it. It sits closer to the data than
+    `config.toml` does, so where both name the same key the file wins.
+    """
+
+    @staticmethod
+    def _write_properties(project_path: Path, project: str, body: str) -> None:
+        (project_path / project).mkdir(exist_ok=True)
+        (project_path / project / f"{project}.properties").write_text(body, encoding="utf-8")
+
+    def test_a_file_beside_the_project_overrides_the_global_config(
+        self,
+        config: ExcelDefectClientConfig,
+        excel_project_path: Path,
+    ) -> None:
+        self._write_properties(excel_project_path, "demo", "defect.id.prefix=OVR-\n")
+        client = ExcelDefectClient(config)
+
+        assert client._get_effective_config("demo").id_prefix == "OVR-"
+
+    def test_the_file_beats_the_projects_table_in_the_main_config(
+        self,
+        config: ExcelDefectClientConfig,
+        excel_project_path: Path,
+    ) -> None:
+        config.projects = {"demo": ProjectConfig(id_prefix="TOML-")}
+        self._write_properties(excel_project_path, "demo", "defect.id.prefix=FILE-\n")
+        client = ExcelDefectClient(config)
+
+        assert client._get_effective_config("demo").id_prefix == "FILE-"
+
+    def test_a_key_the_file_omits_still_comes_from_the_projects_table(
+        self,
+        config: ExcelDefectClientConfig,
+        excel_project_path: Path,
+    ) -> None:
+        config.projects = {"demo": ProjectConfig(id_prefix="TOML-", defect_id_digit_numbers=6)}
+        self._write_properties(excel_project_path, "demo", "defect.id.prefix=FILE-\n")
+        client = ExcelDefectClient(config)
+
+        effective = client._get_effective_config("demo")
+        assert effective.id_prefix == "FILE-"
+        assert effective.defect_id_digit_numbers == 6
+
+    def test_a_project_without_a_file_keeps_the_global_config(
+        self,
+        config: ExcelDefectClientConfig,
+    ) -> None:
+        client = ExcelDefectClient(config)
+
+        assert client._get_effective_config("demo").id_prefix == "D-"
+
+    def test_legacy_control_fields_in_the_file_replace_the_global_ones(
+        self,
+        config: ExcelDefectClientConfig,
+        excel_project_path: Path,
+    ) -> None:
+        self._write_properties(
+            excel_project_path,
+            "demo",
+            "controlFields=status\n"
+            "status.columnNo=7\n"
+            "status.value=Open,Blocked\n"
+            "status.transition.number=1\n"
+            "status.transition1=Open-Blocked\n",
+        )
+        client = ExcelDefectClient(config)
+
+        effective = client._get_effective_config("demo")
+        status = next(field for field in effective.control_fields if field.name == "status")
+        assert status.values == ["Open", "Blocked"]
+        assert status.transitions == [Transition(from_state="Open", to_state="Blocked")]
+
+    def test_an_invalid_file_warns_and_falls_back_to_the_global_config(
+        self,
+        config: ExcelDefectClientConfig,
+        excel_project_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A typo must be reported, not quietly behave like 'no override'."""
+        self._write_properties(excel_project_path, "demo", "defect.id.columnNo=not-a-number\n")
+        client = ExcelDefectClient(config)
+
+        with caplog.at_level("WARNING", logger="testbench_defect_service"):
+            effective = client._get_effective_config("demo")
+
+        assert effective.id_column_no == 1
+        assert "demo.properties" in caplog.text
+
+    def test_an_unreadable_file_warns_and_falls_back_to_the_global_config(
+        self,
+        config: ExcelDefectClientConfig,
+        excel_project_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Bytes that decode under no common encoding must be reported, not swallowed."""
+        (excel_project_path / "demo" / "demo.properties").write_bytes(b"\x81\x81\x81")
+        client = ExcelDefectClient(config)
+
+        with caplog.at_level("WARNING", logger="testbench_defect_service"):
+            effective = client._get_effective_config("demo")
+
+        assert effective.id_prefix == "D-"
+        assert "demo.properties" in caplog.text
+
+    def test_a_file_override_reaches_get_config_value(
+        self,
+        config: ExcelDefectClientConfig,
+        excel_project_path: Path,
+    ) -> None:
+        """`_get_config_value` read `config.projects` directly and bypassed the file entirely."""
+        (excel_project_path / "demo" / "defects.tsv").write_text("id\n", encoding="utf-8")
+        self._write_properties(excel_project_path, "demo", "fileType=tsv\n")
+        client = ExcelDefectClient(config)
+
+        assert client._get_config_value("file_type", "demo") == ".tsv"
+        assert client._get_file_path("demo").name == "defects.tsv"
+
+
+@pytest.mark.unit
 class TestSyncHookCommands:
     """The wizard writes sync hooks to 'commands'; the client must read that same key."""
 
@@ -1232,3 +1354,17 @@ class TestBufferCleanupThreadSizing:
         config.projects = {"demo": ProjectConfig()}
 
         assert self._started_thread_args(config) is None
+
+    def test_a_properties_file_alone_starts_the_thread(
+        self,
+        config: ExcelDefectClientConfig,
+        excel_project_path: Path,
+    ):
+        """Sizing from `config.projects` misses a project configured only by its own file."""
+        config.buffer_cleanup_interval_minutes = 0
+        config.buffer_max_age_minutes = 0
+        (excel_project_path / "demo" / "demo.properties").write_text(
+            "bufferCleanupIntervalMinutes=2\nbufferMaxAgeMinutes=30\n", encoding="utf-8"
+        )
+
+        assert self._started_thread_args(config) == (120.0, 1800.0)

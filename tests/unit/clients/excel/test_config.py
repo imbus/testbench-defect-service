@@ -171,6 +171,46 @@ class TestLegacyTransitionNormalization:
             for record in caplog.records
         )
 
+    def test_state_prefixed_transitions_land_on_the_field_owning_the_state(self) -> None:
+        """The DMProxy connector keys transitions by *state*: `New.transition1=New-InProgress`."""
+        normalized = _normalize_legacy_excel_config(
+            self._legacy_data(
+                **{
+                    "New.transition.number": "2",
+                    "New.transition1": "New-InProgress",
+                    "New.transition2": "New-Done",
+                    "InProgress.transition1": "InProgress-Done",
+                }
+            )
+        )
+
+        by_name = {field["name"]: field for field in normalized["control_fields"]}
+        # Groups arrive in sorted-prefix order: InProgress, New, status.
+        assert by_name["status"]["transitions"] == [
+            {"from_state": "InProgress", "to_state": "Done"},
+            {"from_state": "New", "to_state": "InProgress"},
+            {"from_state": "New", "to_state": "Done"},
+            {"from_state": "New", "to_state": "InProgress"},
+            {"from_state": "InProgress", "to_state": "Done"},
+        ]
+        assert "transitions" not in by_name["priority"]
+
+    def test_state_prefixed_transitions_do_not_leak_into_another_field(self) -> None:
+        normalized = _normalize_legacy_excel_config(
+            {
+                "controlFields": "status,priority",
+                "status.columnNo": "4",
+                "status.value": "New,Done",
+                "priority.columnNo": "5",
+                "priority.value": "Low,High",
+                "Low.transition1": "Low-High",
+            }
+        )
+
+        by_name = {field["name"]: field for field in normalized["control_fields"]}
+        assert by_name["priority"]["transitions"] == [{"from_state": "Low", "to_state": "High"}]
+        assert "transitions" not in by_name["status"]
+
     def test_explicit_control_field_named_class_receives_its_transitions(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -264,6 +304,21 @@ class TestLegacyScalarKeys:
 
         assert getattr(project_config, field_name) == self.EXPECTED[field_name]
 
+    @pytest.mark.parametrize("config_class", [ExcelDefectClientConfig, ProjectConfig])
+    def test_the_dmproxy_lastedited_spelling_reaches_lastedit_column_no(
+        self, config_class: type[ExcelDefectClientConfig] | type[ProjectConfig]
+    ) -> None:
+        """Shipped DMProxy `.properties` files spell this key `defect.lastedited.columnNo`."""
+        data = {
+            key: value
+            for key, value in self.LEGACY_DATA.items()
+            if key != "defect.lastedit.columnNo"
+        }
+
+        config = config_class.model_validate({**data, "defect.lastedited.columnNo": "7"})
+
+        assert config.lastedit_column_no == 7
+
     def test_snake_case_keys_win_over_a_legacy_key_for_the_same_field(self) -> None:
         """Both spellings present is ambiguous; the modern one has always taken precedence."""
         config = ExcelDefectClientConfig.model_validate(
@@ -272,3 +327,66 @@ class TestLegacyScalarKeys:
 
         assert config.id_column_no == 9
         assert config.lastedit_column_no == 8
+
+
+@pytest.mark.unit
+class TestLegacyCompositeKeysOnProjectConfig:
+    """A project block must fold the legacy *composite* keys too, not just the scalar ones.
+
+    A per-project `<Project>.properties` file is exactly where the old flat spelling of control
+    fields, transitions and UDFs still lives, so `ProjectConfig` has to run the same
+    `mode="before"` normalization as `ExcelDefectClientConfig`. Without it those keys were
+    dropped by `extra="ignore"` and the project silently kept the global values.
+    """
+
+    def test_legacy_control_fields_become_control_field_models(self) -> None:
+        project_config = ProjectConfig.model_validate(
+            {
+                "controlFields": "status",
+                "status.columnNo": "7",
+                "status.value": "Open,Blocked",
+            }
+        )
+
+        assert project_config.control_fields == [
+            ControlFields(name="status", column_number=7, values=["Open", "Blocked"])
+        ]
+
+    def test_legacy_transitions_land_on_their_control_field(self) -> None:
+        project_config = ProjectConfig.model_validate(
+            {
+                "controlFields": "status",
+                "status.columnNo": "7",
+                "status.value": "Open,Blocked",
+                "status.transition.number": "1",
+                "status.transition1": "Open-Blocked",
+            }
+        )
+
+        assert project_config.control_fields is not None
+        assert project_config.control_fields[0].transitions == [
+            Transition(from_state="Open", to_state="Blocked")
+        ]
+
+    def test_legacy_udf_attributes_become_udf_models(self) -> None:
+        project_config = ProjectConfig.model_validate(
+            {
+                "udf.attr.number": "1",
+                "udf.attr1.name": "Reviewed",
+                "udf.attr1.column": "9",
+                "udf.attr1.type": "2",
+                "udf.attr1.trueValue": "yes",
+                "udf.attr1.falsevalue": "no",
+            }
+        )
+
+        assert project_config.udfs is not None
+        udf = project_config.udfs[0]
+        assert (udf.name, udf.column, udf.trueValue, udf.falseValue) == ("Reviewed", 9, "yes", "no")
+
+    def test_a_project_without_legacy_keys_leaves_the_fields_unset(self) -> None:
+        """Normalization must not invent values - unset is what makes the merge fall back."""
+        project_config = ProjectConfig.model_validate({"fileType": "csv"})
+
+        assert project_config.control_fields is None
+        assert project_config.udfs is None

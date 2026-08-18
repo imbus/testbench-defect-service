@@ -71,25 +71,51 @@ def _parse_legacy_transitions(data: dict[str, Any]) -> dict[str, list[dict[str, 
     return result
 
 
+def _control_field_owning_state(control_fields: list[dict[str, Any]], state: str) -> int | None:
+    """Return the index of the first control field that lists *state* among its values."""
+    for index, field in enumerate(control_fields):
+        if any(str(value) == state for value in field.get("values") or []):
+            return index
+    return None
+
+
 def _attach_legacy_transitions(
     normalized: dict[str, Any], legacy_transitions: dict[str, list[dict[str, str]]]
 ) -> None:
-    control_fields = normalized.get("control_fields") or []
-    by_name = {
-        _normalize_control_field_name(str(field["name"])): field
-        for field in control_fields
-        if isinstance(field, dict) and "name" in field
+    """Attach each legacy transition group to the control field it belongs to.
+
+    A group's key prefix is either the control field itself (`status.transition1`, the
+    spelling `docs/clients/excel-client.md` documents) or the state the transitions lead
+    away from (`New.transition1=New-InProgress`, the spelling the DMProxy connector
+    ships). State-keyed groups therefore all land on the same control field and have to
+    accumulate; a field that already declares `transitions` explicitly keeps them.
+    """
+    control_fields = [
+        field for field in normalized.get("control_fields") or [] if isinstance(field, dict)
+    ]
+    index_by_name = {
+        _normalize_control_field_name(str(field["name"])): index
+        for index, field in enumerate(control_fields)
+        if "name" in field
     }
-    for field_name, transitions in legacy_transitions.items():
-        target = by_name.get(field_name)
-        if target is None:
+
+    collected: dict[int, list[dict[str, str]]] = {}
+    for prefix, transitions in legacy_transitions.items():
+        index = index_by_name.get(prefix)
+        if index is None:
+            index = _control_field_owning_state(control_fields, prefix)
+        if index is None:
             logger.warning(
-                "Ignoring legacy transitions for '%s': not configured as a control field.",
-                field_name,
+                "Ignoring legacy transitions for '%s': neither a control field nor a value of one.",
+                prefix,
             )
             continue
-        if not target.get("transitions"):
-            target["transitions"] = transitions
+        if control_fields[index].get("transitions"):
+            continue
+        collected.setdefault(index, []).extend(transitions)
+
+    for index, transitions in collected.items():
+        control_fields[index]["transitions"] = transitions
 
 
 def _parse_legacy_udfs(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -157,6 +183,23 @@ def _normalize_legacy_excel_config(data: dict[str, Any]) -> dict[str, Any]:
             normalized["udfs"] = udfs
 
     return normalized
+
+
+class LegacyExcelConfigMixin:
+    """Fold the legacy composite `.properties` keys before either model validates.
+
+    Both the global config and a project block can arrive in the old flat spelling - a project
+    reads its own `<Project>.properties` file, which is precisely where that spelling survives.
+    Leaving this off `ProjectConfig` meant `extra="ignore"` swallowed `controlFields`,
+    `*.transitionN` and `udf.attrN.*`, and the project silently kept the global values.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_properties(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        return _normalize_legacy_excel_config(data)
 
 
 class Transition(BaseModel):
@@ -230,7 +273,7 @@ class UserDefiendAttributes(BaseModel):
         return value
 
 
-class ProjectConfig(BaseModel):
+class ProjectConfig(BaseModel, LegacyExcelConfigMixin):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     readonly: bool | None = None
@@ -302,7 +345,12 @@ class ProjectConfig(BaseModel):
     )
     lastedit_column_no: int | None = Field(
         default=None,
-        validation_alias=AliasChoices("lastedit_column_no", "defect.lastedit.columnNo"),
+        validation_alias=AliasChoices(
+            "lastedit_column_no",
+            "defect.lastedit.columnNo",
+            # Spelling shipped in the DMProxy connector's own `.properties` files.
+            "defect.lastedited.columnNo",
+        ),
         description="Column number in the Excel file that contains the defect last edit.",
     )
     description_column_no: int | None = Field(
@@ -380,7 +428,7 @@ class ProjectConfig(BaseModel):
     )
 
 
-class ExcelDefectClientConfig(BaseModel):
+class ExcelDefectClientConfig(BaseModel, LegacyExcelConfigMixin):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     system_name: str = Field(
@@ -467,7 +515,12 @@ class ExcelDefectClientConfig(BaseModel):
     )
     lastedit_column_no: int = Field(
         default=5,
-        validation_alias=AliasChoices("lastedit_column_no", "defect.lastedit.columnNo"),
+        validation_alias=AliasChoices(
+            "lastedit_column_no",
+            "defect.lastedit.columnNo",
+            # Spelling shipped in the DMProxy connector's own `.properties` files.
+            "defect.lastedited.columnNo",
+        ),
         description="Column number in the Excel file that contains the defect last edit.",
     )
     description_column_no: int = Field(
@@ -542,10 +595,3 @@ class ExcelDefectClientConfig(BaseModel):
         default=1024.0,
         validation_alias=AliasChoices("buffer_max_size_mib", "bufferMaxSizeMiB"),
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_legacy_properties(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        return _normalize_legacy_excel_config(data)

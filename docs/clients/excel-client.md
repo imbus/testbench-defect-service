@@ -399,6 +399,50 @@ values        = ["open", "closed"]
 
 The project key must match the subdirectory name under `excel_file_path`. Options that are not overridden fall back to the global values.
 
+### `<Project>.properties` beside the data
+
+A project directory may also carry a file named exactly like the project. If it
+exists it is read as an override — there is no option to switch it on:
+
+```
+excel_file_path/
+├── project_1/
+│   ├── project_1.properties   ← optional override, picked up automatically
+│   └── defects.xlsx
+└── project_2/                 ← no file, global config used as-is
+    └── defects.xlsx
+```
+
+```properties
+# project_1/project_1.properties
+fileType=.xls
+worksheetName=Defects 2026
+controlFields=status
+status.columnNo=5
+status.value=open,closed
+```
+
+Both the modern key names and the [legacy ones](#legacy-properties-configuration)
+work, including the composite forms (`controlFields`, `udf.attrN.*`,
+`<field>.transitionN`).
+
+Settings are layered nearest-last: global config, then the
+`[…client_config.projects.<name>]` table, then `<Project>.properties`. The file
+sits next to the data it describes, so it wins where both name the same key;
+keys it does not mention keep the value from the layer below.
+
+The file is re-read on each request, so edits take effect without a restart. If
+it cannot be read or a value is invalid, the whole file is skipped, a warning is
+logged, and the project keeps its configured values.
+
+:::note
+
+Only `<Project>.properties` is picked up — `<Project>.toml` is not. The name must
+match the directory exactly, including case. Since `.properties` is a Java format,
+`\` is an escape character in values: write paths as `C:/path/x` or `C:\\path\\x`.
+
+:::
+
 ---
 
 ## Sync hooks
@@ -495,6 +539,7 @@ udf.attr1.required=false
 | `defect.references.columnNo`   | `references_column_no`            |
 | `defect.discoverer.columnNo`   | `discoverer_column_no`            |
 | `defect.lastedit.columnNo`     | `lastedit_column_no`              |
+| `defect.lastedited.columnNo`   | `lastedit_column_no`              |
 | `defect.description.columnNo`  | `description_column_no`           |
 | `defect.references.separator`  | `references_separator`            |
 | `defect.id.prefix`             | `id_prefix`                       |
@@ -509,7 +554,7 @@ Structured settings are reassembled from their numbered legacy keys:
 | Legacy pattern                                                                                           | Becomes                                                                                                                                             |
 | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `controlFields`, `<field>.columnNo`, `<field>.value`                                               | one`control_fields` entry per listed field (`class` → `classification`)                                                                      |
-| `<field>.transition<n>` with a `from-to` value                                                       | one`transitions` entry on the `<field>` control field (`class` → `classification`); a prefix naming no control field is logged and ignored |
+| `<field>.transition<n>` or `<state>.transition<n>` with a `from-to` value                             | one`transitions` entry on the control field named by the prefix (`class` → `classification`), or on the field that lists the prefix among its `values`; a prefix that is neither is logged and ignored |
 | `udf.attr<n>.name`, `.column`, `.type`, `.required`, `.value`, `.trueValue`, `.falseValue` | one`udfs` entry each                                                                                                                              |
 
 :::note

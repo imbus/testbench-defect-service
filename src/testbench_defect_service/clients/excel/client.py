@@ -6,10 +6,11 @@ from pathlib import Path
 from typing import Any, cast
 
 import pandas as pd
+from pydantic import ValidationError
 from sanic import NotFound, ServerError
 
 from testbench_defect_service.clients.abstract_client import AbstractDefectClient
-from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig
+from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig, ProjectConfig
 from testbench_defect_service.clients.excel.file_utils import (
     read_data_frame_from_file_path,
     write_defect_data,
@@ -33,7 +34,10 @@ from testbench_defect_service.clients.excel.utils import (
     to_python_datetime_format,
     validate_control_fields,
 )
-from testbench_defect_service.clients.utils import execute_sync_hook
+from testbench_defect_service.clients.utils import (
+    execute_sync_hook,
+    load_properties_config_from_path,
+)
 from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import (
     Defect,
@@ -692,20 +696,18 @@ class ExcelDefectClient(AbstractDefectClient):
     def _get_config_value(self, attr: str, project: str | None = None) -> Any:
         """
         Retrieve a configuration value, optionally project-specific, falling back to global config.
+
+        This reads the *effective* config rather than `config.projects` directly. Reading the
+        latter skipped `<Project>.properties` entirely, so a file overriding e.g. `fileType`
+        silently did nothing while the same key set in `config.toml` worked.
+
         Args:
             attr (str): The attribute name to retrieve.
             project (str | None): The project name, if any.
         Returns:
             The value of the attribute, or None if not found.
         """
-        if project and project in self.config.projects:
-            project_config = self.config.projects[project]
-            value = getattr(project_config, attr, None)
-            if value is not None:
-                logger.debug("Using project-specific config for '%s.%s'", project, attr)
-                return value  # type: ignore
-        logger.debug("Using global config for '%s'", attr)
-        return getattr(self.config, attr, None)  # type: ignore
+        return getattr(self._get_effective_config(project), attr, None)  # type: ignore
 
     def _get_buffer_cleanup_interval_seconds(self, config: ExcelDefectClientConfig) -> float:
         return float(getattr(config, "buffer_cleanup_interval_minutes", 0) or 0) * 60
@@ -719,8 +721,13 @@ class ExcelDefectClient(AbstractDefectClient):
         life of the process. The tick is the shortest interval anyone asked for; the age is the
         longest, so this never purges an entry earlier than its own config allows. Each project's
         exact age is still enforced on read, by `_purge_expired_entries` in `_get_dataframe`.
+
+        The project list is every directory on disk plus every configured block: a project can be
+        configured by its own `<Project>.properties` file with no entry in `config.toml` at all,
+        and one can have a `config.toml` block before its directory exists.
         """
-        configs = [self.config, *(self._get_effective_config(p) for p in self.config.projects)]
+        projects = sorted(set(self.get_projects()) | set(self.config.projects))
+        configs = [self.config, *(self._get_effective_config(p) for p in projects)]
         intervals = [
             seconds
             for config in configs
@@ -753,14 +760,70 @@ class ExcelDefectClient(AbstractDefectClient):
             max_age_seconds,
         )
 
+    def _load_project_properties(self, project: str) -> ProjectConfig | None:
+        """Read the optional `<Project>.properties` file beside the project's data.
+
+        Existence of the file is the switch - there is nothing to enable. It is re-read on every
+        call, which costs a `stat()` plus a parse and buys live reload; cache it by
+        `(path, mtime)` if it ever shows up in a hot path.
+        """
+        try:
+            project_path = self._resolve_project_path(project)
+        except FileNotFoundError:
+            return None
+
+        properties_path = project_path / f"{project}.properties"
+        if not properties_path.is_file():
+            return None
+
+        try:
+            data = load_properties_config_from_path(properties_path)
+        except ImportError as exc:
+            # The raising loader, not `utils.config.load_properties_config`: that one prints to
+            # stdout and returns `{}`, which makes a broken file indistinguishable from no file.
+            logger.warning(
+                "Ignoring unreadable '%s'; project '%s' keeps its configured values: %s",
+                properties_path.name,
+                project,
+                exc.__cause__ or exc,
+            )
+            return None
+        if not data:
+            return None
+
+        try:
+            return ProjectConfig.model_validate(data)
+        except ValidationError as exc:
+            logger.warning(
+                "Ignoring invalid '%s'; project '%s' keeps its configured values: %s",
+                properties_path.name,
+                project,
+                exc,
+            )
+            return None
+
     def _get_effective_config(self, project: str | None) -> ExcelDefectClientConfig:
-        if not project or project not in self.config.projects:
+        """Layer the project's overrides onto the global config, nearest source last.
+
+        Global config, then the `[projects.<name>]` block, then `<Project>.properties`: the file
+        lives next to the data it describes, so it is the more local statement and wins where both
+        name the same key. Keys a layer leaves unset fall through to the one below - which is what
+        `exclude_none=True` buys, and why every field of `ProjectConfig` must stay defaultless.
+        """
+        if not project:
+            logger.debug("Using global config for project '%s'", project)
+            return self.config
+
+        layers = (self.config.projects.get(project), self._load_project_properties(project))
+        overrides = [override for override in layers if override is not None]
+        if not overrides:
             logger.debug("Using global config for project '%s'", project)
             return self.config
 
         logger.debug("Merging project-specific config for project '%s'", project)
         merged_config = self.config.model_dump()
-        merged_config.update(self.config.projects[project].model_dump(exclude_none=True))
+        for override in overrides:
+            merged_config.update(override.model_dump(exclude_none=True))
         merged_config["projects"] = self.config.projects
         return ExcelDefectClientConfig.model_validate(merged_config)
 
