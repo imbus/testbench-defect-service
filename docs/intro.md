@@ -61,6 +61,7 @@ The backend is selected via the `client_class` configuration key and can be swit
 
 - **New here?** Start with the [Installation](getting-started/installation.md) and [Quickstart](getting-started/quickstart.md) guides.
 - **Configuring the service?** See the [Configuration](configuration.md) page.
+- **Coming from a legacy wrapper?** The [Migration guide](migration.md) converts an existing Jira `.conf` or Excel `.properties` file into a `config.toml`.
 - **Choosing a client?** Check the [Clients overview](clients/index.md), then dive into [JSONL](clients/jsonl-client.md), [Excel](clients/excel-client.md) or [Jira](clients/jira-client.md).
 - **Running as a Windows service?** See the [Windows service guide](windows-service-installation.md).
 - **CLI reference?** See the [CLI commands](cli.md) page.

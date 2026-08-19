@@ -1,5 +1,5 @@
 ---
-sidebar_position: 6
+sidebar_position: 7
 title: CLI Commands
 ---
 
@@ -140,6 +140,11 @@ on the first start.
 ```bash
 testbench-defect-service migrate --from PATH [OPTIONS]
 ```
+
+:::tip
+The [Migration guide](migration.md) walks through the whole procedure — which legacy keys are
+carried over, what you are asked for, and how to reconnect TestBench afterwards.
+:::
 
 ### Options
 

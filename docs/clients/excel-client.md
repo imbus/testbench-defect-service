@@ -479,6 +479,12 @@ for the shared reference.
 
 The client accepts the key names used by the legacy DMProxy Excel connector, so an existing `.properties` file can be reused as-is:
 
+:::tip
+To convert the file into a regular `config.toml` instead of pointing at it, run
+`testbench-defect-service migrate --from <file>.properties` — see the
+[Migration guide](../migration.md).
+:::
+
 ```toml
 # config.toml
 [testbench-defect-service]
