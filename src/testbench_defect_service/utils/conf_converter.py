@@ -26,6 +26,9 @@ from testbench_defect_service.utils.wizard import SCHEMA_KEYS, get_field_extra, 
 EXCEL_CLIENT_CLASS = "testbench_defect_service.clients.ExcelDefectClient"
 JIRA_CLIENT_CLASS = "testbench_defect_service.clients.JiraDefectClient"
 
+#: Which legacy wrapper format each file extension stands for.
+LEGACY_SOURCE_TYPES: dict[str, str] = {".conf": "jira", ".properties": "excel"}
+
 # The legacy wrappers were configured per system by an administrator, so a file that says
 # nothing about writing must not convert into a client that writes.
 READONLY_ALIASES = ("readonly", "readOnly")
@@ -38,12 +41,6 @@ class ConfConversionError(Exception):
 AUTH_TYPE_FIELD = "auth_type"
 SERVER_URL_FIELD = "server_url"
 
-# Legacy .conf keys that can pre-fill a prompt default. They are only used when
-# present, so an unknown legacy layout simply yields no default.
-CONF_DEFAULT_KEYS: dict[str, tuple[str, ...]] = {
-    "username": ("jira.username", "jira.user", "jira.login"),
-}
-
 # Legacy .conf keys that map onto a `JiraDefectClientConfig` field. Everything not listed
 # here is left to the model's own default, so this only has to cover what the .conf knows.
 CONF_FIELD_KEYS: dict[str, tuple[str, ...]] = {
@@ -52,6 +49,13 @@ CONF_FIELD_KEYS: dict[str, tuple[str, ...]] = {
     "defect_jql": ("jira.baseQuery",),
     "readonly": ("wrapper.readonly",),
     "timeout": ("wrapper.timeout_seconds",),
+}
+
+# Legacy .conf keys that can pre-fill a prompt default. They are only used when
+# present, so an unknown legacy layout simply yields no default.
+CONF_DEFAULT_KEYS: dict[str, tuple[str, ...]] = {
+    SERVER_URL_FIELD: CONF_FIELD_KEYS[SERVER_URL_FIELD],
+    "username": ("jira.username", "jira.user", "jira.login"),
 }
 
 
@@ -104,13 +108,19 @@ def parse_properties_file(file_path: Path) -> dict[str, Any]:
 
 
 def auth_field_names() -> set[str]:
-    """Return ``auth_type`` plus every field whose ``depends_on`` names it.
+    """Return the server URL, ``auth_type`` and every field whose ``depends_on`` names it.
 
-    Which of these are actually asked for is decided by the wizard at runtime from
-    the chosen ``auth_type``, so this only has to bound the prompts to the
-    authentication part of the model — server URL, SSL and timeout settings stay out.
+    Which of the dependent fields are actually asked for is decided by the wizard at
+    runtime from the chosen ``auth_type``, so this only has to bound the prompts to the
+    connection and authentication part of the model — SSL and timeout settings stay out.
+
+    ``server_url`` belongs here even though the legacy .conf supplies it:
+    ``prompt_model_fields`` validates its answers against the whole
+    ``JiraDefectClientConfig``, in which it is the one required field. Leaving it out makes
+    that validation fail with ``server_url: Field required``, and because the field can then
+    never be filled in, the wizard's retry loop restarts forever.
     """
-    names = {AUTH_TYPE_FIELD}
+    names = {SERVER_URL_FIELD, AUTH_TYPE_FIELD}
     for field_name, field_info in JiraDefectClientConfig.model_fields.items():
         dependency = get_field_extra(field_info).get(SCHEMA_KEYS["DEPENDS_ON"])
         if isinstance(dependency, dict) and AUTH_TYPE_FIELD in dependency:
@@ -314,7 +324,9 @@ def generate_jira_base_toml(
     return build_service_toml(JIRA_CLIENT_CLASS, client_config, credentials)
 
 
-def generate_excel_base_toml(properties: dict[str, Any], credentials: tuple[str, str]) -> str:
+def generate_excel_base_toml(
+    properties: dict[str, Any], credentials: tuple[str, str] | None = None
+) -> str:
     """
     Generates a TOML string for the Excel base configuration.
 
@@ -327,7 +339,50 @@ def generate_excel_base_toml(properties: dict[str, Any], credentials: tuple[str,
         ConfConversionError: When the interactive credentials setup is cancelled, or when the
             result is not a valid ``ExcelDefectClientConfig``.
     """
+    # Validate before asking for a login: an unconvertible file must say so without
+    # making the user enter a password first.
     client_config = build_client_config(
         ExcelDefectClientConfig, properties, "the Excel .properties file"
     )
+
+    if credentials is None:
+        credentials = prompt_service_credentials()
+        if credentials is None:
+            raise ConfConversionError("Service credentials setup was cancelled")
+
     return build_service_toml(EXCEL_CLIENT_CLASS, client_config, credentials)
+
+
+def detect_source_type(legacy_path: Path) -> str | None:
+    """Return the legacy wrapper format implied by *legacy_path*'s extension, if any."""
+    return LEGACY_SOURCE_TYPES.get(legacy_path.suffix.lower())
+
+
+def convert_legacy_config(legacy_path: Path, source_type: str | None = None) -> str:
+    """Convert a legacy wrapper configuration file into a service TOML document.
+
+    Pairs each legacy format with the parser that reads its key spelling and the generator
+    that validates it against the matching client model, so callers only supply the file.
+
+    Args:
+        legacy_path (Path): The legacy ``.conf`` or ``.properties`` file to convert.
+        source_type (str | None): ``"jira"`` or ``"excel"``. Detected from the file
+            extension when omitted.
+
+    Raises:
+        ConfConversionError: When the format cannot be detected, when the file cannot be
+            parsed, when an interactive setup step is cancelled, or when the result is not
+            a valid client configuration.
+    """
+    source_type = source_type or detect_source_type(legacy_path)
+
+    if source_type == "jira":
+        return generate_jira_base_toml(parse_conf_file(legacy_path))
+    if source_type == "excel":
+        return generate_excel_base_toml(parse_properties_file(legacy_path))
+
+    known = ", ".join(sorted(set(LEGACY_SOURCE_TYPES.values())))
+    raise ConfConversionError(
+        f"Cannot tell the legacy format of '{legacy_path.name}' from its extension. "
+        f"Name the source type explicitly ({known})."
+    )

@@ -144,7 +144,7 @@ class ExcelDefectClient(AbstractDefectClient):
             df, effective_config, sync_context, protocol, file_name=defect_path.name
         )
         if not defects:
-            protocol.add_general_warning(
+            protocol.add_general_error(
                 f"No defects were found in '{defect_path.name}' for project '{project}'.",
                 protocol_code=ProtocolCode.NO_DEFECT_FOUND,
             )

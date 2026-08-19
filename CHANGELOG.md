@@ -8,8 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `migrate` command to convert a legacy `.conf` (Jira) or `.properties` (Excel)
+  wrapper configuration into a TOML configuration file. The converted values are
+  validated against the client models, the authentication settings and service
+  credentials the legacy formats never carried are asked for interactively, and an
+  existing configuration file is backed up before being replaced.
+
 ### Fixed
 
+- The Jira legacy-configuration prompts no longer restart forever. The server URL was
+  missing from the prompted field set while the collected answers were validated
+  against the whole `JiraDefectClientConfig`, in which it is the only required field,
+  so validation always failed with `server_url: Field required` and the wizard's retry
+  loop could never terminate. The server URL is now prompted for and pre-filled from
+  the legacy `jira.baseUri` entry.
 - An empty row in an Excel or delimited defect file no longer fails the whole
   file. Empty rows are skipped with a single import warning per synchronization
   and are preserved in the file when defects are created, updated or deleted.

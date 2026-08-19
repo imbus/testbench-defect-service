@@ -11,7 +11,13 @@ from sanic.worker.loader import AppLoader
 from testbench_defect_service import __title__, __version__
 from testbench_defect_service.app import AppConfig, create_app
 from testbench_defect_service.log import logger
+from testbench_defect_service.utils.conf_converter import (
+    LEGACY_SOURCE_TYPES,
+    ConfConversionError,
+    convert_legacy_config,
+)
 from testbench_defect_service.utils.config_wizard import (
+    backup_config_file,
     configure_client_only,
     configure_credentials_only,
     configure_service_only,
@@ -273,9 +279,58 @@ def set_credentials(config_path, username, password):
     configure_credentials_only(config_path, username=username, password=password)
 
 
+@click.command()
+@click.option(
+    "--from",
+    "legacy_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    metavar="PATH",
+    help="Path to the legacy .conf / .properties file to convert",
+)
+@click.option(
+    "--path",
+    "config_path",
+    type=click.Path(dir_okay=False, writable=True, path_type=Path),
+    metavar="PATH",
+    default="config.toml",
+    help="Path to the app config file to write",
+)
+@click.option(
+    "--type",
+    "source_type",
+    type=click.Choice(sorted(set(LEGACY_SOURCE_TYPES.values()))),
+    help="Legacy source type  [default: detected from the file extension]",
+)
+def migrate(legacy_path: Path, config_path: Path, source_type: str | None):
+    """Convert a legacy .conf/.properties file into a TOML configuration.
+
+    The conversion runs to completion before anything is written, so cancelling one of
+    its prompts leaves an existing configuration exactly as it was.
+    """
+    print_wizard_banner()
+
+    try:
+        config_toml = convert_legacy_config(legacy_path, source_type)
+    except ConfConversionError as e:
+        raise click.ClickException(str(e)) from e
+
+    if not backup_config_file(config_path):
+        return
+
+    config_path.write_text(config_toml, encoding="utf-8")
+
+    click.echo(f"\n✓ Created {config_path.name}")
+    click.echo("\nNext steps:")
+    click.echo("  1. Review the generated configuration file")
+    click.echo("  2. Start the service with: testbench-defect-service start")
+    click.echo()
+
+
 cli.add_command(init)
 cli.add_command(configure)
 cli.add_command(set_credentials)
+cli.add_command(migrate)
 cli.add_command(start)
 
 if __name__ == "__main__":
