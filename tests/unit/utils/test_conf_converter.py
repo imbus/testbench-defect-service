@@ -535,3 +535,160 @@ class TestConvertLegacyConfig:
             convert_legacy_config(legacy_path)
 
     _AUTH: ClassVar[dict[str, Any]] = {"auth_type": "token", "token": "pat-123"}
+
+
+@pytest.mark.unit
+class TestUnusableLegacyFilesAreRejected:
+    """A file the converter cannot read has to say where and why.
+
+    The old message was pydantic-free but useless: `not enough values to unpack
+    (expected 2, got 1)` named neither the file, the line nor the format mix-up that
+    usually causes it.
+    """
+
+    def test_a_malformed_conf_line_names_the_file_and_the_line(self, tmp_path) -> None:
+        legacy_path = tmp_path / "jira.conf"
+        legacy_path.write_text(
+            "wrapper.name: JiraWrapper\nthis line has no separator\n", encoding="utf-8"
+        )
+
+        with pytest.raises(ConfConversionError) as error:
+            convert_legacy_config(legacy_path)
+
+        assert "jira.conf line 2" in str(error.value)
+        assert "this line has no separator" in str(error.value)
+
+    def test_a_properties_file_read_as_jira_points_at_the_excel_type(self, tmp_path) -> None:
+        """The `=` on the offending line is the giveaway, so say so."""
+        legacy_path = tmp_path / "wrapper.txt"
+        legacy_path.write_text(_LEGACY_PROPERTIES_TEXT, encoding="utf-8")
+
+        with pytest.raises(ConfConversionError, match="--type excel"):
+            convert_legacy_config(legacy_path, source_type="jira")
+
+    def test_a_conf_file_read_as_excel_points_at_the_jira_type(self, tmp_path) -> None:
+        legacy_path = _write_legacy_conf(tmp_path, name="wrapper.txt")
+
+        with pytest.raises(ConfConversionError, match="--type jira"):
+            convert_legacy_config(legacy_path, source_type="excel")
+
+    def test_a_key_set_twice_to_different_values_is_rejected(self, tmp_path) -> None:
+        """Silently keeping the last one migrates a setting the user never chose."""
+        legacy_path = tmp_path / "jira.conf"
+        legacy_path.write_text(
+            "jira.baseUri: https://one.example.com\njira.baseUri: https://two.example.com\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ConfConversionError) as error:
+            convert_legacy_config(legacy_path)
+
+        message = str(error.value)
+        assert "jira.baseUri" in message
+        assert "https://one.example.com" in message
+        assert "https://two.example.com" in message
+
+    def test_a_key_repeated_with_the_same_value_converts(self, tmp_path) -> None:
+        """A duplicate that says the same thing twice is not a conflict."""
+        legacy_path = tmp_path / "jira.conf"
+        legacy_path.write_text(
+            f"{_LEGACY_CONF_TEXT}jira.baseUri: {_SERVER_URL}\n", encoding="utf-8"
+        )
+
+        with (
+            patch(f"{_CONVERTER}.prompt_service_credentials", return_value=_CREDENTIALS),
+            patch(f"{_CONVERTER}.prompt_jira_auth_config", return_value=self._AUTH),
+        ):
+            toml_text = convert_legacy_config(legacy_path)
+
+        client_config = tomllib.loads(toml_text)["testbench-defect-service"]["client_config"]
+        assert client_config["server_url"] == _SERVER_URL
+
+    _AUTH: ClassVar[dict[str, Any]] = {"auth_type": "token", "token": "pat-123"}
+
+
+@pytest.mark.unit
+class TestUnsupportedLegacyEntriesAreReported:
+    """Both client models ignore what they do not know, so a legacy setting with no
+    equivalent disappears into a migration that reports success. The keys that were left
+    behind have to be named, or the user cannot tell a full migration from a partial one.
+    """
+
+    def test_legacy_conf_entries_with_no_equivalent_are_named(self, capsys) -> None:
+        conf_data = {**_CONF_DATA, "jira.password": "secret", "wrapper.class": "com.example.Old"}
+
+        generate_jira_base_toml(conf_data, dict(self._AUTH), _CREDENTIALS)
+
+        output = capsys.readouterr().out
+        assert "jira.password" in output
+        assert "wrapper.class" in output
+
+    def test_an_unsupported_entry_does_not_stop_the_conversion(self, capsys) -> None:
+        properties = {**_EXCEL_PROPERTIES, "wrapper.someRetiredFlag": "true"}
+
+        toml_text = generate_excel_base_toml(properties, _CREDENTIALS)
+
+        assert "wrapper.someRetiredFlag" in capsys.readouterr().out
+        client_config = tomllib.loads(toml_text)["testbench-defect-service"]["client_config"]
+        assert client_config["excel_file_path"] == r"C:\defects"
+
+    def test_a_fully_supported_legacy_file_reports_nothing(self, capsys) -> None:
+        """The composite `.properties` keys are read by the model's own normalization
+        rather than by an alias, so a naive alias comparison would report every one of
+        them as lost."""
+        generate_excel_base_toml(_EXCEL_PROPERTIES, _CREDENTIALS)
+
+        assert "not carried over" not in capsys.readouterr().out
+
+    def test_the_conf_keys_that_only_pre_fill_a_prompt_are_not_reported(self, capsys) -> None:
+        """`jira.username` becomes the default of the username prompt, so it is carried
+        over even though no model field reads it directly."""
+        generate_jira_base_toml(
+            {**_CONF_DATA, "jira.username": "someone"}, dict(self._AUTH), _CREDENTIALS
+        )
+
+        assert "jira.username" not in capsys.readouterr().out
+
+    _AUTH: ClassVar[dict[str, Any]] = {"auth_type": "token", "token": "pat-123"}
+
+
+@pytest.mark.unit
+class TestTheUnsupportedReportIsVisible:
+    """A dropped setting the user scrolls past is as good as one that was never reported."""
+
+    def test_each_unsupported_key_is_listed_on_its_own_line(self, capsys) -> None:
+        """A comma-separated run of keys is what makes a long list unreadable."""
+        properties = {
+            **_EXCEL_PROPERTIES,
+            "wrapper.someRetiredFlag": "true",
+            "wrapper.anotherRetiredFlag": "false",
+        }
+
+        generate_excel_base_toml(properties, _CREDENTIALS)
+
+        lines = capsys.readouterr().out.splitlines()
+        assert [line for line in lines if "wrapper.someRetiredFlag" in line] == [
+            "  • wrapper.someRetiredFlag"
+        ]
+        assert [line for line in lines if "wrapper.anotherRetiredFlag" in line] == [
+            "  • wrapper.anotherRetiredFlag"
+        ]
+
+    def test_the_report_is_framed_so_it_stands_out(self, capsys) -> None:
+        generate_excel_base_toml({**_EXCEL_PROPERTIES, "wrapper.retired": "true"}, _CREDENTIALS)
+
+        assert "═" * 60 in capsys.readouterr().out
+
+    def test_a_cancelled_login_reports_nothing(self, capsys) -> None:
+        """The report describes a configuration that is about to be written, so it must
+        come after the last prompt that can still abort the migration - otherwise it
+        scrolls off behind the login and describes a file that never appears."""
+        questionary = _questionary_mock(texts=[None])
+
+        with (
+            patch(f"{_CONFIG_WIZARD}.questionary", questionary),
+            pytest.raises(ConfConversionError, match="credentials"),
+        ):
+            generate_excel_base_toml({**_EXCEL_PROPERTIES, "wrapper.retired": "true"})
+
+        assert "carried over" not in capsys.readouterr().out

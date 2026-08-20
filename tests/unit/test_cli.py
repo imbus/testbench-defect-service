@@ -166,6 +166,40 @@ def test_migrate_converts_an_unknown_extension_when_the_type_is_given(tmp_path, 
 
 
 @pytest.mark.unit
+def test_migrate_rejects_an_inconsistent_file_without_writing_anything(tmp_path, answered_prompts):
+    """An inconsistent legacy file must abort with an explanation, not migrate halfway."""
+    legacy_path = tmp_path / "jira.conf"
+    legacy_path.write_text(
+        "jira.baseUri: https://one.example.com\njira.baseUri: https://two.example.com\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(_PREVIOUS_CONFIG, encoding="utf-8")
+
+    result = run_migrate(legacy_path, config_path)
+
+    assert result.exit_code != 0
+    assert "jira.baseUri" in result.output
+    assert "Traceback" not in result.output
+    assert config_path.read_text(encoding="utf-8") == _PREVIOUS_CONFIG
+    assert not list(tmp_path.glob("config.toml.backup*"))
+
+
+@pytest.mark.unit
+def test_migrate_names_the_line_it_could_not_read(tmp_path, answered_prompts):
+    """A file the parser chokes on has to say where, so the user can fix that line."""
+    legacy_path = tmp_path / "jira.conf"
+    legacy_path.write_text("wrapper.name: X\nthis line has no separator\n", encoding="utf-8")
+    config_path = tmp_path / "config.toml"
+
+    result = run_migrate(legacy_path, config_path)
+
+    assert result.exit_code != 0
+    assert "jira.conf line 2" in result.output
+    assert not config_path.exists()
+
+
+@pytest.mark.unit
 def test_migrate_is_registered_on_the_cli():
     """A command that is not registered is unreachable, which is the bug being fixed."""
     assert "migrate" in cli_module.cli.commands

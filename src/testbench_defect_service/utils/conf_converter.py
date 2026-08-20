@@ -1,11 +1,15 @@
+import re
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import click
 import tomli_w
-from pydantic import BaseModel, ValidationError
+from pydantic import AliasChoices, BaseModel, ValidationError
 
-from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig
+from testbench_defect_service.clients.excel.config import (
+    LEGACY_COMPOSITE_KEY_PATTERNS,
+    ExcelDefectClientConfig,
+)
 from testbench_defect_service.clients.jira.config import AUTH_OAUTH2_3LO, JiraDefectClientConfig
 from testbench_defect_service.clients.jira.jira_oauth import (
     has_cached_refresh_token,
@@ -59,52 +63,130 @@ CONF_DEFAULT_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 
+#: Every legacy .conf key spelling the conversion reads, from either map above. Anything
+#: else in a .conf file lands nowhere, which `report_unsupported_keys` reports.
+CONF_KEYS_READ: frozenset[str] = frozenset(
+    key for keys in (*CONF_FIELD_KEYS.values(), *CONF_DEFAULT_KEYS.values()) for key in keys
+)
+
+
+class _LegacyLineFormat(NamedTuple):
+    """How one legacy wrapper format writes a flat `key<separator>value` line."""
+
+    separator: str
+    #: How an entry is spelled in this format, quoted back at the user in a parse error.
+    line_example: str
+    comment_prefixes: tuple[str, ...]
+    strip_quotes: bool
+    #: The separator, name and `--type` of the *other* format, so a file migrated as the
+    #: wrong one can be told apart from a genuinely broken line.
+    other_separator: str
+    other_description: str
+    other_source_type: str
+
+
+_CONF_LINE_FORMAT = _LegacyLineFormat(
+    separator=":",
+    line_example="key: value",
+    comment_prefixes=("#",),
+    strip_quotes=True,
+    other_separator="=",
+    other_description="an Excel .properties file",
+    other_source_type="excel",
+)
+
+_PROPERTIES_LINE_FORMAT = _LegacyLineFormat(
+    separator="=",
+    line_example="key=value",
+    comment_prefixes=("#", "!"),
+    strip_quotes=False,
+    other_separator=":",
+    other_description="a Jira .conf file",
+    other_source_type="jira",
+)
+
+
+def _wrong_format_hint(line: str, line_format: _LegacyLineFormat) -> str:
+    """Suggest the other `--type` when *line* is separated the other format's way.
+
+    A wrapper file migrated as the wrong format fails on its very first entry, and the
+    fix is a different `--type` rather than an edit to the file.
+    """
+    if line_format.other_separator not in line:
+        return ""
+    return (
+        f" This line uses '{line_format.other_separator}' - is this "
+        f"{line_format.other_description}? Migrate it with "
+        f"--type {line_format.other_source_type}."
+    )
+
+
+def _parse_legacy_file(file_path: Path, line_format: _LegacyLineFormat) -> dict[str, Any]:
+    """Read a flat legacy configuration file into a dictionary of raw string values.
+
+    Every rejection names the file and the line number, because a legacy file is edited by
+    hand and the user has to be able to find the entry being complained about.
+
+    Raises:
+        ConfConversionError: When the file is missing or unreadable, when a line carries no
+            separator, or when a key is set twice to different values.
+    """
+    if not file_path.exists():
+        raise ConfConversionError(f"Configuration file not found: {file_path}")
+
+    try:
+        lines = file_path.read_text(encoding="utf-8").splitlines()
+    except OSError as e:
+        raise ConfConversionError(f"Failed to read {file_path.name}: {e}") from e
+
+    config: dict[str, Any] = {}
+    for number, raw_line in enumerate(lines, start=1):
+        line = raw_line.strip()
+        if not line or line.startswith(line_format.comment_prefixes):
+            continue
+
+        if line_format.separator not in line:
+            raise ConfConversionError(
+                f"{file_path.name} line {number}: expected "
+                f"'{line_format.line_example}', got '{line}'."
+                f"{_wrong_format_hint(line, line_format)}"
+            )
+
+        raw_key, raw_value = line.split(line_format.separator, 1)
+        key = raw_key.strip()
+        value = raw_value.strip()
+        if line_format.strip_quotes:
+            value = value.removeprefix('"').removesuffix('"')
+
+        previous = config.get(key)
+        if previous is not None and previous != value:
+            raise ConfConversionError(
+                f"{file_path.name} line {number}: '{key}' is set twice, to '{previous}' and "
+                f"'{value}'. Remove one of them before migrating."
+            )
+        config[key] = value
+
+    return config
+
+
 def parse_conf_file(file_path: Path) -> dict[str, Any]:
     """
-    Parses a configuration file and returns its contents as a dictionary.
+    Parses a legacy Jira `.conf` file and returns its contents as a dictionary.
 
     Args:
         file_path (Path): The path to the configuration file.
     """
-    config: dict[str, Any] = {}
-
-    try:
-        if not file_path.exists():
-            raise FileNotFoundError(f"Configuration file not found: {file_path}")
-        with file_path.open("r", encoding="utf-8") as file:
-            for raw_line in file:
-                line = raw_line.strip()
-                if line and not line.startswith("#"):
-                    key, value = line.split(":", 1)
-                    config[key.strip()] = value.strip().removeprefix('"').removesuffix('"')
-    except Exception as e:
-        raise ConfConversionError(f"Failed to parse configuration file: {e}") from e
-
-    return config
+    return _parse_legacy_file(file_path, _CONF_LINE_FORMAT)
 
 
 def parse_properties_file(file_path: Path) -> dict[str, Any]:
     """
-    Parses a .properties configuration file and returns its contents as a dictionary.
+    Parses a legacy `.properties` file and returns its contents as a dictionary.
 
     Args:
         file_path (Path): The path to the .properties configuration file.
     """
-    config: dict[str, Any] = {}
-
-    try:
-        if not file_path.exists():
-            raise FileNotFoundError(f"Configuration file not found: {file_path}")
-        with file_path.open("r", encoding="utf-8") as file:
-            for line in file:
-                raw_line = line.strip()
-                if raw_line and not raw_line.startswith(("#", "!")):
-                    key, value = line.split("=", 1)
-                    config[key.strip()] = value.strip()
-    except Exception as e:
-        raise ConfConversionError(f"Failed to parse configuration file: {e}") from e
-
-    return config
+    return _parse_legacy_file(file_path, _PROPERTIES_LINE_FORMAT)
 
 
 def auth_field_names() -> set[str]:
@@ -219,6 +301,83 @@ def _describe_validation_errors(error: ValidationError) -> str:
     )
 
 
+def recognized_legacy_keys(config_class: type[BaseModel]) -> set[str]:
+    """Return every key spelling *config_class* reads: field names and validation aliases.
+
+    The legacy key names live on the model itself, as the `AliasChoices` of each field, so
+    asking the model is what keeps this from becoming a second list to maintain.
+    """
+    names: set[str] = set()
+    for field_name, field_info in config_class.model_fields.items():
+        names.add(field_name)
+        alias = field_info.validation_alias
+        if isinstance(alias, AliasChoices):
+            names.update(str(choice) for choice in alias.choices)
+        elif isinstance(alias, str):
+            names.add(alias)
+        if field_info.alias:
+            names.add(field_info.alias)
+    return names
+
+
+def report_unsupported_keys(
+    legacy_config: dict[str, Any],
+    config_class: type[BaseModel],
+    keys_read: frozenset[str] = frozenset(),
+    composite_patterns: tuple[re.Pattern[str], ...] = (),
+) -> list[str]:
+    """Echo the legacy entries that nothing in the conversion reads, and return their keys.
+
+    Both client models are `extra="ignore"`, so a legacy setting with no equivalent here is
+    dropped without a word and the migration still reports success. Naming the keys is what
+    lets the user tell a complete migration from a partial one - and the file being
+    converted stays on disk, so a setting that mattered can be applied by hand.
+
+    Args:
+        legacy_config (dict): The legacy entries, in their own key spelling.
+        config_class (type[BaseModel]): The client config model the conversion validates
+            against; its field names and aliases are the keys that survive.
+        keys_read (frozenset): Key spellings the converter itself reads instead of the
+            model, such as the .conf keys that only pre-fill a prompt.
+        composite_patterns (tuple): Patterns for keys a `mode="before"` validator folds
+            into a nested model, which no alias mentions.
+    """
+    recognized = recognized_legacy_keys(config_class) | keys_read
+    unsupported = sorted(
+        key
+        for key in legacy_config
+        if key not in recognized
+        and not any(pattern.fullmatch(key) for pattern in composite_patterns)
+    )
+
+    if unsupported:
+        _echo_unsupported_report(unsupported)
+
+    return unsupported
+
+
+def _echo_unsupported_report(unsupported: list[str]) -> None:
+    """Print *unsupported* as a framed block, one key per line.
+
+    The migration ends in a wall of prompts and a success message, so a warning that is
+    only two lines long is read as part of the noise. This is the one thing on screen the
+    user has to act on, so it is framed like the wizard's own section headings, coloured,
+    and listed one key per line - a comma-separated run of a dozen keys is skipped, not
+    read.
+    """
+    rule = "═" * 60
+    click.echo(f"\n{rule}")
+    click.secho(
+        f"⚠️  {len(unsupported)} legacy setting(s) were NOT carried over", fg="yellow", bold=True
+    )
+    click.echo(rule)
+    for key in unsupported:
+        click.secho(f"  • {key}", fg="yellow")
+    click.echo("\nNothing in the new configuration reads them. The legacy file is unchanged,")
+    click.echo("so anything that still matters can be applied to the new file by hand.")
+    click.echo(f"{rule}\n")
+
+
 def build_client_config(
     config_class: type[BaseModel], legacy_config: dict[str, Any], source: str
 ) -> dict[str, Any]:
@@ -321,6 +480,7 @@ def generate_jira_base_toml(
         {**fields_from_conf(conf_data, CONF_FIELD_KEYS), **auth_config},
         "the Jira .conf file",
     )
+    report_unsupported_keys(conf_data, JiraDefectClientConfig, keys_read=CONF_KEYS_READ)
     return build_service_toml(JIRA_CLIENT_CLASS, client_config, credentials)
 
 
@@ -350,6 +510,12 @@ def generate_excel_base_toml(
         if credentials is None:
             raise ConfConversionError("Service credentials setup was cancelled")
 
+    # Reported after the last prompt, as in `generate_jira_base_toml`: printed before the
+    # login it would scroll off behind the password entry, and it would describe a
+    # configuration a cancelled login never writes.
+    report_unsupported_keys(
+        properties, ExcelDefectClientConfig, composite_patterns=LEGACY_COMPOSITE_KEY_PATTERNS
+    )
     return build_service_toml(EXCEL_CLIENT_CLASS, client_config, credentials)
 
 

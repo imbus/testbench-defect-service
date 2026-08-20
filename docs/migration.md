@@ -44,12 +44,15 @@ the JSONL client — configure it with [`init`](cli.md#init).
 ## What the command does
 
 1. Detects the legacy format from the file extension (`.conf` → Jira, `.properties` → Excel).
-2. Parses the file with the parser for that format.
+2. Parses the file with the parser for that format. A line it cannot read, or a key set twice
+   to two different values, aborts the migration and names the file and line number.
 3. Asks for the settings the legacy format never carried — the service credentials, and for
    Jira the authentication method.
 4. Validates the result against the same client model the service loads at startup, filling in
    documented defaults for everything the legacy file does not mention.
-5. Writes the TOML file.
+5. Lists the legacy entries that have no equivalent in the new configuration, so a setting
+   that mattered can be applied by hand.
+6. Writes the TOML file.
 
 The conversion runs to completion **before anything is written**. Cancelling a prompt, or a
 value the service would reject, aborts the migration and leaves an existing configuration
@@ -237,12 +240,32 @@ written.
 | Message                                                                                   | Cause                                                                                                     | Fix                                                                                     |
 | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `Cannot tell the legacy format of '<file>' from its extension.`                         | The file is neither`.conf` nor `.properties`.                                                         | Pass`--type jira` or `--type excel`.                                                |
-| `Failed to parse configuration file: ...`                                               | A line does not follow the format — a`.conf` line without `:`, a `.properties` line without `=`. | Fix the line, or comment it out with`#`.                                              |
+| `<file> line <n>: expected 'key: value', got '<line>'`                                  | The line carries no separator. When it uses the other format's separator the message says so — usually a wrapper file migrated with the wrong `--type`. | Fix the line, comment it out with `#`, or pass the `--type` the message names. Nothing was written. |
+| `<file> line <n>: '<key>' is set twice, to '<a>' and '<b>'.`                            | The legacy file gives one key two different values, so there is no telling which one to migrate. | Remove one of the two entries and run `migrate` again. |
 | `Cannot convert the Jira .conf file: <field>: <message>`                                | A converted value is not valid for the client model.                                                      | Correct the named key in the legacy file and run`migrate` again. Nothing was written. |
 | `Cannot convert the Excel .properties file: <field>: <message>`                         | The same, for the Excel model — usually a missing`excelFilePath` or an unsupported `fileType`.       | As above.                                                                               |
 | `Jira authentication setup was cancelled` / `Service credentials setup was cancelled` | A prompt was aborted.                                                                                     | Re-run the command; the existing configuration was not touched.                         |
 | The Jira extra is reported as missing                                                     | The Jira dependencies are not installed, so the authentication prompts cannot run.                        | `pip install "testbench-defect-service[jira]"`                                        |
 | Defects are visible but cannot be changed                                                 | `readonly` defaulted to `true`.                                                                       | Set`readonly = false` in the generated configuration.                                 |
+
+### Entries that were not carried over
+
+A legacy file may configure things the new client has no equivalent for. Those entries are
+listed once every prompt is answered, immediately before the file is written:
+
+```text
+════════════════════════════════════════════════════════════
+⚠️  2 legacy setting(s) were NOT carried over
+════════════════════════════════════════════════════════════
+  • jira.password
+  • wrapper.class
+
+Nothing in the new configuration reads them. The legacy file is unchanged,
+so anything that still matters can be applied to the new file by hand.
+════════════════════════════════════════════════════════════
+```
+
+Apart from those keys the migration is complete — nothing else was dropped silently.
 
 ### Rolling back
 

@@ -135,7 +135,10 @@ service's own API - and writes a ready-to-use configuration file.
 
 The converted values are validated against the same client models the service uses at
 startup, so anything the service would reject is reported during the migration instead of
-on the first start.
+on the first start. A legacy file the converter cannot read is rejected with the file and
+line number — and, when the line is separated the other format's way, with the `--type` to
+use instead. Legacy entries that have no equivalent in the new configuration are listed
+before the file is written, so a partial migration cannot pass for a complete one.
 
 ```bash
 testbench-defect-service migrate --from PATH [OPTIONS]

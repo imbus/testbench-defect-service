@@ -9,6 +9,20 @@ from testbench_defect_service.log import logger
 from testbench_defect_service.models.config import PhaseCommands
 from testbench_defect_service.models.defects import ValueType
 
+#: The legacy `.properties` keys that `_normalize_legacy_excel_config` below reads, as
+#: opposed to the scalar keys a field's own `validation_alias` reads. Whoever wants to know
+#: which legacy keys this model understands - the `migrate` command, reporting the ones it
+#: could not carry over - cannot see these on the model, so they are named here instead.
+LEGACY_COMPOSITE_KEY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"controlFields"),
+    re.compile(r".+\.columnNo"),
+    re.compile(r".+\.value"),
+    re.compile(r".+\.transition\d+"),
+    re.compile(r".+\.transition\.number"),
+    re.compile(r"udf\.attr\.number"),
+    re.compile(r"udf\.attr\d+\..+"),
+)
+
 
 def _split_csv(raw_value: Any) -> list[str]:
     if raw_value is None:
