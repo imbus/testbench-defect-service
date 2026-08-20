@@ -692,3 +692,26 @@ class TestTheUnsupportedReportIsVisible:
             generate_excel_base_toml({**_EXCEL_PROPERTIES, "wrapper.retired": "true"})
 
         assert "carried over" not in capsys.readouterr().out
+
+
+@pytest.mark.unit
+class TestConfKeysAreJudgedByTheKeyMapsNotTheModel:
+    """A .conf entry never reaches the model - `fields_from_conf` picks the mapped keys and
+    the rest is dropped - so what the model happens to call its own fields says nothing
+    about whether a legacy key was carried over."""
+
+    def test_a_conf_key_that_shares_a_model_field_name_is_still_reported(self, capsys) -> None:
+        """`JiraDefectClientConfig` has a `readonly` field, but the .conf spelling that is
+        read is `wrapper.readonly`, so a bare `readonly` entry is dropped."""
+        generate_jira_base_toml({**_CONF_DATA, "readonly": "false"}, dict(self._AUTH), _CREDENTIALS)
+
+        assert "readonly" in capsys.readouterr().out
+
+    def test_the_mapped_spelling_is_not_reported(self, capsys) -> None:
+        generate_jira_base_toml(
+            {**_CONF_DATA, "wrapper.readonly": "false"}, dict(self._AUTH), _CREDENTIALS
+        )
+
+        assert "carried over" not in capsys.readouterr().out
+
+    _AUTH: ClassVar[dict[str, Any]] = {"auth_type": "token", "token": "pat-123"}

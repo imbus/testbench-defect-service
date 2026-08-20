@@ -322,8 +322,7 @@ def recognized_legacy_keys(config_class: type[BaseModel]) -> set[str]:
 
 def report_unsupported_keys(
     legacy_config: dict[str, Any],
-    config_class: type[BaseModel],
-    keys_read: frozenset[str] = frozenset(),
+    keys_read: set[str] | frozenset[str],
     composite_patterns: tuple[re.Pattern[str], ...] = (),
 ) -> list[str]:
     """Echo the legacy entries that nothing in the conversion reads, and return their keys.
@@ -333,16 +332,19 @@ def report_unsupported_keys(
     lets the user tell a complete migration from a partial one - and the file being
     converted stays on disk, so a setting that mattered can be applied by hand.
 
+    Which spellings count as read differs per format, so the caller says: a `.properties`
+    file is handed to the model whole, and `recognized_legacy_keys` describes it, while a
+    `.conf` file is read by this module's own key maps and the model never sees its keys -
+    passing the model's fields for a `.conf` would silently accept a legacy `password`
+    entry that nothing carries over.
+
     Args:
         legacy_config (dict): The legacy entries, in their own key spelling.
-        config_class (type[BaseModel]): The client config model the conversion validates
-            against; its field names and aliases are the keys that survive.
-        keys_read (frozenset): Key spellings the converter itself reads instead of the
-            model, such as the .conf keys that only pre-fill a prompt.
+        keys_read (set): Every key spelling the conversion reads for this format.
         composite_patterns (tuple): Patterns for keys a `mode="before"` validator folds
             into a nested model, which no alias mentions.
     """
-    recognized = recognized_legacy_keys(config_class) | keys_read
+    recognized = set(keys_read)
     unsupported = sorted(
         key
         for key in legacy_config
@@ -480,7 +482,7 @@ def generate_jira_base_toml(
         {**fields_from_conf(conf_data, CONF_FIELD_KEYS), **auth_config},
         "the Jira .conf file",
     )
-    report_unsupported_keys(conf_data, JiraDefectClientConfig, keys_read=CONF_KEYS_READ)
+    report_unsupported_keys(conf_data, CONF_KEYS_READ)
     return build_service_toml(JIRA_CLIENT_CLASS, client_config, credentials)
 
 
@@ -514,7 +516,7 @@ def generate_excel_base_toml(
     # login it would scroll off behind the password entry, and it would describe a
     # configuration a cancelled login never writes.
     report_unsupported_keys(
-        properties, ExcelDefectClientConfig, composite_patterns=LEGACY_COMPOSITE_KEY_PATTERNS
+        properties, recognized_legacy_keys(ExcelDefectClientConfig), LEGACY_COMPOSITE_KEY_PATTERNS
     )
     return build_service_toml(EXCEL_CLIENT_CLASS, client_config, credentials)
 
