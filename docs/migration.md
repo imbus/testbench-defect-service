@@ -173,6 +173,10 @@ The Excel client reads the legacy key names itself, so the whole file is convert
   become `transitions` on the control field they belong to, and `udf.attr<n>.*` become `udfs`.
 - **Unknown keys are ignored** — settings from the old wrapper that the client has no option for
   simply do not appear in the result.
+- `excelFilePath` is resolved and written as an **absolute** path, relative to the directory
+  `migrate` runs in. A relative path in the legacy file would otherwise be resolved against the
+  service's working directory later, which is a different directory when it runs as a Windows
+  service.
 
 The only prompt is for the **service credentials**; everything else comes from the file.
 

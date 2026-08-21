@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
 
@@ -313,6 +314,21 @@ class TestGenerateExcelBaseToml:
         assert client_config["lastedit_column_no"] == 7
         assert client_config["defect_id_digit_numbers"] == 3
         assert client_config["defect_id_starting_value"] == "0001"
+
+    def test_a_relative_file_path_is_written_as_absolute(self, tmp_path, monkeypatch) -> None:
+        """A legacy wrapper's relative path resolves against whatever directory `migrate` ran
+        in, so carrying it over verbatim breaks the service as soon as it starts somewhere
+        else - which is the normal case for the Windows service."""
+        monkeypatch.chdir(tmp_path)
+
+        client_config = _excel_client_config(excelFilePath="defects")
+
+        assert Path(client_config["excel_file_path"]) == (tmp_path / "defects").resolve()
+
+    def test_an_absolute_file_path_is_left_alone(self) -> None:
+        client_config = _excel_client_config()
+
+        assert client_config["excel_file_path"] == r"C:\defects"
 
     def test_control_fields_carry_their_state_keyed_transitions(self) -> None:
         client_config = _excel_client_config()

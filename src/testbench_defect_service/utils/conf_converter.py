@@ -486,6 +486,18 @@ def generate_jira_base_toml(
     return build_service_toml(JIRA_CLIENT_CLASS, client_config, credentials)
 
 
+def _absolute(path: str) -> str:
+    """Return *path* as an absolute path, resolved against the current directory.
+
+    A legacy wrapper may name its defect data relative to wherever it was started from.
+    Carried over verbatim, that relative path would later be resolved against the service's
+    working directory instead - a different directory whenever the service runs as a Windows
+    service. Resolving it here pins it to the directory ``migrate`` was run in, which is the
+    one the path was written for.
+    """
+    return str(Path(path).resolve())
+
+
 def generate_excel_base_toml(
     properties: dict[str, Any], credentials: tuple[str, str] | None = None
 ) -> str:
@@ -506,6 +518,7 @@ def generate_excel_base_toml(
     client_config = build_client_config(
         ExcelDefectClientConfig, properties, "the Excel .properties file"
     )
+    client_config["excel_file_path"] = _absolute(client_config["excel_file_path"])
 
     if credentials is None:
         credentials = prompt_service_credentials()
