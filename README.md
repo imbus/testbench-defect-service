@@ -8,7 +8,7 @@ A lightweight REST API service for [imbus TestBench](https://www.testbench.com) 
 
 ## Features
 
-- **Multiple clients**: JSONL files for testing/offline use, or Jira Cloud and Data Center via REST API
+- **Multiple clients**: JSONL files for testing/offline use, Excel/CSV spreadsheets, or Jira Cloud and Data Center via REST API
 - **Unified REST API**: a single API surface regardless of the underlying defect tracker
 - **Interactive setup wizard**: `testbench-defect-service init` generates a complete config in seconds
 - **Swagger UI**: built-in interactive API docs at `/docs`
@@ -30,6 +30,7 @@ Optional extras for additional clients:
 | Client | Data source | Install command |
 |--------|-------------|-----------------|
 | JSONL (default) | `.jsonl` files | included in base install |
+| Excel | `.xlsx`, `.xls`, `.csv`, `.tsv`, `.txt` files | `pip install testbench-defect-service[excel]` |
 | Jira | Jira Cloud / Data Center REST API | `pip install testbench-defect-service[jira]` |
 
 **Standalone executable** (no Python required): download the pre-built binary from the [GitHub releases page](https://github.com/imbus/testbench-defect-service/releases).

@@ -1,5 +1,6 @@
 import os
 from collections.abc import Callable
+from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, TypedDict, get_args, get_origin
 
@@ -92,6 +93,10 @@ def dependency_matches(
             actual = fallback_values.get(field, _MISSING)
         if actual is _MISSING:
             actual = None
+        if isinstance(actual, Enum):
+            # Values collected by the wizard are plain member values; values loaded from an
+            # existing config may still be enum members. Compare on the member value.
+            actual = actual.value
         if isinstance(expected, (list, tuple, set)):
             if actual not in expected:
                 return False
@@ -221,7 +226,7 @@ def get_field_default(field_info: FieldInfo) -> Any:
     return None
 
 
-def should_skip_field(  # noqa: PLR0913
+def should_skip_field(  # noqa
     field_name: str,
     field_info: FieldInfo,
     config_dict: dict[str, Any],
@@ -245,6 +250,31 @@ def should_skip_field(  # noqa: PLR0913
         return True
 
     return not dependency_matches(field_info, config_dict, existing)
+
+
+def get_carried_over_value(
+    field_name: str,
+    field_info: FieldInfo,
+    existing: dict[str, Any],
+    allowed_fields: set[str] | None,
+    skip_fields: set[str],
+) -> Any:
+    """Return the existing value of a field the wizard deliberately does not prompt for.
+
+    Fields marked ``skip_if_wizard`` are hidden from the user, but hiding them must not
+    silently reset an already configured value: without carrying it over, the value is
+    dropped from the collected config and later replaced by the model default when the
+    file is written. Returns ``_MISSING`` when there is nothing to carry over.
+    """
+    if allowed_fields and field_name not in allowed_fields:
+        return _MISSING
+    if field_name in skip_fields:
+        return _MISSING
+    if not get_field_extra(field_info).get(SCHEMA_KEYS["SKIP_IF_WIZARD"]):
+        return _MISSING
+
+    value = get_field_value(field_name, field_info, existing)
+    return _MISSING if value is None else value
 
 
 def get_field_description(
@@ -916,6 +946,19 @@ def prompt_literal_field(
     return questionary.select(f"{description}:", choices=choices, default=default_val).ask()
 
 
+def is_enum_field(field_type: Any) -> bool:
+    """Check if a field type is an Enum subclass."""
+    return isinstance(field_type, type) and issubclass(field_type, Enum)
+
+
+def prompt_enum_field(field_type: type[Enum], description: str, default: Any) -> Any:
+    """Prompt for an Enum-typed field as a selection of its member values."""
+    choices = [str(member.value) for member in field_type]
+    default_value = default.value if isinstance(default, Enum) else default
+    default_val = str(default_value) if str(default_value) in choices else choices[0]
+    return questionary.select(f"{description}:", choices=choices, default=default_val).ask()
+
+
 def prompt_bool_field(description: str, default: Any) -> Any:
     default_bool = bool(default) if default is not None else False
     return questionary.confirm(f"{description}:", default=default_bool).ask()
@@ -931,7 +974,7 @@ def prompt_password_field(description: str, default: Any) -> Any:
     return questionary.password(f"{description}:", default=default if default else "").ask()
 
 
-def prompt_single_field(  # noqa: C901, PLR0912, PLR0913
+def prompt_single_field(  # noqa
     field_name: str,
     field_info: FieldInfo,
     field_value: Any,
@@ -967,6 +1010,8 @@ def prompt_single_field(  # noqa: C901, PLR0912, PLR0913
                 raw_answer = prompt_literal_field(
                     field_type, description, default_value, wizard_choices
                 )
+            elif is_enum_field(field_type):
+                raw_answer = prompt_enum_field(field_type, description, default_value)
             elif field_type is bool:
                 raw_answer = prompt_bool_field(description, default_value)
             elif field_type is Path:
@@ -1081,6 +1126,11 @@ def prompt_model_fields(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                     skip_fields,
                     field_overrides,
                 ):
+                    carried = get_carried_over_value(
+                        field_name, field_info, existing, allowed_fields, skip_fields
+                    )
+                    if carried is not _MISSING:
+                        config_dict[field_name] = carried
                     continue
 
                 field_value = get_field_value(field_name, field_info, existing)

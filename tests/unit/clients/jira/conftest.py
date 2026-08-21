@@ -50,9 +50,9 @@ def mock_jira_issue() -> Mock:
     issue.fields.issuetype = Mock()
     issue.fields.issuetype.name = "Bug"
 
-    # Mock creator/reporter
-    issue.fields.creator = Mock()
-    issue.fields.creator.displayName = "John Doe"
+    # Mock reporter
+    issue.fields.reporter = Mock()
+    issue.fields.reporter.displayName = "John Doe"
 
     # Mock attachments
     attachment1 = Mock()
