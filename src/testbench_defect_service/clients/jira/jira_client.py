@@ -37,6 +37,38 @@ from testbench_defect_service.models.defects import Defect, Login, SyncContext
 _JIRA_GATEWAY_BASE = "https://api.atlassian.com/ex/jira/{cloud_id}"
 _TENANT_INFO_PATH = "/_edge/tenant_info"
 
+# Jira Server/Data Center answers ``issue/createmeta/{key}/issuetypes`` with one of these
+# statuses both when the project key is unknown and when the authenticated account may not
+# create issues in it.  The project key is always resolved from the configuration before we
+# reach that call, so missing write access is by far the more likely cause.
+_MISSING_WRITE_ACCESS_STATUSES = (
+    HTTPStatus.BAD_REQUEST,
+    HTTPStatus.UNAUTHORIZED,
+    HTTPStatus.FORBIDDEN,
+)
+
+
+def _jira_error_summary(error: JIRAError) -> str:
+    """Return a compact one-line summary of a ``JIRAError`` without the header dump."""
+    parts = [f"status={error.status_code}"]
+    url = getattr(error, "url", None)
+    if url:
+        parts.append(f"url={url}")
+    text = (getattr(error, "text", None) or "").strip()
+    if text:
+        parts.append(text.splitlines()[0])
+    return " ".join(parts)
+
+
+def _missing_write_access_hint(project: str | None) -> str:
+    """Return a human-readable hint about missing write access on a Jira project."""
+    return (
+        f"The authenticated Jira account is most likely missing write access to project "
+        f"'{project}' (the 'Create Issues' permission, which Jira requires to expose the "
+        f"create metadata of a project). Grant that permission in the project's permission "
+        f"scheme and verify that the project key is correct."
+    )
+
 
 class JiraConnectionError(ConnectionError):
     """Jira connection/authentication failure that preserves the HTTP status code.
@@ -51,6 +83,24 @@ class JiraConnectionError(ConnectionError):
     def __init__(self, message: str, *, status_code: int | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class JiraProjectFieldsError(JIRAError):
+    """Raised when the field metadata of a Jira project cannot be read.
+
+    Subclasses ``JIRAError`` so every existing ``except JIRAError`` handler — including the
+    application-wide Sanic handler — keeps working unchanged, but renders as a single
+    actionable sentence instead of the raw request/response dump that ``JIRAError.__str__``
+    produces.  The originating error stays available as ``cause`` (and as ``__cause__``).
+    """
+
+    def __init__(self, message: str, cause: JIRAError) -> None:
+        super().__init__(text=message, status_code=cause.status_code, url=cause.url)
+        self.message = message
+        self.cause = cause
+
+    def __str__(self) -> str:
+        return self.message
 
 
 class JiraClient:
@@ -555,7 +605,82 @@ class JiraClient:
             logger.error("Error fetching project statuses for '%s': %s", project_key, e)
             return []
 
+    @staticmethod
+    def _log_issue_types_failure(project: str, error: JIRAError) -> None:
+        """Log a rejected ``project_issue_types`` call before the createmeta fallback."""
+        if error.status_code in _MISSING_WRITE_ACCESS_STATUSES:
+            logger.warning(
+                "project_issue_types failed for project '%s' (status=%s). %s "
+                "Falling back to createmeta endpoint.",
+                project,
+                error.status_code,
+                _missing_write_access_hint(project),
+            )
+        else:
+            logger.warning(
+                "project_issue_types failed for project '%s' (status=%s). "
+                "Falling back to createmeta endpoint: %s",
+                project,
+                error.status_code,
+                _jira_error_summary(error),
+            )
+        logger.debug("project_issue_types error for project '%s': %s", project, error)
+
+    @staticmethod
+    def _log_project_fields_failure(
+        project: str | None,
+        issue_types_error: JIRAError | None,
+        createmeta_error: JIRAError,
+    ) -> str:
+        """Log why no field metadata could be read for ``project`` and return that reason.
+
+        When the issuetypes endpoint was rejected first, that rejection is the actual root
+        cause — the createmeta fallback merely reports that this Jira version does not offer
+        the endpoint any more — so the message names the likely missing project permission
+        instead of the raw fallback error.
+        """
+        if issue_types_error is None:
+            message = (
+                f"Cannot read the field metadata of project '{project}': "
+                f"{_jira_error_summary(createmeta_error)}"
+            )
+            logger.error("%s", message)
+            logger.debug("createmeta error for project '%s': %s", project, createmeta_error)
+            return message
+
+        if issue_types_error.status_code in _MISSING_WRITE_ACCESS_STATUSES:
+            # The hint already names the project, so it stands on its own as the message.
+            message = _missing_write_access_hint(project)
+        else:
+            message = (
+                f"Cannot read the field metadata of project '{project}'. "
+                f"project_issue_types failed with status {issue_types_error.status_code}."
+            )
+        logger.error(
+            "%s (project_issue_types: %s | createmeta fallback: %s)",
+            message,
+            _jira_error_summary(issue_types_error),
+            _jira_error_summary(createmeta_error),
+        )
+        logger.debug(
+            "Field metadata errors for project '%s': %s / %s",
+            project,
+            issue_types_error,
+            createmeta_error,
+        )
+        return message
+
     def get_all_project_fields(self, project: str | None) -> list[dict[str, Any]]:  # noqa: C901, PLR0912
+        """Return the field metadata of ``project`` (all fields when ``project`` is empty).
+
+        Raises:
+            JiraProjectFieldsError: if the field metadata cannot be read at all — most
+                commonly because
+                the account lacks the project permissions Jira requires to expose the create
+                metadata.  An empty list means "Jira reported no fields", which is a very
+                different situation for the caller, so the two are no longer conflated.
+        """
+        issue_types_error: JIRAError | None = None
         if self.use_issuetypes_endpoint:
             if project:
                 fields_dict = {}
@@ -563,13 +688,8 @@ class JiraClient:
                 try:
                     issue_types = self.jira.project_issue_types(project, maxResults=100)
                 except JIRAError as e:
-                    logger.warning(
-                        "project_issue_types failed for project '%s' (status=%s). "
-                        "Falling back to createmeta endpoint: %s",
-                        project,
-                        e.status_code,
-                        e,
-                    )
+                    issue_types_error = e
+                    self._log_issue_types_failure(project, e)
                 else:
                     for issue_type in issue_types:
                         try:
@@ -610,8 +730,9 @@ class JiraClient:
                 try:
                     return self.jira.fields()
                 except JIRAError as e:
-                    logger.debug(f"Error fetching custom fields: {e}")
-                    return []
+                    logger.error("Error fetching custom fields: %s", _jira_error_summary(e))
+                    logger.debug("Error fetching custom fields: %s", e)
+                    raise
         try:
             # Get creation metadata for the project
             meta = self.jira.createmeta(projectKeys=project, expand="projects.issuetypes.fields")
@@ -644,8 +765,8 @@ class JiraClient:
             logger.info("Found %d custom fields for project '%s'", len(custom_fields), project)
             return custom_fields
         except JIRAError as e:
-            logger.error("Error fetching custom fields for project '%s': %s", project, e)
-            return []
+            message = self._log_project_fields_failure(project, issue_types_error, e)
+            raise JiraProjectFieldsError(message, issue_types_error or e) from e
 
     def fetch_issues_fields(self, project: str | None = None) -> dict[str, Any]:
         if self.use_issuetypes_endpoint:
@@ -1041,13 +1162,14 @@ class JiraClient:
                             )
                 except JIRAError as e:
                     # Fallback to createmeta endpoint if issuetypes endpoint fails (e.g., 400 error)
-                    logger.debug(
-                        f"project_issue_types endpoint failed for project {project_key} "
-                        f"(status {e.status_code}): {e}. Falling back to createmeta endpoint."
-                    )
-                    createmeta = self.jira.createmeta(
-                        project_key, expand="projects.issuetypes.fields"
-                    )
+                    self._log_issue_types_failure(project_key, e)
+                    try:
+                        createmeta = self.jira.createmeta(
+                            project_key, expand="projects.issuetypes.fields"
+                        )
+                    except JIRAError as fallback_error:
+                        message = self._log_project_fields_failure(project_key, e, fallback_error)
+                        raise JiraProjectFieldsError(message, e) from fallback_error
                     issue_types = createmeta["projects"][0]["issuetypes"]
                     for issue_type in issue_types:
                         for field_id, field_data in issue_type["fields"].items():

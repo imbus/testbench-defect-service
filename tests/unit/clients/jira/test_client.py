@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
+from jira import JIRAError
 from sanic import NotFound, ServerError
 
 from testbench_defect_service.clients.jira.client import (  # type: ignore[import-untyped]
@@ -958,6 +959,23 @@ class TestCorrectSyncResults:
             remote=None,
         )
         result = mock_jira_client_instance.correct_sync_results("Test Project (TEST)", body)
+        assert len(result.local.create) == 1
+
+    def test_unreadable_control_fields_pass_actions_through(self, mock_jira_client_instance):
+        """A Jira metadata failure must not turn the correct call into a 500."""
+        known = self._make_known_defect()
+        body = Results(
+            local=LocalSyncActions(create=[known], update=[], delete=[]),
+            remote=None,
+        )
+        with patch.object(
+            mock_jira_client_instance,
+            "get_control_fields",
+            side_effect=JIRAError(status_code=400, text="no write access"),
+        ):
+            result = mock_jira_client_instance.correct_sync_results("Test Project (TEST)", body)
+
+        assert isinstance(result, Results)
         assert len(result.local.create) == 1
 
     def test_invalid_defects_are_filtered_out(self, mock_jira_client_instance):

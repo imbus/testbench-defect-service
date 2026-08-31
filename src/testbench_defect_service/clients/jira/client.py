@@ -316,7 +316,15 @@ class JiraDefectClient(AbstractDefectClient):
                     protocol_code=ProtocolCode.NO_DEFECT_FOUND,
                     message=f"No issues found for project '{project}' using configured JQL.",
                 )
-            fields = self.jira_client.get_all_project_fields(project=self.projects[project].key)
+            try:
+                fields = self.jira_client.get_all_project_fields(project=self.projects[project].key)
+            except JIRAError as exc:
+                logger.error("Failed to fetch project fields for project '%s': %s", project, exc)
+                protocol.add_general_error(
+                    f"Failed to fetch project fields for project '{project}': {exc}",
+                    protocol_code=ProtocolCode.READ_ACCESS_ERROR,
+                )
+                return ProtocolledDefectSet(value=defects, protocol=protocol)
             logger.debug("Processing %d issues for project '%s'", len(issues), project)
 
             for issue in issues:
@@ -382,7 +390,15 @@ class JiraDefectClient(AbstractDefectClient):
             return ProtocolledDefectSet(value=[], protocol=protocol)
 
         logger.info("Processing batch of %d defect IDs for project '%s'", len(defect_ids), project)
-        fields = self.jira_client.get_all_project_fields(project=project_key)
+        try:
+            fields = self.jira_client.get_all_project_fields(project=project_key)
+        except JIRAError as exc:
+            logger.error("Failed to fetch project fields for project '%s': %s", project, exc)
+            protocol.add_general_error(
+                f"Failed to fetch project fields for project '{project}': {exc}",
+                protocol_code=ProtocolCode.READ_ACCESS_ERROR,
+            )
+            return ProtocolledDefectSet(value=[], protocol=protocol)
         for defect_id in defect_ids:
             defect_identifier = defect_id.root
             if not defect_identifier:
@@ -497,7 +513,7 @@ class JiraDefectClient(AbstractDefectClient):
         except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
             logger.error("Failed to create Jira issue for project '%s': %s", project_key, exc)
             protocol.add_general_error(
-                "Failed to create Jira issue", protocol_code=ProtocolCode.INSERT_ERROR
+                f"Failed to create Jira issue: {exc}", protocol_code=ProtocolCode.INSERT_ERROR
             )
 
         return ProtocolledString(value=issue_key, protocol=protocol)
@@ -563,7 +579,7 @@ class JiraDefectClient(AbstractDefectClient):
         except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
             logger.error("Failed to update Jira issues for project '%s': %s", project_key, exc)
             protocol.add_general_error(
-                "Failed to update Jira issues",
+                f"Failed to update Jira issues: {exc}",
                 protocol_code=ProtocolCode.PUBLISH_ERROR,
             )
 
@@ -683,13 +699,20 @@ class JiraDefectClient(AbstractDefectClient):
             except KeyError as exc:
                 logger.error("Unknown project '%s' requested while fetching UDFs", project)
                 raise NotFound(f"Project '{project}' not found or access denied") from exc
+        try:
+            fields = self.jira_client.get_all_project_fields(project=project_key)
+        except JIRAError as exc:
+            logger.error("Failed to fetch project fields for project '%s': %s", project, exc)
+            raise ServerError(
+                f"Failed to fetch project fields for project '{project}': {exc}"
+            ) from exc
         return [
             UserDefinedAttribute(
                 name=field["name"],
                 valueType=get_value_type_from_jira_field(field),
                 mustField=getattr(field, "required", None),
             )
-            for field in self.jira_client.get_all_project_fields(project=project_key)
+            for field in fields
         ]
 
     def before_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
@@ -707,10 +730,26 @@ class JiraDefectClient(AbstractDefectClient):
             local=body.local.model_copy(deep=True) if body.local else None,
             remote=body.remote.model_copy(deep=True) if body.remote else None,
         )
-        if corrected_results.local:
-            self._validate_and_filter_actions(body.local, corrected_results.local, project)
-        if corrected_results.remote:
-            self._validate_and_filter_actions(body.remote, corrected_results.remote, project)
+        try:
+            if corrected_results.local:
+                self._validate_and_filter_actions(body.local, corrected_results.local, project)
+            if corrected_results.remote:
+                self._validate_and_filter_actions(body.remote, corrected_results.remote, project)
+        except JIRAError as exc:
+            # The response schema of this endpoint is a bare ``Results`` — it has no protocol
+            # to report the failure in — so pass the proposed actions through untouched.  The
+            # create/update step that follows does have a protocol and reports the failure
+            # there, instead of aborting the whole sync with a 500 here.
+            logger.error(
+                "Cannot validate the proposed sync actions for project '%s': %s "
+                "Passing the proposed actions through unchanged.",
+                project,
+                exc,
+            )
+            return Results(
+                local=body.local.model_copy(deep=True) if body.local else None,
+                remote=body.remote.model_copy(deep=True) if body.remote else None,
+            )
         return corrected_results
 
     def _build_defect_with_attributes(
