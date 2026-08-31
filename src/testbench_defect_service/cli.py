@@ -11,6 +11,7 @@ from sanic.worker.loader import AppLoader
 from testbench_defect_service import __title__, __version__
 from testbench_defect_service.app import AppConfig, create_app
 from testbench_defect_service.log import logger
+from testbench_defect_service.utils.client_summary import log_client_summary
 from testbench_defect_service.utils.conf_converter import (
     LEGACY_SOURCE_TYPES,
     ConfConversionError,
@@ -79,6 +80,7 @@ def init(config_path: Path):
 @click.option("--client-only", is_flag=True, help="Configure client settings only")
 @click.option("--view", is_flag=True, help="View current configuration")
 def configure(  # noqa: PLR0911, PLR0913, C901
+    *,
     config_path: Path,
     full: bool,
     service_only: bool,
@@ -182,6 +184,7 @@ def configure(  # noqa: PLR0911, PLR0913, C901
     help="Path to CA certificate file for client verification (optional)",
 )
 def start(  # noqa: PLR0913
+    *,
     config_path: Path | None = None,
     client_class: str | None = None,
     client_config: Path | None = None,
@@ -216,6 +219,7 @@ def start(  # noqa: PLR0913
         raise click.ClickException(str(e)) from e
 
     logger.info("Starting %s v%s", app_name, __version__)
+    log_client_summary(app_config)
 
     if not host:
         host = getattr(app.config, "HOST", None)
@@ -250,6 +254,7 @@ def start(  # noqa: PLR0913
         "debug": app_config.DEBUG,
         "access_log": True,
         "ssl": ssl_context,
+        "motd": False,
         **server_config.run_kwargs,
     }
 
