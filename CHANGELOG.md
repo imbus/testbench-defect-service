@@ -6,6 +6,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ---
 
+## [Unreleased]
+
+---
+
+## [0.4.0][0.4.0] - 2026-08-21
+
+### Added
+
+- **Excel client** — a new backend that reads and writes defects directly from
+  spreadsheet and delimited files (`.xlsx`, `.xls`, `.csv`, `.tsv`, `.txt`)
+  instead of from a defect tracker. Each project is a subdirectory under
+  `excel_file_path`, one row is one defect, and every defect field is mapped to a
+  1-based column number — so a spreadsheet that is already in use can be
+  synchronized without changing its layout. The client is optional: install it
+  with `pip install "testbench-defect-service[excel]"`. It is not bundled in the
+  ready-to-use executable, and the service refuses to start if it is configured
+  without the extra. Legacy `.xls` files are read-only; set `readonly = true` for
+  those projects.
+- Excel client: control fields (status, priority, classification, …) that carry
+  their own allowed values and transition rules, so an invalid status change is
+  rejected before it is written to the file.
+- Excel client: user-defined attributes mapped to their own columns, including
+  boolean columns with configurable true/false values.
+- Excel client: defect IDs generated with a configurable prefix, starting value
+  and zero padding. Duplicate or ambiguous IDs in a file are reported instead of
+  a row being picked silently.
+- Excel client: write buffering, and file locking so that two concurrent
+  synchronizations cannot corrupt a file another writer holds.
+- Excel client: per-project overrides, either as `[projects.<name>]` sections in
+  `config.toml` or as a `<Project>.properties` file placed beside the project's
+  data.
+- Excel client: pre- and post-sync command hooks, matching those of the Jira and
+  JSONL clients.
+- Excel client: legacy DMProxy `.properties` files are read directly, so an
+  existing connector configuration can be pointed at instead of rewritten.
+- `migrate` command to convert a legacy `.conf` (Jira) or `.properties` (Excel)
+  wrapper configuration into a TOML configuration file. The converted values are
+  validated against the client models, the authentication settings and service
+  credentials the legacy formats never carried are asked for interactively, and an
+  existing configuration file is backed up before being replaced.
+
+### Fixed
+
+- A defect that could not be created in Jira no longer aborts the whole
+  synchronization. The response carried `value: ""` on failure, which TestBench
+  read as a successful creation with an empty ID and rejected with its non-empty
+  ID assertion. The field is now `null` when no defect was created.
+- The Jira legacy-configuration prompts no longer restart forever. The server URL was
+  missing from the prompted field set while the collected answers were validated
+  against the whole `JiraDefectClientConfig`, in which it is the only required field,
+  so validation always failed with `server_url: Field required` and the wizard's retry
+  loop could never terminate. The server URL is now prompted for and pre-filled from
+  the legacy `jira.baseUri` entry.
+- An empty row in an Excel or delimited defect file no longer fails the whole
+  file. Empty rows are skipped with a single import warning per synchronization
+  and are preserved in the file when defects are created, updated or deleted.
+- Blank boolean UDF cells are reported as unset instead of being coerced to the
+  configured `falseValue`.
+
+---
+
 ## [0.3.0][0.3.0] 30.07.2026
 
 ### Added
@@ -96,6 +157,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI entry point (`testbench-defect-service`) with `init`, `start`, and `set-credentials` commands.
 - `jira` optional dependency group for Jira backend support.
 
+[0.4.0]: https://github.com/imbus/testbench-defect-service/releases/tag/v0.4.0
 [0.3.0]: https://github.com/imbus/testbench-defect-service/releases/tag/v0.3.0
 [0.2.0]: https://github.com/imbus/testbench-defect-service/releases/tag/v0.2.0
 [0.1.0]: https://github.com/imbus/testbench-defect-service/releases/tag/v0.1.0

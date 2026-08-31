@@ -153,6 +153,7 @@ pyrightconfig.json
 .python-version
 
 # Temporary directories and files
+examples/
 temp/
 tmp*/
 *.tmp

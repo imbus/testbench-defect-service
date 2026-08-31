@@ -1,5 +1,5 @@
 ---
-sidebar_position: 5
+sidebar_position: 6
 title: TestBench Integration
 ---
 # TestBench Integration
@@ -94,6 +94,17 @@ Use this procedure to migrate from the legacy Defect Service setup to the new ar
 
 1. **Set up the new Defect Service**
    Initialize and configure `testbench-defect-service` in your environment.
+
+   :::tip[Convert the old configuration instead of retyping it]
+   If the previous setup used a Jira `.conf` or an Excel `.properties` wrapper file, convert it
+   directly:
+
+   ```bash
+   testbench-defect-service migrate --from jira.conf
+   ```
+
+   The [Migration guide](migration.md) covers what is carried over and what you are asked for.
+   :::
 
    :::tip
    If you are migrating an existing setup, use the values from your current DMProxy `.properties` files as input for the service configuration. This is especially helpful when running the configuration wizard, because you can reuse the existing service-related values instead of entering them again manually. For the initial setup flow, see [Quickstart](getting-started/quickstart.md) and [Configuration](configuration.md).

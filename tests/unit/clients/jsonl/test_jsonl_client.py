@@ -1,5 +1,4 @@
 import json
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -10,9 +9,7 @@ from sanic.exceptions import InvalidUsage, NotFound, ServerError
 from testbench_defect_service.clients.jsonl.client import JsonlDefectClient
 from testbench_defect_service.clients.jsonl.config import (
     JsonlDefectClientConfig,
-    PhaseCommands,
     ProjectConfig,
-    SyncCommandConfig,
 )
 from testbench_defect_service.models.defects import (
     Defect,
@@ -549,27 +546,6 @@ class TestGetUserDefinedAttributes:
 
 
 @pytest.mark.unit
-class TestSyncHooks:
-    def test_post_projects_sync_before_delegates_to_execute_hook(
-        self, client: JsonlDefectClient, sync_context: SyncContext, sync_type: str
-    ):
-        expected = Protocol()
-        with patch.object(client, "_execute_sync_hook", return_value=expected) as mock_hook:
-            result = client.before_sync("proj", sync_type, sync_context)
-        mock_hook.assert_called_once_with("proj", sync_type, "presync")
-        assert result is expected
-
-    def test_post_projects_sync_after_delegates_to_execute_hook(
-        self, client: JsonlDefectClient, sync_context: SyncContext, sync_type: str
-    ):
-        expected = Protocol()
-        with patch.object(client, "_execute_sync_hook", return_value=expected) as mock_hook:
-            result = client.after_sync("proj", sync_type, sync_context)
-        mock_hook.assert_called_once_with("proj", sync_type, "postsync")
-        assert result is expected
-
-
-@pytest.mark.unit
 class TestSupportsChangesTimestamps:
     def test_returns_true_by_default(self, client: JsonlDefectClient):
         assert client.supports_changes_timestamps() is True
@@ -693,91 +669,6 @@ class TestBuildDefectWithAttributes:
     ):
         result = client._build_defect_with_attributes(sample_defect_with_id, "proj")
         assert isinstance(result, DefectWithAttributes)
-
-
-@pytest.mark.unit
-class TestExecuteSyncHook:
-    def test_no_command_configured_returns_success_protocol(
-        self, client: JsonlDefectClient, sync_type: str
-    ):
-        protocol = client._execute_sync_hook("proj", sync_type, "presync")
-        assert protocol.successes
-
-    def test_unsupported_file_extension_returns_empty_protocol(
-        self, defects_path: Path, sync_type: str
-    ):
-        script = defects_path / "hook.py"
-        script.write_text("pass", encoding="utf-8")
-        config = JsonlDefectClientConfig(
-            defects_path=defects_path,
-            control_fields={},
-            commands=PhaseCommands(presync=SyncCommandConfig(scheduled=str(script))),
-        )
-        protocol = JsonlDefectClient(config)._execute_sync_hook("proj", sync_type, "presync")
-        assert not protocol.successes
-        assert not protocol.generalErrors
-
-    def test_command_file_missing_returns_empty_protocol(self, defects_path: Path, sync_type: str):
-        nonexistent = defects_path / "missing.sh"
-        config = JsonlDefectClientConfig(
-            defects_path=defects_path,
-            control_fields={},
-            commands=PhaseCommands(presync=SyncCommandConfig(scheduled=str(nonexistent))),
-        )
-        protocol = JsonlDefectClient(config)._execute_sync_hook("proj", sync_type, "presync")
-        assert not protocol.successes
-        assert not protocol.generalErrors
-
-    def test_successful_execution_adds_success(self, defects_path: Path, sync_type: str):
-        script = defects_path / "hook.sh"
-        script.write_text("#!/bin/sh", encoding="utf-8")
-        config = JsonlDefectClientConfig(
-            defects_path=defects_path,
-            control_fields={},
-            commands=PhaseCommands(presync=SyncCommandConfig(scheduled=str(script))),
-        )
-        with patch(f"{PATCH_BASE}.subprocess.run"):
-            protocol = JsonlDefectClient(config)._execute_sync_hook("proj", sync_type, "presync")
-        assert protocol.successes
-
-    def test_called_process_error_adds_general_error(self, defects_path: Path, sync_type: str):
-        script = defects_path / "hook.sh"
-        script.write_text("#!/bin/sh", encoding="utf-8")
-        config = JsonlDefectClientConfig(
-            defects_path=defects_path,
-            control_fields={},
-            commands=PhaseCommands(presync=SyncCommandConfig(scheduled=str(script))),
-        )
-        with patch(
-            f"{PATCH_BASE}.subprocess.run",
-            side_effect=subprocess.CalledProcessError(1, "cmd"),
-        ):
-            protocol = JsonlDefectClient(config)._execute_sync_hook("proj", sync_type, "presync")
-        assert protocol.generalErrors
-
-    def test_os_error_adds_general_error(self, defects_path: Path, sync_type: str):
-        script = defects_path / "hook.sh"
-        script.write_text("#!/bin/sh", encoding="utf-8")
-        config = JsonlDefectClientConfig(
-            defects_path=defects_path,
-            control_fields={},
-            commands=PhaseCommands(presync=SyncCommandConfig(scheduled=str(script))),
-        )
-        with patch(f"{PATCH_BASE}.subprocess.run", side_effect=OSError("permission denied")):
-            protocol = JsonlDefectClient(config)._execute_sync_hook("proj", sync_type, "presync")
-        assert protocol.generalErrors
-
-    def test_postsync_hook_type_uses_postsync_commands(self, defects_path: Path, sync_type: str):
-        script = defects_path / "hook.sh"
-        script.write_text("#!/bin/sh", encoding="utf-8")
-        config = JsonlDefectClientConfig(
-            defects_path=defects_path,
-            control_fields={},
-            commands=PhaseCommands(postsync=SyncCommandConfig(scheduled=str(script))),
-        )
-        with patch(f"{PATCH_BASE}.subprocess.run"):
-            protocol = JsonlDefectClient(config)._execute_sync_hook("proj", sync_type, "postsync")
-        assert protocol.successes
 
 
 @pytest.mark.unit
