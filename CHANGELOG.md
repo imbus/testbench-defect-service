@@ -6,30 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ---
 
-## [Unreleased]
-
-### Added
-
-- **`migrate workbook`** — a new subcommand that converts legacy `.xls` defect
-  workbooks into `.xlsx`. The Excel client reads `.xls` but refuses to write to
-  it, so a defect can only be created or updated once the workbook has been
-  converted. Pass a single file or a folder, which is searched recursively; each
-  workbook is written as an `.xlsx` beside the original, leaving the `.xls`
-  untouched. A workbook whose `.xlsx` already exists is skipped rather than
-  overwritten, so re-running over a folder is safe, and one workbook Excel
-  cannot open no longer stops the rest of the batch. The conversion drives an
-  installed Microsoft Excel through COM automation so that formatting, column
-  widths and formulas survive, and therefore requires Windows with Excel and the
-  new optional extra: `pip install "testbench-defect-service[convert]"`.
-
-### Changed
-
-- `migrate` is now a command group so it can carry subcommands. Its existing
-  form is unchanged — `migrate --from legacy.conf --path config.toml` still
-  converts a legacy configuration exactly as before.
-
----
-
 ## [0.4.0][0.4.0] - 2026-08-21
 
 ### Added
@@ -66,6 +42,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validated against the client models, the authentication settings and service
   credentials the legacy formats never carried are asked for interactively, and an
   existing configuration file is backed up before being replaced.
+ - **`migrate workbook`** — a new subcommand that converts legacy `.xls` defect
+  workbooks into `.xlsx`. The Excel client reads `.xls` but refuses to write to
+  it, so a defect can only be created or updated once the workbook has been
+  converted. Pass a single file or a folder, which is searched recursively; each
+  workbook is written as an `.xlsx` beside the original, leaving the `.xls`
+  untouched. A workbook whose `.xlsx` already exists is skipped rather than
+  overwritten, so re-running over a folder is safe, and one workbook Excel
+  cannot open no longer stops the rest of the batch. The conversion drives an
+  installed Microsoft Excel through COM automation so that formatting, column
+  widths and formulas survive, and therefore requires Windows with Excel and the
+  new optional extra: `pip install "testbench-defect-service[convert]"`.
 
 ### Fixed
 
