@@ -21,6 +21,7 @@ testbench-defect-service [COMMAND] [OPTIONS]
 | [`configure`](#configure) | Create or update an existing configuration interactively. |
 | [`set-credentials`](#set-credentials) | Set the service username and password. |
 | [`migrate`](#migrate) | Convert a legacy `.conf` / `.properties` configuration into a TOML configuration. |
+| [`migrate workbook`](#migrate-workbook) | Convert legacy `.xls` defect workbooks into `.xlsx`. |
 | [`start`](#start) | Start the defect service. |
 
 ---
@@ -184,6 +185,70 @@ existing configuration exactly as it was.
 :::note
 Only the Jira and Excel clients have a legacy wrapper format to migrate from. Configure the
 JSONL client with [`init`](#init) or [`configure`](#configure).
+:::
+
+---
+
+## `migrate workbook`
+
+Convert legacy `.xls` defect workbooks into the `.xlsx` format the Excel client can write to.
+
+The Excel client reads both formats, but it refuses to *write* to a legacy `.xls` file — so
+creating or updating a defect in one fails with `Writing to legacy .xls files is not
+supported`. This command converts those workbooks once, up front.
+
+```bash
+testbench-defect-service migrate workbook PATH
+```
+
+`PATH` is either a single `.xls` file or a folder, which is searched **recursively**. Each
+workbook is written as an `.xlsx` file beside the original; the `.xls` file is left
+untouched, so the conversion is reversible by deleting the new file.
+
+### Options
+
+| Argument | Description | Default |
+|--------|-------------|---------|
+| `PATH` | A `.xls` file, or a folder to search recursively (required) | - |
+
+### Examples
+
+```bash
+# Convert a single workbook
+testbench-defect-service migrate workbook "current baseline.xls"
+
+# Convert every .xls below a folder
+testbench-defect-service migrate workbook C:\defects\baselines
+```
+
+Each workbook is reported on its own line, followed by a tally:
+
+```text
+Found 3 .xls workbook(s). Starting Microsoft Excel...
+
+  converted: current baseline.xls -> current baseline.xlsx
+  skipped:   archive\old baseline.xls (target already exists)
+  failed:    archive\corrupt.xls: Excel could not open the file
+
+1 converted, 1 skipped, 1 failed
+```
+
+A workbook that already has an `.xlsx` beside it is **skipped**, never overwritten — so
+re-running the command over a folder is safe. A workbook Excel cannot open is reported and
+the rest of the batch still converts; the command then exits with a non-zero status.
+
+:::warning[Requires Windows and Microsoft Excel]
+The conversion drives an installed Microsoft Excel through COM automation, which keeps
+formatting, column widths and formulas intact — a conversion through a Python library would
+reduce the workbook to bare cell values. It therefore only runs on Windows with Excel
+installed, and needs the optional `convert` extra:
+
+```bash
+pip install testbench-defect-service[convert]
+```
+
+Excel runs hidden in a separate instance, so it will not disturb workbooks you already have
+open. Macros are not carried over, because `.xlsx` cannot hold them.
 :::
 
 ---

@@ -279,11 +279,10 @@ def set_credentials(config_path, username, password):
     configure_credentials_only(config_path, username=username, password=password)
 
 
-@click.command()
+@click.group(invoke_without_command=True)
 @click.option(
     "--from",
     "legacy_path",
-    required=True,
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     metavar="PATH",
     help="Path to the legacy .conf / .properties file to convert",
@@ -302,12 +301,26 @@ def set_credentials(config_path, username, password):
     type=click.Choice(sorted(set(LEGACY_SOURCE_TYPES.values()))),
     help="Legacy source type  [default: detected from the file extension]",
 )
-def migrate(legacy_path: Path, config_path: Path, source_type: str | None):
-    """Convert a legacy .conf/.properties file into a TOML configuration.
+@click.pass_context
+def migrate(
+    ctx: click.Context,
+    legacy_path: Path | None,
+    config_path: Path,
+    source_type: str | None,
+):
+    """Convert a legacy configuration, or run a migration subcommand.
 
-    The conversion runs to completion before anything is written, so cancelling one of
-    its prompts leaves an existing configuration exactly as it was.
+    Without a subcommand this converts a legacy .conf/.properties file into a TOML
+    configuration. The conversion runs to completion before anything is written, so
+    cancelling one of its prompts leaves an existing configuration exactly as it was.
     """
+    if ctx.invoked_subcommand is not None:
+        return
+
+    # --from is only mandatory for the bare `migrate`; a subcommand must not demand it.
+    if legacy_path is None:
+        raise click.UsageError("Missing option '--from'.", ctx=ctx)
+
     print_wizard_banner()
 
     try:
@@ -325,6 +338,81 @@ def migrate(legacy_path: Path, config_path: Path, source_type: str | None):
     click.echo("  1. Review the generated configuration file")
     click.echo("  2. Start the service with: testbench-defect-service start")
     click.echo()
+
+
+@migrate.command("workbook")
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.pass_context
+def migrate_workbook(ctx: click.Context, path: Path):
+    """Convert legacy .xls workbooks to .xlsx.
+
+    PATH is a single .xls file or a folder, which is searched recursively. Each workbook
+    is written as a sibling .xlsx file; one whose .xlsx already exists is left alone.
+
+    Requires Windows with Microsoft Excel, installed via the `convert` extra.
+    """
+    # Imported here so `start` keeps working without the excel/convert extras installed.
+    from testbench_defect_service.clients.excel import xls_converter  # noqa: PLC0415
+
+    sources = xls_converter.find_xls_files(path)
+    if not sources:
+        click.echo(f"No .xls workbooks found in '{path}'.")
+        return
+
+    click.echo(f"Found {len(sources)} .xls workbook(s). Starting Microsoft Excel...")
+    click.echo()
+    try:
+        with xls_converter.excel_application() as excel:
+            results = xls_converter.convert_workbooks(path, excel)
+    except xls_converter.XlsConversionError as e:
+        raise click.ClickException(str(e)) from e
+
+    _report_conversion(results, path)
+
+    if any(r.status is xls_converter.ConversionStatus.FAILED for r in results):
+        ctx.exit(1)
+
+
+def _display_name(source: Path, root: Path) -> str:
+    """Name *source* relative to the searched folder.
+
+    A tree usually holds the same workbook name in several folders, so a bare file name
+    would not say which one a line is about. A single file is its own root, which would
+    make it relative to itself and report as ".".
+    """
+    if root.is_file():
+        return source.name
+    try:
+        return str(source.relative_to(root))
+    except ValueError:
+        return source.name
+
+
+def _report_conversion(results, root: Path):
+    """Print one line per workbook, then a tally."""
+    from testbench_defect_service.clients.excel.xls_converter import (  # noqa: PLC0415
+        ConversionStatus,
+    )
+
+    tally = dict.fromkeys(ConversionStatus, 0)
+    for result in results:
+        tally[result.status] += 1
+        name = _display_name(result.source, root)
+        # Deliberately ASCII: Windows' cp1252 console cannot encode ✓/→, and a
+        # UnicodeEncodeError here would lose the report of work already done.
+        if result.status is ConversionStatus.CONVERTED:
+            click.echo(f"  converted: {name} -> {result.target.name}")
+        elif result.status is ConversionStatus.SKIPPED:
+            click.echo(f"  skipped:   {name} ({result.detail})")
+        else:
+            click.echo(f"  failed:    {name}: {result.detail}")
+
+    click.echo()
+    click.echo(
+        f"{tally[ConversionStatus.CONVERTED]} converted, "
+        f"{tally[ConversionStatus.SKIPPED]} skipped, "
+        f"{tally[ConversionStatus.FAILED]} failed"
+    )
 
 
 cli.add_command(init)
