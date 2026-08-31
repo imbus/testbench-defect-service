@@ -11,6 +11,7 @@ from sanic.worker.loader import AppLoader
 from testbench_defect_service import __title__, __version__
 from testbench_defect_service.app import AppConfig, create_app
 from testbench_defect_service.log import logger
+from testbench_defect_service.utils.client_summary import log_client_summary
 from testbench_defect_service.utils.conf_converter import (
     LEGACY_SOURCE_TYPES,
     ConfConversionError,
