@@ -80,7 +80,7 @@ The Excel client is not bundled in the [ready-to-use executable](../getting-star
 | `.tsv`  | ✅   | ✅    | pandas (tab-separated, fixed) |
 
 :::warning
-Legacy `.xls` files are **read-only**. Attempting to create, update or delete a defect fails with an error asking you to convert the file to `.xlsx`. Set `readonly = true` for `.xls` projects to make this explicit in TestBench.
+Legacy `.xls` files are **read-only**. Attempting to create, update or delete a defect fails with an error asking you to convert the file to `.xlsx`. Set `readonly = true` for `.xls` projects to make this explicit in TestBench, or convert the workbooks with [`migrate workbook`](../cli.md#migrate-workbook).
 :::
 
 ---
@@ -593,7 +593,7 @@ If the directory holding the defect file is not writable, the sidecar cannot be 
 
 | Limitation                                          | Details                                                                                                                                                                                                                        |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **`.xls` is read-only**                     | Creating, updating or deleting a defect in a legacy`.xls` file fails. Convert the file to `.xlsx`.                                                                                                                         |
+| **`.xls` is read-only**                     | Creating, updating or deleting a defect in a legacy`.xls` file fails. Convert the file to `.xlsx` with [`migrate workbook`](../cli.md#migrate-workbook).                                                                   |
 | **`.tsv` ignores `separator`**            | A`.tsv` file is always read and written tab-separated; a configured `separator` has no effect on it. Use `.txt` with `separator = "\t"` to take the delimiter from the configuration instead.                          |
 | **Single-character separators only**          | `separator` must be exactly one character. A longer value fails the operation with`Unsupported separator '<value>' for '<file>'`, on reads as well as writes.                                                              |
 | **Editing during a sync**                     | The client locks the file against other writers, but not against a person: avoid editing the spreadsheet while a sync is running. Note that Excel itself holds an exclusive lock on an open workbook, which makes writes fail. |
