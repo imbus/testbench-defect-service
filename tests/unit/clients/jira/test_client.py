@@ -5,11 +5,11 @@ from __future__ import annotations
 import subprocess
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 import pytest
-from jira import JIRAError
-from sanic import NotFound, ServerError
+from jira import Issue, JIRAError
+from sanic import Forbidden, NotFound, ServerError, Unauthorized
 
 from testbench_defect_service.clients.jira.client import (  # type: ignore[import-untyped]
     JiraDefectClient,
@@ -41,6 +41,8 @@ from testbench_defect_service.models.defects import (  # type: ignore[import-unt
     UserDefinedFieldProperties,
 )
 
+from .conftest import JIRA_ISSUE_FIELD_NAMES
+
 
 @pytest.fixture
 def mock_jira_config():
@@ -49,6 +51,7 @@ def mock_jira_config():
         "os.environ", {"JIRA_USERNAME": "test@example.com", "JIRA_PASSWORD": "token123"}
     ):
         return JiraDefectClientConfig(
+            name="Jira",
             server_url="https://test.atlassian.net",
             auth_type="basic",
             attributes=["title", "status", "priority"],
@@ -499,16 +502,20 @@ class TestGetControlFields:
 @pytest.mark.unit
 class TestGetDefects:
     def _setup(self):
-        mock_issue = Mock()
+        mock_issue = Mock(spec=Issue)
         mock_issue.key = "TEST-1"
+        mock_issue.fields = Mock(spec=JIRA_ISSUE_FIELD_NAMES)
         mock_issue.fields.summary = "Bug"
         mock_issue.fields.description = "desc"
         mock_issue.fields.updated = "2024-01-01T00:00:00.000+0000"
+        mock_issue.fields.status = Mock(spec=["name"])
         mock_issue.fields.status.name = "Open"
+        mock_issue.fields.priority = Mock(spec=["name"])
         mock_issue.fields.priority.name = "High"
+        mock_issue.fields.issuetype = Mock(spec=["name"])
         mock_issue.fields.issuetype.name = "Bug"
-        mock_issue.fields.creator = Mock()
-        mock_issue.fields.creator.displayName = "Alice"
+        mock_issue.fields.reporter = Mock(spec=["displayName"])
+        mock_issue.fields.reporter.displayName = "Alice"
         mock_issue.fields.attachment = []
         return mock_issue
 
@@ -791,20 +798,49 @@ class TestDeleteDefect:
         )
         assert result.generalErrors
 
+    def test_returns_error_when_jira_rejects_the_delete(
+        self, mock_jira_client_instance, sync_context
+    ):
+        """A 403 from Jira must be a protocol entry, not an exception.
+
+        ``Issue.delete()`` raises ``JIRAError``, which subclasses only ``Exception`` -- the
+        common real-world case being an account that may browse and edit but lacks the
+        "Delete Issues" project permission.
+        """
+        defect = _make_defect()
+        mock_issue = Mock()
+        mock_issue.key = "TEST-1"
+        mock_jira_client_instance.jira_client.fetch_issue.return_value = mock_issue
+        mock_jira_client_instance.jira_client.delete_issue.side_effect = JIRAError(
+            "You do not have permission to delete issues", status_code=403
+        )
+
+        result = mock_jira_client_instance.delete_defect(
+            "Test Project (TEST)", "TEST-1", defect, sync_context
+        )
+        assert result.generalErrors
+        assert result.generalErrors[0].code == ProtocolCode.PUBLISH_ERROR
+        assert "permission" in result.generalErrors[0].message
+
 
 @pytest.mark.unit
 class TestGetDefectExtended:
     def _setup_issue(self):
-        issue = Mock()
+        issue = Mock(spec=Issue)
         issue.key = "TEST-1"
-        issue.changelog = Mock(histories=[])
+        issue.changelog = Mock(spec=["histories"], histories=[])
+        issue.fields = Mock(spec=JIRA_ISSUE_FIELD_NAMES)
         issue.fields.summary = "Bug"
         issue.fields.description = "desc"
         issue.fields.updated = "2024-01-01T00:00:00.000+0000"
+        issue.fields.status = Mock(spec=["name"])
         issue.fields.status.name = "Open"
+        issue.fields.priority = Mock(spec=["name"])
         issue.fields.priority.name = "High"
+        issue.fields.issuetype = Mock(spec=["name"])
         issue.fields.issuetype.name = "Bug"
-        issue.fields.creator = Mock(displayName="Alice")
+        issue.fields.reporter = Mock(spec=["displayName"])
+        issue.fields.reporter.displayName = "Alice"
         issue.fields.attachment = []
         return issue
 
@@ -814,7 +850,9 @@ class TestGetDefectExtended:
         mock_jira_client_instance.jira_client.fetch_issue_fields.return_value = {}
         mock_jira_client_instance.config.show_change_history = False
 
-        with patch("testbench_defect_service.clients.jira.client.create_defect_from_issue") as m:
+        with patch(
+            "testbench_defect_service.clients.jira.client.create_extended_defect_from_issue"
+        ) as m:
             m.return_value = _make_defect_with_id()
             result = mock_jira_client_instance.get_defect_extended(
                 "Test Project (TEST)", "TEST-1", sync_context
@@ -839,7 +877,7 @@ class TestGetDefectExtended:
 
         with (
             patch(
-                "testbench_defect_service.clients.jira.client.create_defect_from_issue",
+                "testbench_defect_service.clients.jira.client.create_extended_defect_from_issue",
                 side_effect=ValueError("bad"),
             ),
             pytest.raises(ServerError),
@@ -1830,3 +1868,130 @@ class TestFetchProjectStatuses:
                 "Zu erledigen",
                 "Zurückgewiesen",
             ]
+
+
+@pytest.mark.unit
+class TestProtocolContract:
+    """Protocol-returning methods must never raise.
+
+    openapi.yaml documents ``200`` as the only response for these endpoints, and their
+    ``Protocol`` exists to report partial failure. An exception escaping to the router
+    replaces the whole result -- including any defects that did sync -- with an error page.
+
+    Each test below reproduces a path that previously escaped.
+    """
+
+    @staticmethod
+    def _protocol_of(result):
+        return result if isinstance(result, Protocol) else result.protocol
+
+    @pytest.fixture
+    def denied(self):
+        """Patch the lazy jira_client property to fail authorisation with a 403."""
+        with patch.object(JiraDefectClient, "jira_client", new_callable=PropertyMock) as prop:
+            prop.side_effect = Forbidden("Access denied by Jira")
+            yield prop
+
+    # ``Forbidden`` is raised by the jira_client property but was caught by no method:
+    # a token can authenticate (no 401) and still be denied on a project (403).
+
+    def test_get_defects_reports_forbidden(self, mock_jira_client_instance, sync_context, denied):
+        mock_jira_client_instance._projects = {}
+
+        result = mock_jira_client_instance.get_defects("Test Project (TEST)", sync_context)
+
+        assert isinstance(result, ProtocolledDefectSet)
+        assert result.value == []
+        assert result.protocol.generalErrors[0].code == ProtocolCode.READ_ACCESS_ERROR
+
+    def test_get_defects_batch_reports_forbidden(
+        self, mock_jira_client_instance, sync_context, denied
+    ):
+        mock_jira_client_instance._projects = {}
+
+        result = mock_jira_client_instance.get_defects_batch(
+            "Test Project (TEST)", [DefectID(root="TEST-1")], sync_context
+        )
+
+        assert isinstance(result, ProtocolledDefectSet)
+        assert result.protocol.generalErrors[0].code == ProtocolCode.READ_ACCESS_ERROR
+
+    def test_update_defect_reports_forbidden(self, mock_jira_client_instance, sync_context, denied):
+        result = mock_jira_client_instance.update_defect(
+            "Test Project (TEST)", "TEST-1", _make_defect(), sync_context
+        )
+
+        assert result.generalErrors[0].code == ProtocolCode.READ_ACCESS_ERROR
+
+    def test_delete_defect_reports_forbidden(self, mock_jira_client_instance, sync_context, denied):
+        """delete_defect called _resolve_jira_client outside any try block."""
+        result = mock_jira_client_instance.delete_defect(
+            "Test Project (TEST)", "TEST-1", _make_defect(), sync_context
+        )
+
+        assert result.generalErrors[0].code == ProtocolCode.READ_ACCESS_ERROR
+
+    # Per-user authentication builds a JiraClient directly, bypassing the property's
+    # translation of low-level Jira errors into Sanic exceptions.
+
+    def test_create_defect_reports_per_user_auth_failure(
+        self, mock_jira_client_instance, sync_context
+    ):
+        mock_jira_client_instance.config.projects["Test Project (TEST)"] = JiraProjectConfig(
+            enable_shared_auth=False
+        )
+        with patch("testbench_defect_service.clients.jira.client.JiraClient") as jira_client_cls:
+            jira_client_cls.side_effect = JIRAError(
+                "Basic auth with password is not allowed", status_code=401
+            )
+
+            result = mock_jira_client_instance.create_defect(
+                "Test Project (TEST)", _make_defect(), sync_context
+            )
+
+        assert result.value == ""
+        assert result.protocol.generalErrors[0].code == ProtocolCode.READ_ACCESS_ERROR
+
+    def test_create_defect_reports_unauthorized_project_lookup(
+        self, mock_jira_client_instance, sync_context
+    ):
+        """On the per-user path this is the first access to the shared connection."""
+        mock_jira_client_instance.config.projects["Test Project (TEST)"] = JiraProjectConfig(
+            enable_shared_auth=False
+        )
+        mock_jira_client_instance._projects = {}
+        with (
+            patch("testbench_defect_service.clients.jira.client.JiraClient"),
+            patch.object(JiraDefectClient, "projects", new_callable=PropertyMock) as projects,
+        ):
+            projects.side_effect = Unauthorized("token expired")
+
+            result = mock_jira_client_instance.create_defect(
+                "Test Project (TEST)", _make_defect(), sync_context
+            )
+
+        assert result.value == ""
+        assert result.protocol.generalErrors[0].code == ProtocolCode.READ_ACCESS_ERROR
+
+    # A misconfigured sync hook returned an all-empty protocol, indistinguishable from
+    # a clean no-op run.
+
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [("hook.sh1", "unsupported file extension"), ("missing.sh", "not found")],
+        ids=["unsupported_extension", "missing_file"],
+    )
+    def test_sync_hook_reports_misconfiguration(
+        self, mock_jira_client_instance, sync_context, tmp_path, command, expected
+    ):
+        mock_jira_client_instance.config.commands = PhaseCommands(
+            presync=SyncCommandConfig(manual=str(tmp_path / command))
+        )
+
+        protocol = mock_jira_client_instance.before_sync(
+            "Test Project (TEST)", "manual", sync_context
+        )
+
+        assert protocol.generalErrors, "misconfigured hook must not report an empty protocol"
+        assert protocol.generalErrors[0].code == ProtocolCode.PUBLISH_ERROR
+        assert expected in protocol.generalErrors[0].message

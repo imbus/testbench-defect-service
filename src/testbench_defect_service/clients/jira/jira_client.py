@@ -880,7 +880,11 @@ class JiraClient:
     def delete_issue(self, issue: Issue) -> None:
         issue_key = issue.key
         logger.info("Deleting issue '%s'", issue_key)
-        issue.delete()
+        try:
+            issue.delete()
+        except JIRAError as exc:
+            logger.error("Failed to delete issue '%s': %s", issue_key, exc)
+            raise ValueError(f"Unable to delete Jira issue: {exc}") from exc
         logger.info("Successfully deleted issue '%s'", issue_key)
 
     def update_issue(

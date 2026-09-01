@@ -7,6 +7,8 @@ from typing import Any
 from unittest.mock import Mock
 
 import pytest
+from jira import Issue
+from jira.resources import Project
 
 from testbench_defect_service.models.defects import (
     Defect,
@@ -16,11 +18,28 @@ from testbench_defect_service.models.defects import (
     UserDefinedFieldProperties,
 )
 
+#: The issue fields the fake Jira issues expose.  ``Mock(spec=...)`` is built from
+#: this list so that reading any *other* field raises ``AttributeError`` instead of
+#: handing out a truthy child Mock: a field renamed in the production mapping then
+#: fails loudly here rather than leaking a Mock into the defect model.  Individual
+#: tests can still assign extra attributes (e.g. ``customfield_10001``), because
+#: ``spec`` restricts reads, not writes.
+JIRA_ISSUE_FIELD_NAMES = [
+    "summary",
+    "description",
+    "updated",
+    "status",
+    "priority",
+    "issuetype",
+    "reporter",
+    "attachment",
+]
+
 
 @pytest.fixture
 def mock_jira_project() -> Mock:
     """Create a mock Jira Project object."""
-    project = Mock()
+    project = Mock(spec=Project)
     project.name = "Test Project"
     project.key = "TEST"
     return project
@@ -29,35 +48,36 @@ def mock_jira_project() -> Mock:
 @pytest.fixture
 def mock_jira_issue() -> Mock:
     """Create a mock Jira Issue object with typical fields."""
-    issue = Mock()
+    issue = Mock(spec=Issue)
     issue.key = "TEST-123"
 
     # Mock fields
-    issue.fields = Mock()
+    issue.fields = Mock(spec=JIRA_ISSUE_FIELD_NAMES)
     issue.fields.summary = "Test Issue Summary"
     issue.fields.description = "Test Issue Description"
     issue.fields.updated = "2024-01-15T10:30:45.123000+0000"
 
     # Mock status
-    issue.fields.status = Mock()
+    issue.fields.status = Mock(spec=["name"])
     issue.fields.status.name = "Open"
 
     # Mock priority
-    issue.fields.priority = Mock()
+    issue.fields.priority = Mock(spec=["name"])
     issue.fields.priority.name = "High"
 
     # Mock issue type
-    issue.fields.issuetype = Mock()
+    issue.fields.issuetype = Mock(spec=["name"])
     issue.fields.issuetype.name = "Bug"
 
-    # Mock creator/reporter
-    issue.fields.creator = Mock()
-    issue.fields.creator.displayName = "John Doe"
+    # Mock reporter
+    issue.fields.reporter = Mock(spec=["displayName"])
+    issue.fields.reporter.displayName = "John Doe"
 
-    # Mock attachments
-    attachment1 = Mock()
+    # Mock attachments -- no ``id`` unless a test adds one, so the site_url branch
+    # of _extract_references falls back the way it would for a real attachment.
+    attachment1 = Mock(spec=["content"])
     attachment1.content = "https://example.com/attachment1.png"
-    attachment2 = Mock()
+    attachment2 = Mock(spec=["content"])
     attachment2.content = "https://example.com/attachment2.pdf"
     issue.fields.attachment = [attachment1, attachment2]
 

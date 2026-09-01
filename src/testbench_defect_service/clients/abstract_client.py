@@ -27,13 +27,32 @@ class AbstractDefectClient(ABC):
     Subclasses must:
     - Set CONFIG_CLASS to their specific config model type (e.g., JiraDefectClientConfig)
     - Implement all abstract methods
-    - Raise appropriate exceptions for error conditions (NotFound, ServerError, ValidationError)
+    - Report error conditions according to the Exception Guidelines below
     - Handle authentication and authorization through the principal in Defect objects
 
     Exception Guidelines:
-    - Raise sanic.NotFound for missing resources (projects, defects)
-    - Raise sanic.ServerError for client/server errors
-    - Raise pydantic.ValidationError for invalid data
+
+    The correct behaviour depends on whether the method returns a protocol. openapi.yaml
+    documents ``200`` as the only response for every endpoint, so an exception escaping a
+    protocol-returning method produces an off-spec error page.
+
+    1. Protocol-returning methods MUST NOT raise:
+       ``get_defects``, ``get_defects_batch``, ``create_defect``, ``update_defect``,
+       ``delete_defect``, ``before_sync``, ``after_sync``.
+
+       These exist to report partial failure ("39 defects synced, 1 failed"). Report every
+       error as a protocol entry and return the accumulated result, so the work that did
+       succeed still reaches TestBench:
+       - add_error(key, ...) for a failure attributable to one defect
+       - add_general_error(...) for a failure affecting the whole request
+
+    2. All other methods raise, because they return bare types with nowhere to put a
+       protocol: ``check_login``, ``get_settings``, ``get_projects``, ``get_control_fields``,
+       ``get_defect_extended``, ``get_user_defined_attributes``, ``supports_changes_timestamps``,
+       ``correct_sync_results``.
+       - Raise sanic.NotFound for missing resources (projects, defects)
+       - Raise sanic.ServerError for client/server errors
+       - Raise pydantic.ValidationError for invalid data
     """
 
     # Subclasses must override this to specify their config model type
