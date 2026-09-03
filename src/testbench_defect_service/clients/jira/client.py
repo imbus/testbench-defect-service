@@ -11,7 +11,7 @@ from sanic import Forbidden, NotFound, ServerError, Unauthorized
 
 from testbench_defect_service.clients.abstract_client import AbstractDefectClient
 from testbench_defect_service.clients.jira.config import JiraDefectClientConfig, is_oauth2
-from testbench_defect_service.clients.jira.jira_client import JiraClient
+from testbench_defect_service.clients.jira.jira_client import JiraClient, jira_error_summary
 from testbench_defect_service.clients.jira.utils import (
     build_project_dict,
     create_defect_from_issue,
@@ -54,8 +54,17 @@ JIRA_WRITE_ERRORS = (
 
 
 def describe_exception(exc: Exception) -> str:
-    """Return readable text for Sanic exceptions, ``JIRAError`` and plain exceptions alike."""
-    message = getattr(exc, "message", None) or getattr(exc, "text", None) or str(exc)
+    """Return readable text for Sanic exceptions, ``JIRAError`` and plain exceptions alike.
+
+    A ``JIRAError`` is never rendered through ``str()``: its ``__str__`` dumps the request
+    and response headers, which carry the ``Authorization`` header of the outgoing call.
+    ``jira_error_summary`` reads the individual attributes instead, so a Jira failure stays
+    safe to put into a protocol message or an HTTP response no matter which code path
+    raised it.
+    """
+    message = getattr(exc, "message", None) or getattr(exc, "text", None)
+    if not message:
+        message = jira_error_summary(exc) if isinstance(exc, JIRAError) else str(exc)
     status_code = getattr(exc, "status_code", None)
     return f"{message} (HTTP {status_code})" if status_code else f"{type(exc).__name__}: {message}"
 
@@ -354,9 +363,10 @@ class JiraDefectClient(AbstractDefectClient):
             try:
                 fields = self.jira_client.get_all_project_fields(project=self.projects[project].key)
             except JIRAError as exc:
-                logger.error("Failed to fetch project fields for project '%s': %s", project, exc)
+                detail = describe_exception(exc)
+                logger.error("Failed to fetch project fields for project '%s': %s", project, detail)
                 protocol.add_general_error(
-                    f"Failed to fetch project fields for project '{project}': {exc}",
+                    f"Failed to fetch project fields for project '{project}': {detail}",
                     protocol_code=ProtocolCode.READ_ACCESS_ERROR,
                 )
                 return ProtocolledDefectSet(value=defects, protocol=protocol)
@@ -428,9 +438,10 @@ class JiraDefectClient(AbstractDefectClient):
         try:
             fields = self.jira_client.get_all_project_fields(project=project_key)
         except JIRAError as exc:
-            logger.error("Failed to fetch project fields for project '%s': %s", project, exc)
+            detail = describe_exception(exc)
+            logger.error("Failed to fetch project fields for project '%s': %s", project, detail)
             protocol.add_general_error(
-                f"Failed to fetch project fields for project '{project}': {exc}",
+                f"Failed to fetch project fields for project '{project}': {detail}",
                 protocol_code=ProtocolCode.READ_ACCESS_ERROR,
             )
             return ProtocolledDefectSet(value=[], protocol=protocol)
@@ -767,9 +778,10 @@ class JiraDefectClient(AbstractDefectClient):
         try:
             fields = self.jira_client.get_all_project_fields(project=project_key)
         except JIRAError as exc:
-            logger.error("Failed to fetch project fields for project '%s': %s", project, exc)
+            detail = describe_exception(exc)
+            logger.error("Failed to fetch project fields for project '%s': %s", project, detail)
             raise ServerError(
-                f"Failed to fetch project fields for project '{project}': {exc}"
+                f"Failed to fetch project fields for project '{project}': {detail}"
             ) from exc
         return [
             UserDefinedAttribute(

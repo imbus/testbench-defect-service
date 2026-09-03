@@ -48,7 +48,7 @@ _MISSING_WRITE_ACCESS_STATUSES = (
 )
 
 
-def _jira_error_summary(error: JIRAError) -> str:
+def jira_error_summary(error: JIRAError) -> str:
     """Return a compact one-line summary of a ``JIRAError`` without the header dump."""
     parts = [f"status={error.status_code}"]
     url = getattr(error, "url", None)
@@ -622,7 +622,7 @@ class JiraClient:
                 "Falling back to createmeta endpoint: %s",
                 project,
                 error.status_code,
-                _jira_error_summary(error),
+                jira_error_summary(error),
             )
         logger.debug("project_issue_types error for project '%s': %s", project, error)
 
@@ -642,7 +642,7 @@ class JiraClient:
         if issue_types_error is None:
             message = (
                 f"Cannot read the field metadata of project '{project}': "
-                f"{_jira_error_summary(createmeta_error)}"
+                f"{jira_error_summary(createmeta_error)}"
             )
             logger.error("%s", message)
             logger.debug("createmeta error for project '%s': %s", project, createmeta_error)
@@ -659,8 +659,8 @@ class JiraClient:
         logger.error(
             "%s (project_issue_types: %s | createmeta fallback: %s)",
             message,
-            _jira_error_summary(issue_types_error),
-            _jira_error_summary(createmeta_error),
+            jira_error_summary(issue_types_error),
+            jira_error_summary(createmeta_error),
         )
         logger.debug(
             "Field metadata errors for project '%s': %s / %s",
@@ -730,7 +730,7 @@ class JiraClient:
                 try:
                     return self.jira.fields()
                 except JIRAError as e:
-                    logger.error("Error fetching custom fields: %s", _jira_error_summary(e))
+                    logger.error("Error fetching custom fields: %s", jira_error_summary(e))
                     logger.debug("Error fetching custom fields: %s", e)
                     raise
         try:

@@ -158,6 +158,31 @@ def _make_project_mock(name: str = "Test Project", key: str = "TEST") -> Mock:
     return p
 
 
+LEAKED_CREDENTIAL = "Basic c2VjcmV0OnRva2Vu"
+
+
+def _jira_error_with_credentials() -> JIRAError:
+    """Build a JIRAError shaped like one raised by a real failed HTTP call.
+
+    ``ResilientSession.raise_on_error`` attaches the outgoing request and the response,
+    so ``JIRAError.__str__`` dumps both header dicts - including the ``Authorization``
+    header ``requests`` composed onto the request.
+    """
+    request = Mock(spec=["headers", "text"])
+    request.headers = {"Authorization": LEAKED_CREDENTIAL}
+    request.text = ""
+    response = Mock(spec=["headers", "text"])
+    response.headers = {"X-Seraph-LoginReason": "AUTHENTICATED_FAILED"}
+    response.text = "No permission"
+    return JIRAError(
+        text="No permission to read fields",
+        status_code=403,
+        url="https://jira.example/rest/api/2/field",
+        request=request,
+        response=response,
+    )
+
+
 def _make_defect_with_id(**overrides) -> DefectWithID:
     defaults: dict[str, Any] = {
         "id": DefectID(root="TEST-1"),
@@ -546,6 +571,29 @@ class TestGetDefects:
 
         assert result.protocol.errors
 
+    def test_field_fetch_failure_does_not_leak_credentials(
+        self, mock_jira_client_instance, sync_context, caplog
+    ):
+        """A raw JIRAError must never reach the protocol message verbatim.
+
+        Today ``get_all_project_fields`` wraps project-scoped failures in the sanitized
+        ``JiraProjectFieldsError``, so this path is safe only by that invariant - the
+        rendering here has to hold up on its own if a raw error ever gets through.
+        """
+        mock_jira_client_instance.jira_client.fetch_issues_by_jql.return_value = [self._setup()]
+        mock_jira_client_instance.jira_client.get_all_project_fields.side_effect = (
+            _jira_error_with_credentials()
+        )
+
+        with caplog.at_level("DEBUG"):
+            result = mock_jira_client_instance.get_defects("Test Project (TEST)", sync_context)
+
+        assert result.protocol.generalErrors
+        rendered = " ".join(error.message for error in result.protocol.generalErrors)
+        assert LEAKED_CREDENTIAL not in rendered
+        assert "request headers" not in rendered
+        assert LEAKED_CREDENTIAL not in caplog.text
+
     def test_returns_general_error_for_unknown_project(
         self, mock_jira_client_instance, sync_context
     ):
@@ -590,6 +638,25 @@ class TestGetDefectsBatch:
             "Unknown Project", [DefectID(root="X-1")], sync_context
         )
         assert result.protocol.generalErrors
+
+    def test_field_fetch_failure_does_not_leak_credentials(
+        self, mock_jira_client_instance, sync_context, caplog
+    ):
+        """See ``TestGetDefects.test_field_fetch_failure_does_not_leak_credentials``."""
+        mock_jira_client_instance.jira_client.get_all_project_fields.side_effect = (
+            _jira_error_with_credentials()
+        )
+
+        with caplog.at_level("DEBUG"):
+            result = mock_jira_client_instance.get_defects_batch(
+                "Test Project (TEST)", [DefectID(root="TEST-1")], sync_context
+            )
+
+        assert result.protocol.generalErrors
+        rendered = " ".join(error.message for error in result.protocol.generalErrors)
+        assert LEAKED_CREDENTIAL not in rendered
+        assert "request headers" not in rendered
+        assert LEAKED_CREDENTIAL not in caplog.text
 
     def test_skips_empty_defect_ids(self, mock_jira_client_instance, sync_context):
         mock_jira_client_instance.jira_client.get_all_project_fields.return_value = []
@@ -916,6 +983,27 @@ class TestGetUserDefinedAttributes:
         mock_jira_client_instance.jira_client.get_all_project_fields.return_value = []
         result = mock_jira_client_instance.get_user_defined_attributes("Test Project (TEST)")
         assert result == []
+
+    @pytest.mark.parametrize("project", [None, "Test Project (TEST)"])
+    def test_jira_error_does_not_leak_credentials(self, mock_jira_client_instance, caplog, project):
+        """A failed field fetch must not put the Authorization header in the response.
+
+        ``get_all_project_fields`` re-raises the raw ``JIRAError`` on the
+        ``project is None`` / Data Center path, so the message reaching the caller
+        has to be summarized rather than interpolated verbatim.
+        """
+        mock_jira_client_instance.jira_client.get_all_project_fields.side_effect = (
+            _jira_error_with_credentials()
+        )
+
+        with caplog.at_level("DEBUG"), pytest.raises(ServerError) as excinfo:
+            mock_jira_client_instance.get_user_defined_attributes(project)
+
+        assert LEAKED_CREDENTIAL not in str(excinfo.value)
+        assert "request headers" not in str(excinfo.value)
+        assert LEAKED_CREDENTIAL not in caplog.text
+        # The actionable part of the failure must survive the sanitization.
+        assert "403" in str(excinfo.value)
 
 
 @pytest.mark.unit
