@@ -63,10 +63,9 @@ def jira_error_summary(error: JIRAError) -> str:
 def _missing_write_access_hint(project: str | None) -> str:
     """Return a human-readable hint about missing write access on a Jira project."""
     return (
-        f"The authenticated Jira account is most likely missing write access to project "
-        f"'{project}' (the 'Create Issues' permission, which Jira requires to expose the "
-        f"create metadata of a project). Grant that permission in the project's permission "
-        f"scheme and verify that the project key is correct."
+        f"The Jira account is most likely missing write access to project '{project}': "
+        f"Jira only exposes a project's field metadata to accounts with the 'Create Issues' "
+        f"permission."
     )
 
 

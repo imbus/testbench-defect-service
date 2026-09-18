@@ -12,7 +12,9 @@ from jira import Issue, JIRAError
 from sanic import Forbidden, NotFound, ServerError, Unauthorized
 
 from testbench_defect_service.clients.jira.client import (  # type: ignore[import-untyped]
+    PROTOCOL_DETAIL_LIMIT,
     JiraDefectClient,
+    protocol_message,
 )
 from testbench_defect_service.clients.jira.config import (  # type: ignore[import-untyped]
     JiraDefectClientConfig,
@@ -1990,7 +1992,7 @@ class TestProtocolContract:
 
         assert isinstance(result, ProtocolledDefectSet)
         assert result.value == []
-        assert result.protocol.generalErrors[0].code == ProtocolCode.READ_ACCESS_ERROR
+        assert result.protocol.generalErrors[0].code == ProtocolCode.INSERT_ACCESS_ERROR
 
     def test_get_defects_batch_reports_forbidden(
         self, mock_jira_client_instance, sync_context, denied
@@ -2002,14 +2004,14 @@ class TestProtocolContract:
         )
 
         assert isinstance(result, ProtocolledDefectSet)
-        assert result.protocol.generalErrors[0].code == ProtocolCode.READ_ACCESS_ERROR
+        assert result.protocol.generalErrors[0].code == ProtocolCode.INSERT_ACCESS_ERROR
 
     def test_update_defect_reports_forbidden(self, mock_jira_client_instance, sync_context, denied):
         result = mock_jira_client_instance.update_defect(
             "Test Project (TEST)", "TEST-1", _make_defect(), sync_context
         )
 
-        assert result.generalErrors[0].code == ProtocolCode.READ_ACCESS_ERROR
+        assert result.generalErrors[0].code == ProtocolCode.PUBLISH_ACCESS_ERROR
 
     def test_delete_defect_reports_forbidden(self, mock_jira_client_instance, sync_context, denied):
         """delete_defect called _resolve_jira_client outside any try block."""
@@ -2017,7 +2019,7 @@ class TestProtocolContract:
             "Test Project (TEST)", "TEST-1", _make_defect(), sync_context
         )
 
-        assert result.generalErrors[0].code == ProtocolCode.READ_ACCESS_ERROR
+        assert result.generalErrors[0].code == ProtocolCode.PUBLISH_ACCESS_ERROR
 
     # Per-user authentication builds a JiraClient directly, bypassing the property's
     # translation of low-level Jira errors into Sanic exceptions.
@@ -2038,7 +2040,7 @@ class TestProtocolContract:
             )
 
         assert result.value == ""
-        assert result.protocol.generalErrors[0].code == ProtocolCode.READ_ACCESS_ERROR
+        assert result.protocol.generalErrors[0].code == ProtocolCode.INSERT_ACCESS_ERROR
 
     def test_create_defect_reports_unauthorized_project_lookup(
         self, mock_jira_client_instance, sync_context
@@ -2059,7 +2061,7 @@ class TestProtocolContract:
             )
 
         assert result.value == ""
-        assert result.protocol.generalErrors[0].code == ProtocolCode.READ_ACCESS_ERROR
+        assert result.protocol.generalErrors[0].code == ProtocolCode.INSERT_ACCESS_ERROR
 
     # A misconfigured sync hook returned an all-empty protocol, indistinguishable from
     # a clean no-op run.
@@ -2083,3 +2085,54 @@ class TestProtocolContract:
         assert protocol.generalErrors, "misconfigured hook must not report an empty protocol"
         assert protocol.generalErrors[0].code == ProtocolCode.PUBLISH_ERROR
         assert expected in protocol.generalErrors[0].message
+
+
+@pytest.mark.unit
+class TestProtocolMessage:
+    """Protocol entries are read by a person in TestBench, not by a log parser.
+
+    A raw Jira failure carries a multi-line response body and collects a ``(HTTP nnn)``
+    suffix on every layer it passes, which made the entries unreadably long.
+    """
+
+    ACTION = "Reading defects of project 'Test Project (TEST)' failed"
+
+    def test_collapses_multiline_cause_onto_one_line(self):
+        exc = JIRAError(text="Gateway timeout\n  while reading\n\tthe project", status_code=504)
+
+        message = protocol_message(self.ACTION, exc)
+
+        assert "\n" not in message
+        assert message == f"{self.ACTION}: Gateway timeout while reading the project (HTTP 504)"
+
+    def test_truncates_a_long_cause(self):
+        exc = JIRAError(text="detail " * 200, status_code=400)
+
+        message = protocol_message(self.ACTION, exc)
+
+        assert message.startswith(f"{self.ACTION}: detail detail")
+        assert message.endswith("... (HTTP 400)")
+        assert len(message) < len(self.ACTION) + PROTOCOL_DETAIL_LIMIT + 20
+
+    def test_truncates_a_cause_without_spaces(self):
+        """A single long token must not be swallowed by the word-boundary cut."""
+        exc = JIRAError(text="x" * 500, status_code=400)
+
+        message = protocol_message(self.ACTION, exc)
+
+        assert message.startswith(f"{self.ACTION}: xxx")
+        assert message.endswith("... (HTTP 400)")
+
+    def test_reports_the_status_once(self):
+        """``describe_exception`` appends the status again on an already described cause."""
+        exc = Forbidden("Per-user authentication to Jira failed: denied (HTTP 403)")
+
+        message = protocol_message(self.ACTION, exc)
+
+        assert message.count("(HTTP 403)") == 1
+        assert message.endswith("denied (HTTP 403)")
+
+    def test_names_the_type_when_there_is_no_status(self):
+        message = protocol_message(self.ACTION, RuntimeError("connection reset by peer"))
+
+        assert message == f"{self.ACTION}: RuntimeError: connection reset by peer"
