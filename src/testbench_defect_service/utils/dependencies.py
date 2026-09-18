@@ -1,7 +1,7 @@
 import importlib.metadata
 import importlib.util
 
-EXCEL_PACKAGES: list[str] = ["openpyxl", "pandas", "xlrd"]
+EXCEL_PACKAGES: list[str] = []
 JIRA_PACKAGES: list[str] = ["jira", "beautifulsoup4"]
 
 

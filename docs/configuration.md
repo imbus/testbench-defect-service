@@ -16,9 +16,6 @@ testbench-defect-service configure         # Update an existing config
 testbench-defect-service set-credentials   # Update credentials only
 ```
 
-Migrating from a legacy wrapper? `testbench-defect-service migrate` converts an existing Jira
-`.conf` or Excel `.properties` file into this format — see the [Migration guide](migration.md).
-
 See [CLI Commands](cli.md) for all options.
 :::
 
@@ -275,7 +272,7 @@ file_path  = "testbench-defect-service.log"
 
 ## Pre/post sync commands
 
-The built-in clients support running shell commands before and after TestBench syncs defects, configured under a `commands` subsection.
+Both clients support running shell commands before and after TestBench syncs defects, configured under a `commands` subsection.
 
 | Option | Description |
 |--------|-------------|
@@ -308,7 +305,6 @@ scheduled = "C:\\scripts\\project-before.bat"
 Each backend client has its own configuration (`[testbench-defect-service.client_config]` section or as separate configuration file). See the individual client documentation for the full option reference:
 
 - [JSONL Client configuration](clients/jsonl-client.md#configuration)
-- [Excel Client configuration](clients/excel-client.md#configuration)
 - [Jira Client configuration](clients/jira-client.md#configuration)
 
 ---

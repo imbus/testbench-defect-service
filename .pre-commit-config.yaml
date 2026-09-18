@@ -18,7 +18,6 @@ repos:
         description: "Run 'ruff format' for extremely fast Python formatting"
         entry: ruff format --force-exclude
         language: python
-        additional_dependencies: [ruff==0.15.21]
         types_or: [python, pyi, jupyter]
         require_serial: true
 
@@ -27,7 +26,6 @@ repos:
         description: "Run 'ruff' for extremely fast Python linting"
         entry: ruff check --force-exclude
         language: python
-        additional_dependencies: [ruff==0.15.21]
         types_or: [python, pyi, jupyter]
         require_serial: true
 
