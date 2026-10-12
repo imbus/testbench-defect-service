@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from http import HTTPStatus
 from typing import Any
 
@@ -9,7 +10,7 @@ from sanic import Forbidden, NotFound, ServerError, Unauthorized
 
 from testbench_defect_service.clients.abstract_client import AbstractDefectClient
 from testbench_defect_service.clients.jira.config import JiraDefectClientConfig, is_oauth2
-from testbench_defect_service.clients.jira.jira_client import JiraClient
+from testbench_defect_service.clients.jira.jira_client import JiraClient, jira_error_summary
 from testbench_defect_service.clients.jira.utils import (
     build_project_dict,
     create_defect_from_issue,
@@ -38,6 +39,76 @@ from testbench_defect_service.models.defects import (
     SyncContext,
     UserDefinedAttribute,
 )
+
+JIRA_AUTH_ERRORS = (Unauthorized, Forbidden, NotFound)
+
+JIRA_WRITE_ERRORS = (
+    JIRAError,
+    RuntimeError,
+    OSError,
+    ValueError,
+    KeyError,
+    AttributeError,
+    TypeError,
+)
+
+
+def describe_exception(exc: Exception) -> str:
+    """Return readable text for Sanic exceptions, ``JIRAError`` and plain exceptions alike.
+
+    A ``JIRAError`` is never rendered through ``str()``: its ``__str__`` dumps the request
+    and response headers, which carry the ``Authorization`` header of the outgoing call.
+    ``jira_error_summary`` reads the individual attributes instead, so a Jira failure stays
+    safe to put into a protocol message or an HTTP response no matter which code path
+    raised it.
+    """
+    message = getattr(exc, "message", None) or getattr(exc, "text", None)
+    if not message:
+        message = jira_error_summary(exc) if isinstance(exc, JIRAError) else str(exc)
+    status_code = getattr(exc, "status_code", None)
+    return f"{message} (HTTP {status_code})" if status_code else f"{type(exc).__name__}: {message}"
+
+
+PROTOCOL_DETAIL_LIMIT = 200
+
+_TRAILING_STATUS = re.compile(r"(?:\s*\(HTTP \d+\))+$")
+
+
+def protocol_message(action: str, exc: Exception) -> str:
+    """Return a short one-line protocol entry: what failed plus a trimmed cause.
+
+    Protocol entries are shown to the user in TestBench, where a multi-line Jira response
+    dump is unreadable. The cause is therefore collapsed onto one line, cut off after
+    ``PROTOCOL_DETAIL_LIMIT`` characters and followed by the HTTP status exactly once, no
+    matter how often it was appended on the way up. The full cause stays in the log.
+    """
+    detail = _TRAILING_STATUS.sub("", " ".join(describe_exception(exc).split()))
+    if len(detail) > PROTOCOL_DETAIL_LIMIT:
+        cut = detail[:PROTOCOL_DETAIL_LIMIT]
+        # cut on a word boundary, unless that would swallow most of the text (a single
+        # long token, e.g. an HTML body or a JSON payload without spaces)
+        boundary = cut.rfind(" ")
+        if boundary > PROTOCOL_DETAIL_LIMIT // 2:
+            cut = cut[:boundary]
+        detail = cut.rstrip(" ,.;:") + "..."
+    status_code = getattr(exc, "status_code", None)
+    return f"{action}: {detail} (HTTP {status_code})" if status_code else f"{action}: {detail}"
+
+
+def as_http_error(exc: Exception, context: str) -> Unauthorized | Forbidden | NotFound:
+    """Map a low-level Jira connection failure onto the matching Sanic exception.
+
+    Mirrors the translation the ``jira_client`` property performs, so callers that build a
+    ``JiraClient`` directly (per-user authentication) raise the same types the protocol
+    methods already know how to turn into protocol entries.
+    """
+    status_code = getattr(exc, "status_code", None)
+    detail = f"{context}: {describe_exception(exc)}"
+    if status_code == HTTPStatus.FORBIDDEN:
+        return Forbidden(detail)
+    if status_code == HTTPStatus.UNAUTHORIZED:
+        return Unauthorized(detail)
+    return NotFound(detail)
 
 
 class JiraDefectClient(AbstractDefectClient):
@@ -315,7 +386,19 @@ class JiraDefectClient(AbstractDefectClient):
                     protocol_code=ProtocolCode.NO_DEFECT_FOUND,
                     message=f"No issues found for project '{project}' using configured JQL.",
                 )
-            fields = self.jira_client.get_all_project_fields(project=self.projects[project].key)
+            try:
+                fields = self.jira_client.get_all_project_fields(project=self.projects[project].key)
+            except JIRAError as exc:
+                logger.error(
+                    "Failed to fetch project fields for project '%s': %s",
+                    project,
+                    describe_exception(exc),
+                )
+                protocol.add_general_error(
+                    protocol_message(f"Reading defects of project '{project}' failed", exc),
+                    protocol_code=ProtocolCode.INSERT_ACCESS_ERROR,
+                )
+                return ProtocolledDefectSet(value=defects, protocol=protocol)
             logger.debug("Processing %d issues for project '%s'", len(issues), project)
 
             for issue in issues:
@@ -348,13 +431,13 @@ class JiraDefectClient(AbstractDefectClient):
         except (RuntimeError, OSError) as exc:
             logger.error("Unexpected error while fetching defects for project '%s'", project)
             protocol.add_general_error(
-                f"Failed to fetch defects for project '{project}': {exc}",
+                protocol_message(f"Reading defects of project '{project}' failed", exc),
                 protocol_code=ProtocolCode.INSERT_ERROR,
             )
-        except (Unauthorized, NotFound) as exc:
+        except JIRA_AUTH_ERRORS as exc:
             protocol.add_general_error(
-                exc.message,
-                protocol_code=ProtocolCode.READ_ACCESS_ERROR,
+                protocol_message(f"Reading defects of project '{project}' failed", exc),
+                protocol_code=ProtocolCode.INSERT_ACCESS_ERROR,
             )
 
         return ProtocolledDefectSet(value=defects, protocol=protocol)
@@ -373,15 +456,27 @@ class JiraDefectClient(AbstractDefectClient):
                 f"Unknown project '{project}': {exc}", protocol_code=ProtocolCode.PROJECT_NOT_FOUND
             )
             return ProtocolledDefectSet(value=[], protocol=protocol)
-        except (Unauthorized, NotFound) as exc:
+        except JIRA_AUTH_ERRORS as exc:
             protocol.add_general_error(
-                exc.message,
-                protocol_code=ProtocolCode.READ_ACCESS_ERROR,
+                protocol_message(f"Reading defects of project '{project}' failed", exc),
+                protocol_code=ProtocolCode.INSERT_ACCESS_ERROR,
             )
             return ProtocolledDefectSet(value=[], protocol=protocol)
 
         logger.info("Processing batch of %d defect IDs for project '%s'", len(defect_ids), project)
-        fields = self.jira_client.get_all_project_fields(project=project_key)
+        try:
+            fields = self.jira_client.get_all_project_fields(project=project_key)
+        except JIRAError as exc:
+            logger.error(
+                "Failed to fetch project fields for project '%s': %s",
+                project,
+                describe_exception(exc),
+            )
+            protocol.add_general_error(
+                protocol_message(f"Reading defects of project '{project}' failed", exc),
+                protocol_code=ProtocolCode.INSERT_ACCESS_ERROR,
+            )
+            return ProtocolledDefectSet(value=[], protocol=protocol)
         for defect_id in defect_ids:
             defect_identifier = defect_id.root
             if not defect_identifier:
@@ -448,7 +543,13 @@ class JiraDefectClient(AbstractDefectClient):
             logger.debug("Using shared authentication for project '%s'", project)
             return self.jira_client
         logger.debug("Using per-user authentication for project '%s'", project)
-        return JiraClient(self.config, principal)
+        try:
+            return JiraClient(self.config, principal)
+        except (JIRAError, ConnectionError, ConnectTimeout) as exc:
+            logger.error(
+                "Per-user authentication to Jira failed for project '%s': %s", project, exc
+            )
+            raise as_http_error(exc, "Per-user authentication to Jira failed") from exc
 
     def create_defect(
         self, project: str, defect: Defect, sync_context: SyncContext
@@ -457,10 +558,10 @@ class JiraDefectClient(AbstractDefectClient):
         issue_key = ""
         try:
             jira_client = self._resolve_jira_client(project, defect.principal)
-        except (Unauthorized, NotFound) as exc:
+        except JIRA_AUTH_ERRORS as exc:
             protocol.add_general_error(
-                exc.message,
-                protocol_code=ProtocolCode.READ_ACCESS_ERROR,
+                protocol_message(f"Creating the defect in project '{project}' failed", exc),
+                protocol_code=ProtocolCode.INSERT_ACCESS_ERROR,
             )
             return ProtocolledString(value=None, protocol=protocol)
 
@@ -483,6 +584,12 @@ class JiraDefectClient(AbstractDefectClient):
                 f"Unknown project '{project}': {exc}", protocol_code=ProtocolCode.PROJECT_NOT_FOUND
             )
             return ProtocolledString(value=None, protocol=protocol)
+        except JIRA_AUTH_ERRORS as exc:
+            protocol.add_general_error(
+                protocol_message(f"Creating the defect in project '{project}' failed", exc),
+                protocol_code=ProtocolCode.INSERT_ACCESS_ERROR,
+            )
+            return ProtocolledString(value=None, protocol=protocol)
 
         try:
             issue = jira_client.create_issue(project_key, defect, sync_context)
@@ -493,10 +600,11 @@ class JiraDefectClient(AbstractDefectClient):
                 "Defect created successfully in Jira",
                 protocol_code=ProtocolCode.INSERT_SUCCESS,
             )
-        except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
+        except JIRA_WRITE_ERRORS as exc:
             logger.error("Failed to create Jira issue for project '%s': %s", project_key, exc)
             protocol.add_general_error(
-                "Failed to create Jira issue", protocol_code=ProtocolCode.INSERT_ERROR
+                protocol_message(f"Creating the defect in project '{project}' failed", exc),
+                protocol_code=ProtocolCode.INSERT_ERROR,
             )
 
         return ProtocolledString(value=issue_key, protocol=protocol)
@@ -508,10 +616,10 @@ class JiraDefectClient(AbstractDefectClient):
 
         try:
             jira_client = self._resolve_jira_client(project, defect.principal)
-        except (Unauthorized, NotFound) as exc:
+        except JIRA_AUTH_ERRORS as exc:
             protocol.add_general_error(
-                exc.message,
-                protocol_code=ProtocolCode.READ_ACCESS_ERROR,
+                protocol_message(f"Updating the defect in project '{project}' failed", exc),
+                protocol_code=ProtocolCode.PUBLISH_ACCESS_ERROR,
             )
             return protocol
 
@@ -533,10 +641,10 @@ class JiraDefectClient(AbstractDefectClient):
                 f"Unknown project '{project}': {exc}", protocol_code=ProtocolCode.PROJECT_NOT_FOUND
             )
             return protocol
-        except (Unauthorized, NotFound) as exc:
+        except JIRA_AUTH_ERRORS as exc:
             protocol.add_general_error(
-                exc.message,
-                protocol_code=ProtocolCode.READ_ACCESS_ERROR,
+                protocol_message(f"Updating the defect in project '{project}' failed", exc),
+                protocol_code=ProtocolCode.PUBLISH_ACCESS_ERROR,
             )
             return protocol
 
@@ -559,10 +667,10 @@ class JiraDefectClient(AbstractDefectClient):
                     "Issue updated successfully",
                     protocol_code=ProtocolCode.PUBLISH_SUCCESS,
                 )
-        except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
+        except JIRA_WRITE_ERRORS as exc:
             logger.error("Failed to update Jira issues for project '%s': %s", project_key, exc)
             protocol.add_general_error(
-                "Failed to update Jira issues",
+                protocol_message(f"Updating the defect in project '{project}' failed", exc),
                 protocol_code=ProtocolCode.PUBLISH_ERROR,
             )
 
@@ -572,7 +680,15 @@ class JiraDefectClient(AbstractDefectClient):
         self, project: str, defect_id: str, defect: Defect, sync_context: SyncContext
     ) -> Protocol:
         protocol = Protocol()
-        jira_client = self._resolve_jira_client(project, defect.principal)
+
+        try:
+            jira_client = self._resolve_jira_client(project, defect.principal)
+        except JIRA_AUTH_ERRORS as exc:
+            protocol.add_general_error(
+                protocol_message(f"Deleting the defect in project '{project}' failed", exc),
+                protocol_code=ProtocolCode.PUBLISH_ACCESS_ERROR,
+            )
+            return protocol
 
         if self._get_config_value("readonly", project=project):
             protocol.add_error(
@@ -590,6 +706,12 @@ class JiraDefectClient(AbstractDefectClient):
             logger.error("Unknown project '%s' requested while deleting defect", project)
             protocol.add_general_error(
                 f"Unknown project '{project}': {exc}", protocol_code=ProtocolCode.PROJECT_NOT_FOUND
+            )
+            return protocol
+        except JIRA_AUTH_ERRORS as exc:
+            protocol.add_general_error(
+                protocol_message(f"Deleting the defect in project '{project}' failed", exc),
+                protocol_code=ProtocolCode.PUBLISH_ACCESS_ERROR,
             )
             return protocol
 
@@ -611,10 +733,11 @@ class JiraDefectClient(AbstractDefectClient):
             protocol.add_success(
                 issue.key, "Issue deleted successfully", protocol_code=ProtocolCode.PUBLISH_SUCCESS
             )
-        except (RuntimeError, OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
+        except JIRA_WRITE_ERRORS as exc:
             logger.error("Failed to delete Jira issues for project '%s': %s", project_key, exc)
             protocol.add_general_error(
-                "Failed to delete Jira issues", protocol_code=ProtocolCode.PUBLISH_ERROR
+                protocol_message(f"Deleting the defect in project '{project}' failed", exc),
+                protocol_code=ProtocolCode.PUBLISH_ERROR,
             )
 
         return protocol
@@ -682,13 +805,21 @@ class JiraDefectClient(AbstractDefectClient):
             except KeyError as exc:
                 logger.error("Unknown project '%s' requested while fetching UDFs", project)
                 raise NotFound(f"Project '{project}' not found or access denied") from exc
+        try:
+            fields = self.jira_client.get_all_project_fields(project=project_key)
+        except JIRAError as exc:
+            detail = describe_exception(exc)
+            logger.error("Failed to fetch project fields for project '%s': %s", project, detail)
+            raise ServerError(
+                f"Failed to fetch project fields for project '{project}': {detail}"
+            ) from exc
         return [
             UserDefinedAttribute(
                 name=field["name"],
                 valueType=get_value_type_from_jira_field(field),
                 mustField=getattr(field, "required", None),
             )
-            for field in self.jira_client.get_all_project_fields(project=project_key)
+            for field in fields
         ]
 
     def before_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
@@ -708,10 +839,26 @@ class JiraDefectClient(AbstractDefectClient):
             local=body.local.model_copy(deep=True) if body.local else None,
             remote=body.remote.model_copy(deep=True) if body.remote else None,
         )
-        if corrected_results.local:
-            self._validate_and_filter_actions(body.local, corrected_results.local, project)
-        if corrected_results.remote:
-            self._validate_and_filter_actions(body.remote, corrected_results.remote, project)
+        try:
+            if corrected_results.local:
+                self._validate_and_filter_actions(body.local, corrected_results.local, project)
+            if corrected_results.remote:
+                self._validate_and_filter_actions(body.remote, corrected_results.remote, project)
+        except JIRAError as exc:
+            # The response schema of this endpoint is a bare ``Results`` — it has no protocol
+            # to report the failure in — so pass the proposed actions through untouched.  The
+            # create/update step that follows does have a protocol and reports the failure
+            # there, instead of aborting the whole sync with a 500 here.
+            logger.error(
+                "Cannot validate the proposed sync actions for project '%s': %s "
+                "Passing the proposed actions through unchanged.",
+                project,
+                exc,
+            )
+            return Results(
+                local=body.local.model_copy(deep=True) if body.local else None,
+                remote=body.remote.model_copy(deep=True) if body.remote else None,
+            )
         return corrected_results
 
     def _build_defect_with_attributes(

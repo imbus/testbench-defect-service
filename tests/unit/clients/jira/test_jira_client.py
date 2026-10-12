@@ -13,7 +13,11 @@ from jira import JIRAError
 from sanic import NotFound
 
 from testbench_defect_service.clients.jira.config import JiraDefectClientConfig
-from testbench_defect_service.clients.jira.jira_client import JiraClient, JiraConnectionError
+from testbench_defect_service.clients.jira.jira_client import (
+    JiraClient,
+    JiraConnectionError,
+    JiraProjectFieldsError,
+)
 from testbench_defect_service.clients.jira.jira_oauth import JiraAuthExpiredError
 from testbench_defect_service.models.defects import Defect, Login, SyncContext
 
@@ -343,9 +347,10 @@ class TestGetAllProjectFields:
         cloud_client.jira.createmeta.return_value = {"projects": []}
         assert cloud_client.get_all_project_fields("TEST") == []
 
-    def test_cloud_returns_empty_on_jira_error(self, cloud_client):
+    def test_cloud_raises_on_jira_error(self, cloud_client):
         cloud_client.jira.createmeta.side_effect = JIRAError("fail")
-        assert cloud_client.get_all_project_fields("TEST") == []
+        with pytest.raises(JIRAError):
+            cloud_client.get_all_project_fields("TEST")
 
     def test_dc_uses_project_issue_types(self, dc_client):
         it1 = Mock()
@@ -367,10 +372,93 @@ class TestGetAllProjectFields:
         ids = {f["id"] for f in result}
         assert "customfield_001" in ids
 
-    def test_dc_returns_empty_on_fields_jira_error(self, dc_client):
+    def test_dc_raises_on_fields_jira_error(self, dc_client):
         dc_client.jira.fields.side_effect = JIRAError("fail")
-        result = dc_client.get_all_project_fields("")
-        assert result == []
+        with pytest.raises(JIRAError):
+            dc_client.get_all_project_fields("")
+
+    def test_dc_reports_missing_write_access_when_both_endpoints_fail(
+        self, dc_client, caplog: pytest.LogCaptureFixture
+    ):
+        """A rejected issuetypes call plus an unsupported createmeta means no permission."""
+        dc_client.jira.project_issue_types.side_effect = JIRAError(
+            status_code=400,
+            text="",
+            url="https://jira.example/rest/api/2/issue/createmeta/ITBWORD/issuetypes",
+        )
+        dc_client.jira.createmeta.side_effect = JIRAError(
+            text="Unsupported JIRA version: (9, 4, 14). Use 'project_issue_types' instead."
+        )
+
+        with (
+            caplog.at_level("WARNING", logger="testbench_defect_service"),
+            pytest.raises(JiraProjectFieldsError) as excinfo,
+        ):
+            dc_client.get_all_project_fields("ITBWORD")
+
+        assert "missing write access to project 'ITBWORD'" in caplog.text
+        assert "Create Issues" in caplog.text
+        # The raw JiraError header dump must not drown out the actual hint.
+        assert "response headers" not in caplog.text
+        # The message that reaches the protocol / HTTP response is the hint, not the dump.
+        assert "missing write access to project 'ITBWORD'" in str(excinfo.value)
+        assert "response headers" not in str(excinfo.value)
+        assert excinfo.value.status_code == 400
+
+    def test_dc_keeps_raw_error_for_unrelated_issue_types_failure(
+        self, dc_client, caplog: pytest.LogCaptureFixture
+    ):
+        """A non-permission status is reported as-is, without the write-access hint."""
+        dc_client.jira.project_issue_types.side_effect = JIRAError(
+            status_code=500, text="Internal Server Error"
+        )
+        dc_client.jira.createmeta.side_effect = JIRAError(text="Unsupported JIRA version")
+
+        with (
+            caplog.at_level("WARNING", logger="testbench_defect_service"),
+            pytest.raises(JIRAError),
+        ):
+            dc_client.get_all_project_fields("ITBWORD")
+
+        assert "missing write access" not in caplog.text
+        assert "status=500" in caplog.text
+
+
+@pytest.mark.unit
+class TestFetchProjectIssueFieldsPermissions:
+    def test_reports_missing_write_access_when_both_endpoints_fail(
+        self, dc_client, caplog: pytest.LogCaptureFixture
+    ):
+        """The control-field path must fail with the hint, not with a raw JiraError dump."""
+        dc_client.jira.project_issue_types.side_effect = JIRAError(
+            status_code=400,
+            url="https://jira.example/rest/api/2/issue/createmeta/ITBWORD/issuetypes",
+        )
+        dc_client.jira.createmeta.side_effect = JIRAError(
+            text="Unsupported JIRA version: (9, 4, 14). Use 'project_issue_types' instead."
+        )
+
+        with (
+            caplog.at_level("WARNING", logger="testbench_defect_service"),
+            pytest.raises(JiraProjectFieldsError) as excinfo,
+        ):
+            dc_client.fetch_project_issue_fields("ITBWORD")
+
+        assert "missing write access to project 'ITBWORD'" in str(excinfo.value)
+        assert "response headers" not in str(excinfo.value)
+        assert "missing write access to project 'ITBWORD'" in caplog.text
+
+    def test_uses_createmeta_fallback_when_it_works(self, dc_client):
+        """A working createmeta fallback still returns the fields."""
+        dc_client.jira.project_issue_types.side_effect = JIRAError(status_code=400)
+        dc_client.jira.createmeta.return_value = {
+            "projects": [
+                {"issuetypes": [{"fields": {"customfield_001": {"name": "Env", "fieldId": "x"}}}]}
+            ]
+        }
+
+        fields = dc_client.fetch_project_issue_fields("ITBWORD")
+        assert len(fields) == 1
 
 
 @pytest.mark.unit

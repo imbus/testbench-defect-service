@@ -220,11 +220,22 @@ def execute_sync_hook(project: str, sync_type: str, hook_type: str, commands: st
     # Validate command file extension
     if command_path.suffix.lower() not in {".bat", ".sh", ".exe"}:
         logger.warning(f"{hook_type} hook '{command_path.name}' has unsupported file extension")
+        protocol.add_general_error(
+            protocol_code=ProtocolCode.PUBLISH_ERROR,
+            message=(
+                f"{hook_type.capitalize()} hook '{command_path.name}' has an unsupported "
+                f"file extension '{command_path.suffix}'; expected .bat, .sh or .exe."
+            ),
+        )
         return protocol
 
     # Check if command exists
     if not command_path.exists():
         logger.warning(f"{hook_type} hook command file does not exist: {command_path}")
+        protocol.add_general_error(
+            protocol_code=ProtocolCode.PUBLISH_ERROR,
+            message=f"{hook_type.capitalize()} hook command not found: {command_path}.",
+        )
         return protocol
 
     # Execute command
