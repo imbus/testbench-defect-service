@@ -3,6 +3,8 @@ name: Release
 on:
   release:
     types: [published]
+  # Build the wheel and executables on pull requests too; only a release publishes them.
+  pull_request:
 
 permissions:
   contents: read
@@ -59,6 +61,7 @@ jobs:
           if-no-files-found: error
 
   create_release:
+    if: github.event_name == 'release'
     needs: [build_wheel, build_binaries]
     runs-on: ubuntu-latest
     permissions:
