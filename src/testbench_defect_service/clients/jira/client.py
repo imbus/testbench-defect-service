@@ -377,7 +377,9 @@ class JiraDefectClient(AbstractDefectClient):
         defects: list[DefectWithID] = []
         expand = "renderedFields"
         try:
-            jql_query = str(self.config.defect_jql).format(project=self.projects[project].key)
+            jql_query = self._get_defect_jql(project, sync_context.iTBProject).format(
+                project=self.projects[project].key
+            )
             logger.debug("Fetching defects for project '%s' with JQL '%s'", project, jql_query)
             issues = self.jira_client.fetch_issues_by_jql(jql_query, expand=expand)
             if not issues:
@@ -899,6 +901,17 @@ class JiraDefectClient(AbstractDefectClient):
                 return value  # type: ignore
         logger.debug("Using global config for '%s'", attr)
         return getattr(self.config, attr, None)  # type: ignore
+
+    def _get_defect_jql(self, project: str, itb_project: str | None) -> str:
+        """
+        Resolve the JQL template for a project.
+        Precedence: TestBench project config, then Jira project config, then global config.
+        """
+        itb_config = self.config.itb_projects.get(itb_project) if itb_project else None
+        if itb_config and itb_config.defect_jql is not None:
+            logger.debug("Using TestBench-project-specific JQL for '%s'", itb_project)
+            return itb_config.defect_jql
+        return str(self._get_config_value("defect_jql", project))
 
     def _validate_and_filter_actions(
         self,
