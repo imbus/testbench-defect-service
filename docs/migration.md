@@ -88,6 +88,41 @@ jira.username: "jira-user@example.com"
 | `jira.baseQuery`          | `defect_jql` | The JQL that selects the defects to read.         |
 | `wrapper.readonly`        | `readonly`   | See the warning below.                            |
 | `wrapper.timeout_seconds` | `timeout`    |                                                   |
+| `jira.projectQueries`     | `itb_projects` | One entry per TestBench project, see below.     |
+
+#### Per-project queries (`jira.projectQueries`)
+
+A `jira.projectQueries` block gives individual TestBench projects their own JQL. Blocks are
+written as `key: {` … `}`; commas after entries and quoted keys are accepted:
+
+```conf
+jira.projectQueries: {
+   "Filter-ITB": {
+     project: "ITB"
+     query: "project='{project}' AND issuetype in (Bug, Improvement) AND customer is not EMPTY"
+   }
+   "All-Issues-of-TST": {
+     project: "TsT"
+     query: "project='{project}'"
+   }
+}
+```
+
+Each entry becomes an [`itb_projects`](clients/jira-client.md#per-testbench-project-jql) entry
+named after its `project`, with its `query` as `defect_jql`. The entry name (`Filter-ITB`) is
+not carried over:
+
+```toml
+[testbench-defect-service.client_config.itb_projects."ITB"]
+defect_jql = "project='{project}' AND issuetype in (Bug, Improvement) AND customer is not EMPTY"
+
+[testbench-defect-service.client_config.itb_projects."TsT"]
+defect_jql = "project='{project}'"
+```
+
+The migration stops before any prompt if an entry has no `project` or `query`, or if two
+entries give the same project different queries. Other keys inside an entry are reported as not
+carried over.
 
 `jira.username` (also `jira.user` / `jira.login`) is used as the **default for the username
 prompt**, not written directly — which credentials are needed depends on the authentication

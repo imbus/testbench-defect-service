@@ -731,3 +731,117 @@ class TestConfKeysAreJudgedByTheKeyMapsNotTheModel:
         assert "carried over" not in capsys.readouterr().out
 
     _AUTH: ClassVar[dict[str, Any]] = {"auth_type": "token", "token": "pat-123"}
+
+
+_PROJECT_QUERIES_CONF_TEXT = """jira.projectQueries: {
+   "Filter-ITB": {
+     project: "ITB"
+     query: "project='{project}' AND issuetype in (Bug, Improvement) AND customer is not EMPTY"
+   }
+   "All-Issues-of-TST": {
+     project: "TsT"
+     query: "project='{project}'"
+   }
+}
+"""
+
+
+@pytest.mark.unit
+class TestProjectQueriesBecomeItbProjects:
+    """Each `jira.projectQueries` entry names a TestBench project and the JQL it reads.
+
+    The entry's own name (e.g. `Filter-ITB`) only labelled it in the old wrapper; the
+    TestBench project in `project` is what the new client selects the JQL by.
+    """
+
+    def _convert(self, tmp_path, conf_text: str) -> dict[str, Any]:
+        legacy_path = tmp_path / "jira.conf"
+        legacy_path.write_text(_LEGACY_CONF_TEXT + conf_text, encoding="utf-8")
+        with (
+            patch(f"{_CONVERTER}.prompt_service_credentials", return_value=_CREDENTIALS),
+            patch(f"{_CONVERTER}.prompt_jira_auth_config", return_value=dict(self._AUTH)),
+        ):
+            toml_text = convert_legacy_config(legacy_path)
+        return dict(tomllib.loads(toml_text)["testbench-defect-service"]["client_config"])
+
+    def test_each_entry_becomes_an_itb_project_with_its_query(self, tmp_path) -> None:
+        client_config = self._convert(tmp_path, _PROJECT_QUERIES_CONF_TEXT)
+
+        assert client_config["itb_projects"] == {
+            "ITB": {
+                "defect_jql": (
+                    "project='{project}' AND issuetype in (Bug, Improvement)"
+                    " AND customer is not EMPTY"
+                )
+            },
+            "TsT": {"defect_jql": "project='{project}'"},
+        }
+        assert client_config["defect_jql"] == "project = 'TB'"
+
+    def test_json_style_commas_and_quoted_keys_are_accepted(self, tmp_path) -> None:
+        conf_text = """jira.projectQueries: {
+  "Filter-ITB": {
+    "project": "ITB",
+    "query": "project='{project}'"
+  },
+}
+"""
+        client_config = self._convert(tmp_path, conf_text)
+
+        assert client_config["itb_projects"] == {"ITB": {"defect_jql": "project='{project}'"}}
+
+    def test_project_queries_are_not_reported_as_unsupported(self, tmp_path, capsys) -> None:
+        self._convert(tmp_path, _PROJECT_QUERIES_CONF_TEXT)
+
+        assert "carried over" not in capsys.readouterr().out
+
+    def test_an_unknown_key_inside_an_entry_is_reported(self, tmp_path, capsys) -> None:
+        conf_text = """jira.projectQueries: {
+  "Filter-ITB": {
+    project: "ITB"
+    query: "project='{project}'"
+    owner: "someone"
+  }
+}
+"""
+        self._convert(tmp_path, conf_text)
+
+        assert "jira.projectQueries.Filter-ITB.owner" in capsys.readouterr().out
+
+    def test_an_entry_without_a_query_is_rejected(self, tmp_path) -> None:
+        conf_text = 'jira.projectQueries: {\n  "Filter-ITB": {\n    project: "ITB"\n  }\n}\n'
+
+        with pytest.raises(ConfConversionError, match="Filter-ITB"):
+            self._convert(tmp_path, conf_text)
+
+    def test_two_queries_for_the_same_project_are_rejected(self, tmp_path) -> None:
+        """Silently keeping one of them reads defects the user never chose."""
+        conf_text = """jira.projectQueries: {
+  "A": {
+    project: "ITB"
+    query: "project='{project}'"
+  }
+  "B": {
+    project: "ITB"
+    query: "project='{project}' AND issuetype = Bug"
+  }
+}
+"""
+        with pytest.raises(ConfConversionError) as error:
+            self._convert(tmp_path, conf_text)
+
+        assert "'ITB'" in str(error.value)
+        assert "'A'" in str(error.value)
+        assert "'B'" in str(error.value)
+
+    def test_an_unclosed_block_names_the_file(self, tmp_path) -> None:
+        conf_text = 'jira.projectQueries: {\n  "A": {\n    project: "ITB"\n'
+
+        with pytest.raises(ConfConversionError, match=r"jira\.conf.*not closed"):
+            self._convert(tmp_path, conf_text)
+
+    def test_a_stray_closing_brace_names_the_line(self, tmp_path) -> None:
+        with pytest.raises(ConfConversionError, match=r"jira\.conf line 5"):
+            self._convert(tmp_path, "}\n")
+
+    _AUTH: ClassVar[dict[str, Any]] = {"auth_type": "token", "token": "pat-123"}

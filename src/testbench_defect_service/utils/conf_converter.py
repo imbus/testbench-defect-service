@@ -69,6 +69,14 @@ CONF_KEYS_READ: frozenset[str] = frozenset(
     key for keys in (*CONF_FIELD_KEYS.values(), *CONF_DEFAULT_KEYS.values()) for key in keys
 )
 
+# `jira.projectQueries` is a block of named entries, each giving a TestBench project and the
+# JQL it reads. The parser flattens it to `jira.projectQueries.<entry>.<field>` keys.
+PROJECT_QUERIES_PREFIX = "jira.projectQueries."
+PROJECT_QUERY_FIELDS = ("project", "query")
+PROJECT_QUERY_KEY_PATTERN = re.compile(
+    rf"{re.escape(PROJECT_QUERIES_PREFIX)}.+\.(?:{'|'.join(PROJECT_QUERY_FIELDS)})"
+)
+
 
 class _LegacyLineFormat(NamedTuple):
     """How one legacy wrapper format writes a flat `key<separator>value` line."""
@@ -83,6 +91,8 @@ class _LegacyLineFormat(NamedTuple):
     other_separator: str
     other_description: str
     other_source_type: str
+    #: Whether `key: {` ... `}` blocks are read, flattened to dotted keys.
+    nested_blocks: bool = False
 
 
 _CONF_LINE_FORMAT = _LegacyLineFormat(
@@ -93,6 +103,7 @@ _CONF_LINE_FORMAT = _LegacyLineFormat(
     other_separator="=",
     other_description="an Excel .properties file",
     other_source_type="excel",
+    nested_blocks=True,
 )
 
 _PROPERTIES_LINE_FORMAT = _LegacyLineFormat(
@@ -121,6 +132,37 @@ def _wrong_format_hint(line: str, line_format: _LegacyLineFormat) -> str:
     )
 
 
+def _track_block(line: str, blocks: list[str], location: str) -> bool:
+    """Open or close a `key: {` ... `}` block on *line*, updating *blocks* in place.
+
+    Returns whether *line* was a block delimiter and therefore carries no entry.
+
+    Raises:
+        ConfConversionError: When a `}` closes no open block.
+    """
+    if line == "}":
+        if not blocks:
+            raise ConfConversionError(f"{location}: '}}' closes no open block.")
+        blocks.pop()
+        return True
+    if line.endswith("{"):
+        block_key = line.removesuffix("{").rstrip().removesuffix(":").strip()
+        blocks.append(block_key.removeprefix('"').removesuffix('"'))
+        return True
+    return False
+
+
+def _split_entry(line: str, line_format: _LegacyLineFormat) -> tuple[str, str]:
+    """Split a `key<separator>value` *line* into its stripped key and value."""
+    raw_key, raw_value = line.split(line_format.separator, 1)
+    key = raw_key.strip()
+    value = raw_value.strip()
+    if line_format.strip_quotes:
+        key = key.removeprefix('"').removesuffix('"')
+        value = value.removeprefix('"').removesuffix('"')
+    return key, value
+
+
 def _parse_legacy_file(file_path: Path, line_format: _LegacyLineFormat) -> dict[str, Any]:
     """Read a flat legacy configuration file into a dictionary of raw string values.
 
@@ -140,10 +182,18 @@ def _parse_legacy_file(file_path: Path, line_format: _LegacyLineFormat) -> dict[
         raise ConfConversionError(f"Failed to read {file_path.name}: {e}") from e
 
     config: dict[str, Any] = {}
+    # The keys of the blocks enclosing the current line, outermost first.
+    blocks: list[str] = []
     for number, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
         if not line or line.startswith(line_format.comment_prefixes):
             continue
+
+        if line_format.nested_blocks:
+            # Entries inside a block may be separated JSON-style.
+            line = line.removesuffix(",").rstrip()
+            if _track_block(line, blocks, f"{file_path.name} line {number}"):
+                continue
 
         if line_format.separator not in line:
             raise ConfConversionError(
@@ -152,11 +202,8 @@ def _parse_legacy_file(file_path: Path, line_format: _LegacyLineFormat) -> dict[
                 f"{_wrong_format_hint(line, line_format)}"
             )
 
-        raw_key, raw_value = line.split(line_format.separator, 1)
-        key = raw_key.strip()
-        value = raw_value.strip()
-        if line_format.strip_quotes:
-            value = value.removeprefix('"').removesuffix('"')
+        key, value = _split_entry(line, line_format)
+        key = ".".join([*blocks, key])
 
         previous = config.get(key)
         if previous is not None and previous != value:
@@ -166,6 +213,10 @@ def _parse_legacy_file(file_path: Path, line_format: _LegacyLineFormat) -> dict[
             )
         config[key] = value
 
+    if blocks:
+        raise ConfConversionError(
+            f"{file_path.name}: the block '{'.'.join(blocks)}' is not closed with '}}'."
+        )
     return config
 
 
@@ -226,6 +277,44 @@ def fields_from_conf(
                 fields[field_name] = value
                 break
     return fields
+
+
+def itb_projects_from_conf(conf_data: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """Translate the `jira.projectQueries` entries into `itb_projects` overrides.
+
+    Each entry becomes the `defect_jql` of the TestBench project it names; the entry's own
+    name only labelled it in the legacy file.
+
+    Raises:
+        ConfConversionError: When an entry lacks its project or query, or when two entries
+            give the same TestBench project different queries.
+    """
+    entries: dict[str, dict[str, str]] = {}
+    for key, value in conf_data.items():
+        if not key.startswith(PROJECT_QUERIES_PREFIX):
+            continue
+        entry, _, field = key.removeprefix(PROJECT_QUERIES_PREFIX).rpartition(".")
+        if entry and field in PROJECT_QUERY_FIELDS:
+            entries.setdefault(entry, {})[field] = value
+
+    itb_projects: dict[str, dict[str, str]] = {}
+    sources: dict[str, str] = {}
+    for entry, fields in entries.items():
+        missing = [field for field in PROJECT_QUERY_FIELDS if not fields.get(field)]
+        if missing:
+            raise ConfConversionError(
+                f"jira.projectQueries entry '{entry}' has no {' or '.join(missing)}."
+            )
+        project, query = fields["project"], fields["query"]
+        previous = itb_projects.get(project)
+        if previous is not None and previous["defect_jql"] != query:
+            raise ConfConversionError(
+                f"jira.projectQueries entries '{sources[project]}' and '{entry}' both set the "
+                f"query of project '{project}'. Remove one of them before migrating."
+            )
+        itb_projects[project] = {"defect_jql": query}
+        sources[project] = entry
+    return itb_projects
 
 
 def conf_defaults(conf_data: dict[str, Any]) -> dict[str, Any]:
@@ -467,6 +556,10 @@ def generate_jira_base_toml(
         ConfConversionError: When the interactive authentication or credentials setup is
             cancelled, or when the result is not a valid ``JiraDefectClientConfig``.
     """
+    # Read before asking for a login: an unconvertible file must say so without making the
+    # user enter a password first.
+    itb_projects = itb_projects_from_conf(conf_data)
+
     if credentials is None:
         credentials = prompt_service_credentials()
         if credentials is None:
@@ -477,12 +570,15 @@ def generate_jira_base_toml(
         if auth_config is None:
             raise ConfConversionError("Jira authentication setup was cancelled")
 
+    legacy_fields = fields_from_conf(conf_data, CONF_FIELD_KEYS)
+    if itb_projects:
+        legacy_fields["itb_projects"] = itb_projects
     client_config = build_client_config(
         JiraDefectClientConfig,
-        {**fields_from_conf(conf_data, CONF_FIELD_KEYS), **auth_config},
+        {**legacy_fields, **auth_config},
         "the Jira .conf file",
     )
-    report_unsupported_keys(conf_data, CONF_KEYS_READ)
+    report_unsupported_keys(conf_data, CONF_KEYS_READ, (PROJECT_QUERY_KEY_PATTERN,))
     return build_service_toml(JIRA_CLIENT_CLASS, client_config, credentials)
 
 
