@@ -34,6 +34,12 @@ class PhaseCommands(BaseModel):
     postsync: SyncCommandConfig | None = Field(default=None, description="Post-sync commands")
 
 
+class JiraITBProjectConfig(BaseModel):
+    defect_jql: str | None = Field(
+        None, description="JQL query template for this TestBench project"
+    )
+
+
 class JiraProjectConfig(BaseModel):
     defect_jql: str | None = Field(None, description="JQL query template for this project")
     attributes: list[str] | None = Field(None, description="Attributes for this project")
@@ -310,6 +316,14 @@ class JiraDefectClientConfig(BaseModel):
             "add_prompt": "Would you like to add a project-specific configuration?",
             "add_another_prompt": "Add another project configuration?",
         },
+    )
+    itb_projects: dict[str, JiraITBProjectConfig] = Field(
+        default_factory=dict,
+        description=(
+            "TestBench-project-specific overrides, keyed by TestBench project name. "
+            "Take precedence over the Jira project configuration."
+        ),
+        json_schema_extra={"skip_if_wizard": True},
     )
 
     @property
