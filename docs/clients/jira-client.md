@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 4
 title: Jira Client
 ---
 # Jira Client
@@ -159,6 +159,7 @@ For 3LO, do not add access or refresh token values to `config.toml` or `.env`.
 | ------------ | ----- | --------------------------------------------------------------------------------------- | -------- | ------- |
 | `commands` | Table | Pre/post sync commands. See[Configuration](../configuration.md#prepost-sync-commands).   | No       | —      |
 | `projects` | Table | Per-project configuration overrides. See[Per-project overrides](#per-project-overrides). | No       | `{}`  |
+| `itb_projects` | Table | Per-TestBench-project `defect_jql`. See [Per-TestBench-project JQL](#per-testbench-project-jql). | No       | `{}`  |
 
 ---
 
@@ -474,17 +475,40 @@ All other fields (e.g. `priority`, custom select fields) are discovered automati
 
 ## Per-project overrides
 
-Any top-level `client_config` option can be overridden per Jira project key:
+Any top-level `client_config` option can be overridden per Jira project:
 
 ```toml
-[testbench-defect-service.client_config.projects.MYPROJ]
+[testbench-defect-service.client_config.projects."My Project (MYPROJ)"]
 readonly = true
 
-[testbench-defect-service.client_config.projects.MYPROJ.commands.presync]
+[testbench-defect-service.client_config.projects."My Project (MYPROJ)".commands.presync]
 scheduled = "C:\\scripts\\myproj-pre.bat"
 ```
 
-The project key must match the Jira project key exactly (case-sensitive).
+The key must match the project name exactly as the service lists it, `"<Project Name> (<PROJECT_KEY>)"` (case-sensitive, see [Project mapping](#project-mapping)).
+
+### Per-TestBench-project JQL
+
+When several TestBench projects sync against the same Jira project, each one can use its own `defect_jql`. Add an `itb_projects` table, keyed by the TestBench project name. It only supports `defect_jql`:
+
+```toml
+[testbench-defect-service.client_config.projects."Webshop (WEB)"]
+defect_jql = "project = '{project}'"
+
+[testbench-defect-service.client_config.itb_projects."TB Frontend"]
+defect_jql = "project = '{project}' AND component = Frontend"
+
+[testbench-defect-service.client_config.itb_projects."TB Backend"]
+defect_jql = "project = '{project}' AND component = Backend"
+```
+
+`{project}` is still replaced with the key of the Jira project being queried. The JQL is resolved in this order, the first one set wins:
+
+1. `itb_projects."<TestBench project>".defect_jql`
+2. `projects."<Jira project>".defect_jql`
+3. the global `defect_jql`
+
+The TestBench project name must match exactly (case-sensitive). If TestBench sends no project name, or no matching entry exists, the next level applies. `itb_projects` is not prompted by the configuration wizard; existing entries are kept when the wizard rewrites the file.
 
 ---
 

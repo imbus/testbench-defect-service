@@ -14,7 +14,11 @@ There are two options depending on whether you want to install Python or not:
 
 ## Option 1: Ready-to-use executable
 
-The executable is a self-contained zip archive. No Python, no pip, no virtual environment needed. Both clients (JSONL and Jira) are included.
+The executable is a self-contained zip archive. No Python, no pip, no virtual environment needed. The JSONL and Jira clients are included.
+
+:::note
+The [Excel client](../clients/excel-client.md) is **not** part of the executable build. To use it, install with Python and the `[excel]` extra — see [Option 2](#option-2-install-with-python).
+:::
 
 **1. Download the zip**
 
@@ -88,6 +92,7 @@ The base install includes the [JSONL client](../clients/jsonl-client.md). Add ex
 | Client | Install command |
 |--------|-----------------|
 | [JSONL](../clients/jsonl-client.md) *(default)* | `pip install testbench-defect-service` |
+| [Excel](../clients/excel-client.md) | `pip install testbench-defect-service[excel]` |
 | [Jira](../clients/jira-client.md) | `pip install testbench-defect-service[jira]` |
 
 Verify installation:

@@ -30,6 +30,7 @@ class AppConfig(Config):
 
     def __init__(  # noqa: PLR0913
         self,
+        *args,
         config_path: Path | None = None,
         client_class: str | None = None,
         client_config_path: Path | None = None,
@@ -39,13 +40,13 @@ class AppConfig(Config):
         ssl_cert: Path | None = None,
         ssl_key: Path | None = None,
         ssl_ca_cert: Path | None = None,
-        *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
 
         # Sanic-specific settings
         self.FALLBACK_ERROR_FORMAT = "json"
+        self.DEPRECATION_FILTER = "ignore"
         self.OAS_UI_DEFAULT = "swagger"
         self.OAS_UI_REDOC = False
         self.OAS_CUSTOM_FILE = (Path(__file__).parent / "openapi.yaml").resolve().as_posix()

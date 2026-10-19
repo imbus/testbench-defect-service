@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import Mock, PropertyMock, patch
@@ -18,6 +17,7 @@ from testbench_defect_service.clients.jira.client import (  # type: ignore[impor
 )
 from testbench_defect_service.clients.jira.config import (  # type: ignore[import-untyped]
     JiraDefectClientConfig,
+    JiraITBProjectConfig,
     JiraProjectConfig,
     PhaseCommands,
     SyncCommandConfig,
@@ -611,6 +611,104 @@ class TestGetDefects:
 
 
 @pytest.mark.unit
+class TestGetDefectsJqlResolution:
+    PROJECT = "Test Project (TEST)"
+    GLOBAL_JQL = "project = '{project}' AND scope = global"
+    PROJECT_JQL = "project = '{project}' AND scope = jira"
+    ITB_JQL = "project = '{project}' AND scope = itb"
+
+    def _used_jql(self, client, sync_context) -> str:
+        client.jira_client.fetch_issues_by_jql.return_value = []
+        client.jira_client.get_all_project_fields.return_value = []
+        client.get_defects(self.PROJECT, sync_context)
+        return str(client.jira_client.fetch_issues_by_jql.call_args.args[0])
+
+    def _configure(
+        self,
+        client,
+        project_jql: str | None = None,
+        itb_projects: dict[str, JiraITBProjectConfig] | None = None,
+    ) -> None:
+        client.config.defect_jql = self.GLOBAL_JQL
+        client.config.projects = (
+            {self.PROJECT: JiraProjectConfig.model_validate({"defect_jql": project_jql})}
+            if project_jql
+            else {}
+        )
+        client.config.itb_projects = itb_projects or {}
+
+    def test_uses_global_jql_without_overrides(self, mock_jira_client_instance):
+        self._configure(mock_jira_client_instance)
+
+        used = self._used_jql(mock_jira_client_instance, SyncContext(iTBProject="TB A"))
+
+        assert used == "project = 'TEST' AND scope = global"
+
+    def test_project_jql_overrides_global(self, mock_jira_client_instance):
+        self._configure(mock_jira_client_instance, project_jql=self.PROJECT_JQL)
+
+        used = self._used_jql(mock_jira_client_instance, SyncContext(iTBProject="TB A"))
+
+        assert used == "project = 'TEST' AND scope = jira"
+
+    def test_itb_project_jql_overrides_project_jql(self, mock_jira_client_instance):
+        self._configure(
+            mock_jira_client_instance,
+            project_jql=self.PROJECT_JQL,
+            itb_projects={"TB A": JiraITBProjectConfig(defect_jql=self.ITB_JQL)},
+        )
+
+        used = self._used_jql(mock_jira_client_instance, SyncContext(iTBProject="TB A"))
+
+        assert used == "project = 'TEST' AND scope = itb"
+
+    def test_itb_project_jql_overrides_global_without_project_jql(self, mock_jira_client_instance):
+        self._configure(
+            mock_jira_client_instance,
+            itb_projects={"TB A": JiraITBProjectConfig(defect_jql=self.ITB_JQL)},
+        )
+
+        used = self._used_jql(mock_jira_client_instance, SyncContext(iTBProject="TB A"))
+
+        assert used == "project = 'TEST' AND scope = itb"
+
+    @pytest.mark.parametrize("itb_project", [None, "TB Other"])
+    def test_falls_back_to_project_jql_when_itb_project_not_configured(
+        self, mock_jira_client_instance, itb_project
+    ):
+        self._configure(
+            mock_jira_client_instance,
+            project_jql=self.PROJECT_JQL,
+            itb_projects={"TB A": JiraITBProjectConfig(defect_jql=self.ITB_JQL)},
+        )
+
+        used = self._used_jql(mock_jira_client_instance, SyncContext(iTBProject=itb_project))
+
+        assert used == "project = 'TEST' AND scope = jira"
+
+    def test_itb_entry_without_jql_falls_back_to_project_jql(self, mock_jira_client_instance):
+        self._configure(
+            mock_jira_client_instance,
+            project_jql=self.PROJECT_JQL,
+            itb_projects={"TB A": JiraITBProjectConfig()},
+        )
+
+        used = self._used_jql(mock_jira_client_instance, SyncContext(iTBProject="TB A"))
+
+        assert used == "project = 'TEST' AND scope = jira"
+
+    def test_itb_projects_parsed_from_client_config(self, mock_jira_config):
+        config = JiraDefectClientConfig.model_validate(
+            {
+                **mock_jira_config.model_dump(),
+                "itb_projects": {"TB A": {"defect_jql": self.ITB_JQL}},
+            }
+        )
+
+        assert config.itb_projects["TB A"].defect_jql == self.ITB_JQL
+
+
+@pytest.mark.unit
 class TestGetDefectsBatch:
     def test_returns_defects_for_valid_ids(self, mock_jira_client_instance, sync_context):
         mock_issue = Mock()
@@ -706,7 +804,9 @@ class TestCreateDefect:
             "Test Project (TEST)", defect, sync_context
         )
         assert result.protocol.errors
-        assert result.value == ""
+        # Must be null, not "": TestBench reads an empty string as a created defect with an
+        # empty ID and aborts the whole sync on its non-empty ID assertion.
+        assert result.value is None
 
     def test_returns_error_for_unknown_project(self, mock_jira_client_instance, sync_context):
         defect = _make_defect()
@@ -1254,154 +1354,72 @@ class TestBuildDefectWithAttributes:
 
 
 @pytest.mark.unit
-class TestExecuteSyncHook:
-    """Tests for _execute_sync_hook method."""
+class TestSyncHookCommands:
+    """The wizard writes sync hooks to 'commands'; the client must read that same key."""
 
-    def test_execute_hook_no_command_configured(self, mock_jira_client_instance):
-        """Test executing hook when no command is configured."""
-        sync_type = "manual"
+    @staticmethod
+    def _script(tmp_path):
+        script = tmp_path / "hook.bat"
+        script.write_text("@echo off", encoding="utf-8")
+        return script
 
-        protocol = mock_jira_client_instance._execute_sync_hook(
-            project="Test Project (TEST)", sync_type=sync_type, hook_type="presync"
-        )
-
-        assert "Test Project (TEST)" in protocol.successes
-        assert len(protocol.successes["Test Project (TEST)"]) == 1
-        assert "no command configured" in protocol.successes["Test Project (TEST)"][0].message
-
-    def test_execute_hook_unsupported_extension(self, mock_jira_client_instance, tmp_path):
-        """Test executing hook with unsupported file extension."""
-        # Create a test file with unsupported extension
-        test_script = tmp_path / "script.txt"
-        test_script.write_text("echo test")
-
-        # Configure hook
-        mock_jira_client_instance.config.commands = PhaseCommands(
-            presync=SyncCommandConfig(manual=str(test_script))
-        )
-
-        sync_type = "manual"
-
-        protocol = mock_jira_client_instance._execute_sync_hook(
-            project="Test Project (TEST)", sync_type=sync_type, hook_type="presync"
-        )
-
-        # Should return empty protocol (warning logged)
-        assert not protocol.successes or len(protocol.successes) == 0
-        assert not protocol.errors or len(protocol.errors) == 0
-
-    def test_execute_hook_nonexistent_file(self, mock_jira_client_instance):
-        """Test executing hook when file doesn't exist."""
-        # Configure hook with non-existent file
-        mock_jira_client_instance.config.commands = PhaseCommands(
-            presync=SyncCommandConfig(manual="/nonexistent/script.bat")
-        )
-
-        sync_type = "manual"
-
-        protocol = mock_jira_client_instance._execute_sync_hook(
-            project="Test Project (TEST)", sync_type=sync_type, hook_type="presync"
-        )
-
-        # Should return empty protocol (warning logged)
-        assert not protocol.successes or len(protocol.successes) == 0
-        assert not protocol.errors or len(protocol.errors) == 0
-
-    @patch("subprocess.run")
-    def test_execute_hook_success(self, mock_subprocess, mock_jira_client_instance, tmp_path):
-        """Test successful hook execution."""
-        # Create a test script
-        test_script = tmp_path / "script.bat"
-        test_script.write_text("@echo off\necho Success")
-
-        # Configure hook
-        mock_jira_client_instance.config.commands = PhaseCommands(
-            postsync=SyncCommandConfig(scheduled=str(test_script))
-        )
-
-        sync_type = "scheduled"
-
-        protocol = mock_jira_client_instance._execute_sync_hook(
-            project="Test Project (TEST)", sync_type=sync_type, hook_type="postsync"
-        )
-
-        assert "Test Project (TEST)" in protocol.successes
-        assert len(protocol.successes["Test Project (TEST)"]) == 1
-        assert "executed successfully" in protocol.successes["Test Project (TEST)"][0].message
-        assert protocol.successes["Test Project (TEST)"][0].code == ProtocolCode.PUBLISH_SUCCESS
-        mock_subprocess.assert_called_once()
-
-    @patch("subprocess.run")
-    def test_execute_hook_command_failure(
-        self, mock_subprocess, mock_jira_client_instance, tmp_path
+    def test_before_sync_runs_the_configured_presync_command(
+        self, mock_jira_client_instance, sync_context, tmp_path
     ):
-        """Test hook execution when command fails."""
-        # Create a test script
-        test_script = tmp_path / "script.sh"
-        test_script.write_text("#!/bin/bash\nexit 1")
-
-        # Configure hook
+        script = self._script(tmp_path)
         mock_jira_client_instance.config.commands = PhaseCommands(
-            presync=SyncCommandConfig(manual=str(test_script))
+            presync=SyncCommandConfig(manual=str(script))
         )
 
-        # Mock subprocess to raise CalledProcessError
-        mock_subprocess.side_effect = subprocess.CalledProcessError(1, "cmd")
+        with patch("testbench_defect_service.clients.utils.subprocess.run") as run:
+            protocol = mock_jira_client_instance.before_sync("TEST", "manual", sync_context)
 
-        sync_type = "manual"
+        run.assert_called_once_with([str(script), "TEST", "manual"], check=True)
+        assert protocol.successes
 
-        protocol = mock_jira_client_instance._execute_sync_hook(
-            project="Test Project (TEST)", sync_type=sync_type, hook_type="presync"
-        )
-
-        assert len(protocol.generalErrors) == 1
-        assert "failed with return code" in protocol.generalErrors[0].message
-        assert protocol.generalErrors[0].code == ProtocolCode.PUBLISH_ERROR
-
-    @patch("subprocess.run")
-    def test_execute_hook_os_error(self, mock_subprocess, mock_jira_client_instance, tmp_path):
-        """Test hook execution when OS error occurs."""
-        # Create a test script
-        test_script = tmp_path / "script.exe"
-        test_script.write_text("test")
-
-        # Configure hook
+    def test_after_sync_runs_the_configured_postsync_command(
+        self, mock_jira_client_instance, sync_context, tmp_path
+    ):
+        script = self._script(tmp_path)
         mock_jira_client_instance.config.commands = PhaseCommands(
-            presync=SyncCommandConfig(partial=str(test_script))
+            postsync=SyncCommandConfig(scheduled=str(script))
         )
 
-        # Mock subprocess to raise OSError
-        mock_subprocess.side_effect = OSError("Permission denied")
+        with patch("testbench_defect_service.clients.utils.subprocess.run") as run:
+            protocol = mock_jira_client_instance.after_sync("TEST", "scheduled", sync_context)
 
-        sync_type = "partial"
+        run.assert_called_once_with([str(script), "TEST", "scheduled"], check=True)
+        assert protocol.successes
 
-        protocol = mock_jira_client_instance._execute_sync_hook(
-            project="Test Project (TEST)", sync_type=sync_type, hook_type="presync"
+    def test_project_commands_take_precedence_over_the_client_default(
+        self, mock_jira_client_instance, sync_context, tmp_path
+    ):
+        default_script = self._script(tmp_path)
+        project_script = tmp_path / "project_hook.bat"
+        project_script.write_text("@echo off", encoding="utf-8")
+
+        mock_jira_client_instance.config.commands = PhaseCommands(
+            presync=SyncCommandConfig(manual=str(default_script))
         )
-
-        assert len(protocol.generalErrors) == 1
-        assert "could not be executed" in protocol.generalErrors[0].message
-
-    def test_execute_hook_project_specific_command(self, mock_jira_client_instance, tmp_path):
-        """Test executing project-specific hook command."""
-        # Create test script
-        test_script = tmp_path / "project_script.bat"
-        test_script.write_text("echo test")
-
-        # Configure project-specific hook
-        mock_jira_client_instance.config.projects["Test Project (TEST)"] = JiraProjectConfig(
-            commands=PhaseCommands(postsync=SyncCommandConfig(manual=str(test_script)))
-        )
-
-        sync_type = "manual"
-
-        with patch("subprocess.run"):
-            protocol = mock_jira_client_instance._execute_sync_hook(
-                project="Test Project (TEST)", sync_type=sync_type, hook_type="postsync"
+        mock_jira_client_instance.config.projects = {
+            "TEST": JiraProjectConfig(
+                commands=PhaseCommands(presync=SyncCommandConfig(manual=str(project_script)))
             )
+        }
 
-            assert "Test Project (TEST)" in protocol.successes
-            assert len(protocol.successes["Test Project (TEST)"]) == 1
+        with patch("testbench_defect_service.clients.utils.subprocess.run") as run:
+            mock_jira_client_instance.before_sync("TEST", "manual", sync_context)
+
+        run.assert_called_once_with([str(project_script), "TEST", "manual"], check=True)
+
+    def test_no_configured_command_is_acknowledged_without_running_anything(
+        self, mock_jira_client_instance, sync_context
+    ):
+        with patch("testbench_defect_service.clients.utils.subprocess.run") as run:
+            protocol = mock_jira_client_instance.before_sync("TEST", "manual", sync_context)
+
+        run.assert_not_called()
+        assert "no command configured" in protocol.successes["TEST"][0].message
 
 
 @pytest.mark.unit
@@ -2039,7 +2057,7 @@ class TestProtocolContract:
                 "Test Project (TEST)", _make_defect(), sync_context
             )
 
-        assert result.value == ""
+        assert result.value is None
         assert result.protocol.generalErrors[0].code == ProtocolCode.INSERT_ACCESS_ERROR
 
     def test_create_defect_reports_unauthorized_project_lookup(
@@ -2060,7 +2078,7 @@ class TestProtocolContract:
                 "Test Project (TEST)", _make_defect(), sync_context
             )
 
-        assert result.value == ""
+        assert result.value is None
         assert result.protocol.generalErrors[0].code == ProtocolCode.INSERT_ACCESS_ERROR
 
     # A misconfigured sync hook returned an all-empty protocol, indistinguishable from

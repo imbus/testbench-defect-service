@@ -9,13 +9,14 @@ from testbench_defect_service.exceptions import (
     handle_jira_error,
     handle_validation_error,
 )
-from testbench_defect_service.log import get_logging_dict
+from testbench_defect_service.log import get_logging_dict, logger
 from testbench_defect_service.middleware import check_request_auth, log_request, log_response
 from testbench_defect_service.routes import router
 from testbench_defect_service.utils.dependencies import (
     check_excel_dependencies,
     check_jira_dependencies,
 )
+from testbench_defect_service.utils.motd import build_client_motd
 
 
 def register_middlewares(app: Sanic) -> None:
@@ -45,6 +46,14 @@ def check_dependencies(app: Sanic) -> None:
         check_jira_dependencies(raise_on_missing=True)
 
 
+def register_client_motd(app: Sanic, config: AppConfig) -> None:
+    """Show the configured reader in Sanic's startup MOTD box."""
+    try:
+        app.config.MOTD_DISPLAY.update(build_client_motd(config))
+    except Exception:
+        logger.debug("Could not build the reader MOTD rows", exc_info=True)
+
+
 def create_app(name: str, config: AppConfig | None = None) -> Sanic:
     """Create and configure the Sanic application."""
     if not config:
@@ -60,6 +69,9 @@ def create_app(name: str, config: AppConfig | None = None) -> Sanic:
 
     # Validate dependencies
     check_dependencies(app)
+
+    # Summarise the configured reader in the startup MOTD
+    register_client_motd(app, config)
 
     # Setup application
     register_middlewares(app)

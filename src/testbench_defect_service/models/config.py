@@ -108,3 +108,27 @@ class DefectServiceConfig(BaseModel):
         if v is not None and not v.exists():
             raise ValueError(f"SSL certificate file not found: '{v}'")
         return v
+
+
+class SyncCommandConfig(BaseModel):
+    scheduled: str | None = Field(
+        default=None,
+        description="Script run on a scheduled sync (path to a .bat, .sh or .exe file)",
+    )
+    manual: str | None = Field(
+        default=None,
+        description="Script run on a manual sync (path to a .bat, .sh or .exe file)",
+    )
+    partial: str | None = Field(
+        default=None,
+        description="Script run on a partial sync (path to a .bat, .sh or .exe file)",
+    )
+
+
+class PhaseCommands(BaseModel):
+    presync: SyncCommandConfig | None = Field(
+        default=None, description="Pre-sync hook scripts (run before a sync)"
+    )
+    postsync: SyncCommandConfig | None = Field(
+        default=None, description="Post-sync hook scripts (run after a sync)"
+    )
