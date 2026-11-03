@@ -14,6 +14,7 @@ __all__ = [
     "RAW_CREDENTIAL_ENV_VARS",
     "CredentialSourceError",
     "credential_fields",
+    "ensure_private_file",
     "is_credential_field",
     "logger",
     "read_credential_from_env",
@@ -48,6 +49,25 @@ def credential_fields(config_class: type[BaseModel]) -> dict[str, str]:
         for name, info in config_class.model_fields.items()
         if is_credential_field(info)
     }
+
+
+def ensure_private_file(path: Path) -> None:
+    """Make ``path`` readable and writable by its owner only (POSIX), creating it if missing.
+
+    Does nothing on non-POSIX systems. Never raises: if the permissions cannot be set,
+    a warning is logged instead.
+    """
+    if os.name != "posix":
+        return
+    try:
+        if not path.exists():
+            os.close(os.open(path, os.O_WRONLY | os.O_CREAT, 0o600))
+        path.chmod(0o600)
+    except OSError:
+        logger.warning(
+            f"Could not restrict '{path}' to the owner (chmod 600 failed); "
+            "set the file permissions manually."
+        )
 
 
 def read_credential_from_env(env_var: str) -> tuple[str | None, str | None]:

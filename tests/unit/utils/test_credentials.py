@@ -1,5 +1,7 @@
 """Tests for Jira credential sources (environment, _FILE) in utils/credentials.py."""
 
+import stat
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -232,3 +234,43 @@ def test_resolve_credentials_propagates_source_errors(
     monkeypatch.setenv("JIRA_PASSWORD_FILE", str(tmp_path / "missing"))
     with pytest.raises(credentials.CredentialSourceError):
         credentials.resolve_credentials(JiraDefectClientConfig, {}, config_label="c")
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file permissions")
+def test_ensure_private_file_creates_and_restricts_to_owner(tmp_path: Path):
+    target = tmp_path / ".env"
+    credentials.ensure_private_file(target)
+    assert target.exists()
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    target.chmod(0o644)
+    credentials.ensure_private_file(target)
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file permissions")
+def test_ensure_private_file_warns_when_permissions_cannot_be_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    fake_logger = MagicMock()
+    monkeypatch.setattr(credentials, "logger", fake_logger)
+    target = tmp_path / ".env"
+    target.write_text("")
+
+    def _refuse(self: Path, mode: int) -> None:
+        raise OSError(1, "nope")
+
+    monkeypatch.setattr(Path, "chmod", _refuse)
+    credentials.ensure_private_file(target)
+    fake_logger.warning.assert_called_once_with(
+        f"Could not restrict '{target}' to the owner (chmod 600 failed); "
+        "set the file permissions manually."
+    )
+
+
+@pytest.mark.unit
+def test_ensure_private_file_is_a_no_op_on_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(credentials.os, "name", "nt")
+    credentials.ensure_private_file(tmp_path / ".env")
+    assert not (tmp_path / ".env").exists()

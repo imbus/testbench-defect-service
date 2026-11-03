@@ -1,4 +1,3 @@
-import contextlib
 import os
 from pathlib import Path
 from typing import Any
@@ -31,6 +30,7 @@ from testbench_defect_service.utils.config import (
     save_toml_config,
     update_config_files,
 )
+from testbench_defect_service.utils.credentials import credential_fields, ensure_private_file
 from testbench_defect_service.utils.dependencies import check_client_dependencies
 from testbench_defect_service.utils.wizard import get_env_sourced_field_names, prompt_model_fields
 
@@ -49,7 +49,6 @@ SERVICE_WIZARD_SKIP_FIELDS = {
     "logging",
 }
 
-JIRA_CLIENT_SECRET_ENV_VAR = "JIRA_OAUTH2_CLIENT_SECRET"
 DEFAULT_DOTENV_PATH = Path(".env")
 
 
@@ -156,32 +155,55 @@ def merge_with_defaults(
     return config_obj.model_dump(mode="json", by_alias=True, exclude_none=True, exclude=exclude)
 
 
-def store_client_secret_in_env(
-    client_config: dict[str, Any], dotenv_path: Path = DEFAULT_DOTENV_PATH
-) -> None:
-    """Always store the Jira OAuth2 client secret in a .env file, never in the config file.
+def store_credentials_in_env(
+    config: dict[str, Any],
+    config_class: type[BaseModel],
+    dotenv_path: Path = DEFAULT_DOTENV_PATH,
+) -> list[str]:
+    """Always store credentials in an owner-only .env file, never in the config file.
 
-    When a secret is present in ``client_config`` it is written to ``dotenv_path`` as
-    ``JIRA_OAUTH2_CLIENT_SECRET``, exported to the current process environment, and removed
-    from ``client_config``. Because ``merge_with_defaults`` excludes fields whose env var is
-    set, the secret is thereby kept out of the generated config file while the config still
-    validates against the environment value.
+    Every credential field of ``config_class`` with a non-empty string value in ``config`` is
+    written to ``dotenv_path`` under its environment variable, exported to the current process
+    environment, and removed from ``config``. Because ``merge_with_defaults`` excludes fields
+    whose env var is set, the secrets are thereby kept out of the generated config file while
+    the config still validates against the environment values.
 
-    Mutates ``client_config`` in place. Does nothing when no secret is present — e.g. when the
-    secret was already supplied via the environment, in which case it never entered the config.
+    Mutates ``config`` in place. Returns the names of the environment variables written
+    (empty if there was nothing to store, in which case nothing is created or printed).
     """
-    secret = client_config.get("oauth2_client_secret")
-    if not isinstance(secret, str) or not secret:
-        return
+    to_store = {
+        field: (env_var, config[field])
+        for field, env_var in credential_fields(config_class).items()
+        if isinstance(config.get(field), str) and config[field]
+    }
+    stored: list[str] = []
+    if to_store:
+        ensure_private_file(dotenv_path)
+        for field, (env_var, value) in to_store.items():
+            set_key(str(dotenv_path), env_var, value)
+            os.environ[env_var] = value
+            config.pop(field)
+            stored.append(env_var)
+        ensure_private_file(dotenv_path)  # python-dotenv rewrites the file
 
-    set_key(str(dotenv_path), JIRA_CLIENT_SECRET_ENV_VAR, secret)
-    with contextlib.suppress(OSError):
-        dotenv_path.chmod(0o600)
-    os.environ[JIRA_CLIENT_SECRET_ENV_VAR] = secret
-    client_config.pop("oauth2_client_secret", None)
+    if stored:
+        for env_var in stored:
+            click.echo(f"✓ Stored {env_var} in {dotenv_path}")
+        click.echo("  Keep this file out of version control (e.g. add '.env' to .gitignore).")
+    return stored
 
-    click.echo(f"✓ Stored {JIRA_CLIENT_SECRET_ENV_VAR} in {dotenv_path}")
-    click.echo("  Keep this file out of version control (e.g. add '.env' to .gitignore).")
+
+def _report_moved_credentials(
+    existing_credentials: list[str], config_class: type[BaseModel], stored: list[str]
+) -> None:
+    """Tell the user which credentials from the existing config now live in the .env file."""
+    env_vars = credential_fields(config_class)
+    for name in existing_credentials:
+        if env_vars[name] in stored:
+            click.echo(
+                f"✓ Moved '{name}' out of the configuration file into {DEFAULT_DOTENV_PATH} "
+                f"({env_vars[name]})"
+            )
 
 
 def configure_client(
@@ -214,6 +236,10 @@ def configure_client(
         except Exception:
             pass
 
+    existing_credentials = [
+        name for name in credential_fields(config_class) if existing_config.get(name)
+    ]
+
     client_config = prompt_model_fields(
         config_class,
         existing_config=existing_config,
@@ -230,8 +256,8 @@ def configure_client(
         if isinstance(refresh_token, str) and refresh_token:
             seed_oauth2_refresh_token(refresh_token)
 
-    if client_type == "jira":
-        store_client_secret_in_env(client_config)
+    stored = store_credentials_in_env(client_config, config_class, dotenv_path=DEFAULT_DOTENV_PATH)
+    _report_moved_credentials(existing_credentials, config_class, stored)
 
     return merge_with_defaults(client_config, config_class)
 
