@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ---
 
+## [Unreleased]
+
+### Added
+- Jira credentials can be read from secret files: every credential environment variable
+  (`JIRA_PASSWORD`, `JIRA_BEARER_TOKEN`, `JIRA_OAUTH2_CLIENT_SECRET`,
+  `JIRA_OAUTH1_ACCESS_TOKEN`, `JIRA_OAUTH1_ACCESS_TOKEN_SECRET`, `JIRA_OAUTH1_KEY_CERT`)
+  accepts a `<VARIABLE>_FILE` variant naming a file that holds the value.
+
+### Changed
+- The configuration wizard stores every Jira credential in `.env` instead of
+  `config.toml`, and moves credentials found in an existing `config.toml` into `.env`.
+- A credential set in the environment or a `_FILE` now overrides the value in
+  `config.toml`; a credential found in `config.toml` logs a warning at start.
+- The service refuses to start when a `_FILE` cannot be read or is empty, or when both
+  `<VARIABLE>` and `<VARIABLE>_FILE` are set. The message names the variable only.
+
+### Security
+- `.env` and the OAuth2 token cache (`tmp/oauth2_tokens.toml`) are created readable and
+  writable by the owner only on Linux and macOS.
+
 ## [0.3.0][0.3.0] 30.07.2026
 
 ### Added
