@@ -10,6 +10,8 @@ from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 from questionary import Choice
 
+from testbench_defect_service.utils.credentials import FILE_SUFFIX, is_credential_field
+
 _MISSING = object()
 
 # Constants for json_schema_extra keys
@@ -163,7 +165,7 @@ def get_field_type(field_info: FieldInfo) -> type:
         non_none_types = [arg for arg in args if arg is not type(None)]
         if non_none_types:
             return non_none_types[0]  # type: ignore[no-any-return]
-    return field_type
+    return field_type  # type: ignore[return-value]
 
 
 def prompt_with_validation(
@@ -221,7 +223,7 @@ def get_field_default(field_info: FieldInfo) -> Any:
     return None
 
 
-def should_skip_field(  # noqa: PLR0913
+def should_skip_field(  # noqa: PLR0913, PLR0917
     field_name: str,
     field_info: FieldInfo,
     config_dict: dict[str, Any],
@@ -276,6 +278,10 @@ def get_env_value(field_info: FieldInfo) -> tuple[str | None, Any]:
     env_var = schema_extra.get(SCHEMA_KEYS["ENV_VAR"])
     if env_var:
         env_value = os.getenv(env_var) or None
+        if env_value is None and is_credential_field(field_info):
+            file_value = os.getenv(env_var + FILE_SUFFIX) or None
+            if file_value is not None:
+                return env_var + FILE_SUFFIX, file_value
         return env_var, env_value
     return None, None
 
@@ -931,7 +937,7 @@ def prompt_password_field(description: str, default: Any) -> Any:
     return questionary.password(f"{description}:", default=default if default else "").ask()
 
 
-def prompt_single_field(  # noqa: C901, PLR0912, PLR0913
+def prompt_single_field(  # noqa: C901, PLR0912, PLR0913, PLR0917
     field_name: str,
     field_info: FieldInfo,
     field_value: Any,
