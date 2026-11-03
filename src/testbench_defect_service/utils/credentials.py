@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
@@ -16,6 +17,7 @@ __all__ = [
     "is_credential_field",
     "logger",
     "read_credential_from_env",
+    "resolve_credentials",
 ]
 
 FILE_SUFFIX = "_FILE"
@@ -85,3 +87,30 @@ def read_credential_from_env(env_var: str) -> tuple[str | None, str | None]:
     if not content:
         raise CredentialSourceError(f"{file_var} points to '{file_path}', which is empty.")
     return content, file_var
+
+
+def resolve_credentials(
+    config_class: type[BaseModel], config: dict[str, Any], *, config_label: str
+) -> dict[str, Any]:
+    """Return a copy of ``config`` with credentials taken from environment or ``_FILE`` sources.
+
+    An environment/``_FILE`` value replaces the configured one. A credential found in the
+    config logs a warning (never including the value). Raises ``CredentialSourceError``
+    if a source is conflicting, unreadable or empty.
+    """
+    resolved = dict(config)
+    for field, env_var in credential_fields(config_class).items():
+        configured = config.get(field)
+        in_config = isinstance(configured, str) and bool(configured)
+        value, source_var = read_credential_from_env(env_var)
+        if value is not None:
+            resolved[field] = value
+        if in_config:
+            message = (
+                f"Jira credential '{field}' is stored in {config_label}; "
+                f"move it to .env ({env_var}) or use {env_var}{FILE_SUFFIX}."
+            )
+            if value is not None:
+                message += f" The configured value is ignored: {source_var} overrides it."
+            logger.warning(message)
+    return resolved

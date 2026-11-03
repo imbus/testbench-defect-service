@@ -1,6 +1,7 @@
 """Tests for Jira credential sources (environment, _FILE) in utils/credentials.py."""
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import BaseModel, Field
@@ -155,3 +156,79 @@ def test_empty_file_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, 
     with pytest.raises(credentials.CredentialSourceError) as excinfo:
         credentials.read_credential_from_env("JIRA_PASSWORD")
     assert str(excinfo.value) == f"JIRA_PASSWORD_FILE points to '{target}', which is empty."
+
+
+@pytest.mark.unit
+def test_resolve_credentials_env_beats_config_and_warns_without_values(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_logger = MagicMock()
+    monkeypatch.setattr(credentials, "logger", fake_logger)
+    monkeypatch.setenv("JIRA_PASSWORD", "env-secret")
+    config = {"auth_type": "basic", "username": "u", "password": "config-secret"}
+
+    resolved = credentials.resolve_credentials(
+        JiraDefectClientConfig, config, config_label="config.toml"
+    )
+
+    assert resolved["password"] == "env-secret"
+    assert config["password"] == "config-secret"  # input not mutated
+    fake_logger.warning.assert_called_once_with(
+        "Jira credential 'password' is stored in config.toml; move it to .env (JIRA_PASSWORD) "
+        "or use JIRA_PASSWORD_FILE. The configured value is ignored: JIRA_PASSWORD overrides it."
+    )
+    assert "secret" not in fake_logger.warning.call_args.args[0]
+
+
+@pytest.mark.unit
+def test_resolve_credentials_warns_for_config_value_without_override(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_logger = MagicMock()
+    monkeypatch.setattr(credentials, "logger", fake_logger)
+    resolved = credentials.resolve_credentials(
+        JiraDefectClientConfig, {"token": "config-secret"}, config_label="jira_config.toml"
+    )
+    assert resolved["token"] == "config-secret"
+    fake_logger.warning.assert_called_once_with(
+        "Jira credential 'token' is stored in jira_config.toml; move it to .env "
+        "(JIRA_BEARER_TOKEN) or use JIRA_BEARER_TOKEN_FILE."
+    )
+
+
+@pytest.mark.unit
+def test_resolve_credentials_file_source_is_named_in_override_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    fake_logger = MagicMock()
+    monkeypatch.setattr(credentials, "logger", fake_logger)
+    (tmp_path / "pw").write_text("file-secret\n")
+    monkeypatch.setenv("JIRA_PASSWORD_FILE", str(tmp_path / "pw"))
+    resolved = credentials.resolve_credentials(
+        JiraDefectClientConfig, {"password": "config-secret"}, config_label="config.toml"
+    )
+    assert resolved["password"] == "file-secret"
+    assert fake_logger.warning.call_args.args[0].endswith("JIRA_PASSWORD_FILE overrides it.")
+
+
+@pytest.mark.unit
+def test_resolve_credentials_is_a_no_op_for_models_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class Plain(BaseModel):
+        path: str = "x"
+
+    fake_logger = MagicMock()
+    monkeypatch.setattr(credentials, "logger", fake_logger)
+    monkeypatch.setenv("JIRA_PASSWORD", "env-secret")
+    assert credentials.resolve_credentials(Plain, {"path": "y"}, config_label="c") == {"path": "y"}
+    fake_logger.warning.assert_not_called()
+
+
+@pytest.mark.unit
+def test_resolve_credentials_propagates_source_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("JIRA_PASSWORD_FILE", str(tmp_path / "missing"))
+    with pytest.raises(credentials.CredentialSourceError):
+        credentials.resolve_credentials(JiraDefectClientConfig, {}, config_label="c")
