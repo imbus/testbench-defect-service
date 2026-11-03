@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The service refuses to start when a `_FILE` cannot be read or is empty, or when both
   `<VARIABLE>` and `<VARIABLE>_FILE` are set. The message names the variable (and the
   file path), never the value.
+- `.env` is now looked up from the working directory first (then the installation
+  directory as before).
 
 ### Security
 - `.env` and the OAuth2 token cache (`tmp/oauth2_tokens.toml`) are created readable and

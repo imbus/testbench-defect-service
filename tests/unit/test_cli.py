@@ -27,6 +27,30 @@ def test_cli_loads_dotenv_from_the_working_directory(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
+def test_cli_falls_back_to_package_dotenv_lookup_when_cwd_has_none(tmp_path, monkeypatch):
+    """Without a .env in the working directory, the previous package-upward lookup is used."""
+    # setenv first so monkeypatch records the original state and restores it on teardown
+    monkeypatch.setenv("PROBE_DOTENV_VAR", "")
+    monkeypatch.delenv("PROBE_DOTENV_VAR")
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    fallback = tmp_path / "install" / ".env"
+    fallback.parent.mkdir()
+    fallback.write_text("PROBE_DOTENV_VAR=fallback\n", encoding="utf-8")
+    monkeypatch.chdir(workdir)
+
+    def fake_find_dotenv(*, usecwd: bool = False) -> str:
+        return "" if usecwd else str(fallback)
+
+    monkeypatch.setattr(cli_module, "find_dotenv", fake_find_dotenv)
+
+    result = CliRunner().invoke(cli_module.cli, ["init", "--help"])
+
+    assert result.exit_code == 0
+    assert os.environ["PROBE_DOTENV_VAR"] == "fallback"
+
+
+@pytest.mark.unit
 def test_start_configures_logging_before_building_app_config(tmp_path):
     """Credential warnings logged while AppConfig is built must use the configured handlers."""
     calls = []
