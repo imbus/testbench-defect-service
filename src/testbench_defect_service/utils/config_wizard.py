@@ -142,7 +142,8 @@ def merge_with_defaults(
     This ensures all fields (including defaults) are written to config files,
     eliminating 'magic' values that only exist in code.
     Fields whose values are sourced from environment variables are excluded so
-    that sensitive values are not persisted to the config file.
+    that sensitive values are not persisted to the config file. Credential fields are
+    always excluded: the environment, ``.env`` or ``<VAR>_FILE`` supplies them.
 
     Args:
         config_dict: User-provided configuration values
@@ -156,7 +157,7 @@ def merge_with_defaults(
         with_file_sourced_placeholders(config_class, config_dict)
     )
     env_sourced = get_env_sourced_field_names(config_class)
-    merged_exclude = (exclude_fields or set()) | env_sourced
+    merged_exclude = (exclude_fields or set()) | env_sourced | set(credential_fields(config_class))
     exclude: set[str] | None = merged_exclude if merged_exclude else None
     return config_obj.model_dump(mode="json", by_alias=True, exclude_none=True, exclude=exclude)
 

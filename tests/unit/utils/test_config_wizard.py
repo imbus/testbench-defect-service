@@ -13,6 +13,7 @@ from testbench_defect_service.clients.jira.config import JiraDefectClientConfig
 from testbench_defect_service.clients.jira.jira_oauth import JiraAuthExpiredError
 from testbench_defect_service.utils import config_wizard
 from testbench_defect_service.utils.config_wizard import run_jira_oauth_wizard
+from testbench_defect_service.utils.credentials import credential_fields
 
 JIRA_CLIENT_CLASS = "testbench_defect_service.clients.JiraDefectClient"
 CREDENTIAL_ENV_VARS = [
@@ -314,3 +315,25 @@ def test_merge_with_defaults_succeeds_with_file_sourced_credential(
     )
     assert result["server_url"] == "https://jira.example.com"
     assert "password" not in result
+
+
+@pytest.mark.unit
+def test_merge_with_defaults_never_dumps_credential_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    pem = tmp_path / "key.pem"
+    pem.write_text("-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n")
+    monkeypatch.setenv("JIRA_OAUTH1_CONSUMER_KEY", "consumer")
+    monkeypatch.setenv("JIRA_OAUTH1_ACCESS_TOKEN", "at")
+    monkeypatch.setenv("JIRA_OAUTH1_ACCESS_TOKEN_SECRET", "ats")
+    result = config_wizard.merge_with_defaults(
+        {
+            "server_url": "https://jira.example.com",
+            "auth_type": "oauth1",
+            "oauth1_key_cert_path": str(pem),
+        },
+        JiraDefectClientConfig,
+    )
+    assert result["oauth1_key_cert_path"] == str(pem)
+    assert "oauth1_key_cert" not in result
+    assert not set(credential_fields(JiraDefectClientConfig)) & set(result)
