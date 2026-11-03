@@ -108,7 +108,8 @@ def read_credential_from_env(env_var: str) -> tuple[str | None, str | None]:
         return None, None
 
     try:
-        content = Path(file_path).read_bytes().decode("utf-8")
+        # utf-8-sig drops a BOM, as written e.g. by PowerShell.
+        content = Path(file_path).read_bytes().decode("utf-8-sig")
     except OSError as e:
         raise CredentialSourceError(
             f"{file_var} points to '{file_path}', which cannot be read: {e.strerror or e}."

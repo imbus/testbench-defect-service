@@ -10,7 +10,8 @@ from sanic.worker.loader import AppLoader
 
 from testbench_defect_service import __title__, __version__
 from testbench_defect_service.app import AppConfig, create_app
-from testbench_defect_service.log import logger
+from testbench_defect_service.log import logger, setup_logging
+from testbench_defect_service.utils.config import load_service_config, resolve_config_file_path
 from testbench_defect_service.utils.config_wizard import (
     configure_client_only,
     configure_credentials_only,
@@ -189,6 +190,8 @@ def start(  # noqa: PLR0913, PLR0917
 ):
     """Start the TestBench Defect Service."""
     app_name = __title__
+    # Configure logging first: AppConfig logs credential warnings while it is built.
+    setup_logging(load_service_config(resolve_config_file_path(config_path)).logging, debug=dev)
     app_config = AppConfig(
         config_path=config_path,
         client_class=client_class,

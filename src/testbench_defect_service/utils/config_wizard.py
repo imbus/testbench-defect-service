@@ -31,6 +31,7 @@ from testbench_defect_service.utils.config import (
     update_config_files,
 )
 from testbench_defect_service.utils.credentials import (
+    FILE_SUFFIX,
     credential_fields,
     ensure_private_file,
     with_file_sourced_placeholders,
@@ -196,6 +197,12 @@ def store_credentials_in_env(
     if stored:
         for env_var in stored:
             click.echo(f"✓ Stored {env_var} in {dotenv_path}")
+        for env_var, value in to_store.values():
+            if "${" in value:
+                click.echo(
+                    f"⚠️  {env_var} contains '${{', which .env files interpolate; if the value "
+                    f"is not loaded correctly, use {env_var}{FILE_SUFFIX} instead."
+                )
         click.echo("  Keep this file out of version control (e.g. add '.env' to .gitignore).")
     return stored
 

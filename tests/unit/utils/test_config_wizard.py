@@ -337,3 +337,17 @@ def test_merge_with_defaults_never_dumps_credential_fields(
     assert result["oauth1_key_cert_path"] == str(pem)
     assert "oauth1_key_cert" not in result
     assert not set(credential_fields(JiraDefectClientConfig)) & set(result)
+
+
+@pytest.mark.unit
+def test_store_credentials_in_env_warns_about_interpolation_sequences(tmp_path: Path, capsys):
+    value = "pa${HOME}ss"
+    config_wizard.store_credentials_in_env(
+        {"password": value}, JiraDefectClientConfig, tmp_path / ".env"
+    )
+    out = capsys.readouterr().out
+    assert (
+        "⚠️  JIRA_PASSWORD contains '${', which .env files interpolate; if the value is not "
+        "loaded correctly, use JIRA_PASSWORD_FILE instead."
+    ) in out
+    assert value not in out

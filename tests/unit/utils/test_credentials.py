@@ -1,12 +1,13 @@
 """Tests for Jira credential sources (environment, _FILE) in utils/credentials.py."""
 
+import re
 import stat
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from testbench_defect_service.clients.jira.config import JiraDefectClientConfig
 from testbench_defect_service.utils import credentials
@@ -318,3 +319,75 @@ def test_with_file_sourced_placeholders_fills_only_file_sourced_credentials(
         "oauth2_client_secret": "<from JIRA_OAUTH2_CLIENT_SECRET_FILE>",
     }
     assert config == {"auth_type": "basic", "oauth1_access_token": "present"}
+
+
+@pytest.mark.unit
+def test_read_credential_from_file_drops_utf8_bom(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    secret_file = tmp_path / "pw"
+    secret_file.write_bytes(b"\xef\xbb\xbfsecret\n")
+    monkeypatch.setenv("JIRA_PASSWORD_FILE", str(secret_file))
+    assert credentials.read_credential_from_env("JIRA_PASSWORD")[0] == "secret"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        (
+            {"auth_type": "basic", "username": "u"},
+            (
+                "Jira password must be provided for basic auth "
+                "(set JIRA_PASSWORD or JIRA_PASSWORD_FILE)"
+            ),
+        ),
+        (
+            {"auth_type": "token"},
+            (
+                "Jira Personal Access Token must be provided for token auth "
+                "(set JIRA_BEARER_TOKEN or JIRA_BEARER_TOKEN_FILE)"
+            ),
+        ),
+        (
+            {"auth_type": "oauth1"},
+            (
+                "Jira Access Token must be provided for OAuth1 "
+                "(set JIRA_OAUTH1_ACCESS_TOKEN or JIRA_OAUTH1_ACCESS_TOKEN_FILE)"
+            ),
+        ),
+        (
+            {"auth_type": "oauth1", "oauth1_access_token": "at"},
+            (
+                "Jira Access Token Secret must be provided for OAuth1 "
+                "(set JIRA_OAUTH1_ACCESS_TOKEN_SECRET or JIRA_OAUTH1_ACCESS_TOKEN_SECRET_FILE)"
+            ),
+        ),
+        (
+            {
+                "auth_type": "oauth1",
+                "oauth1_access_token": "at",
+                "oauth1_access_token_secret": "ats",
+                "oauth1_consumer_key": "ck",
+            },
+            (
+                "Jira Private Key must be provided for OAuth1 "
+                "(via oauth1_key_cert_path / JIRA_OAUTH1_KEY_CERT_PATH, "
+                "or set JIRA_OAUTH1_KEY_CERT or JIRA_OAUTH1_KEY_CERT_FILE)"
+            ),
+        ),
+        (
+            {"auth_type": "oauth2 2LO", "oauth2_client_id": "id"},
+            (
+                "Jira OAuth2 client credentials must be provided "
+                "(client ID via oauth2_client_id or JIRA_OAUTH2_CLIENT_ID; "
+                "client secret: set JIRA_OAUTH2_CLIENT_SECRET or JIRA_OAUTH2_CLIENT_SECRET_FILE)"
+            ),
+        ),
+    ],
+)
+def test_missing_credential_errors_name_the_file_variable(
+    monkeypatch: pytest.MonkeyPatch, config: dict, message: str
+):
+    for var in ("JIRA_OAUTH1_CONSUMER_KEY", "JIRA_OAUTH1_KEY_CERT_PATH", "JIRA_OAUTH2_CLIENT_ID"):
+        monkeypatch.delenv(var, raising=False)
+    with pytest.raises(ValidationError, match=re.escape(message)):
+        JiraDefectClientConfig.model_validate({"server_url": "https://jira.example.com", **config})
