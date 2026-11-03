@@ -220,6 +220,24 @@ def _report_moved_credentials(
             )
 
 
+def load_existing_client_config(config_class: type[BaseModel], existing: dict) -> dict:
+    """Validate an existing client config and dump it, without credential placeholders.
+
+    Credentials supplied only through ``<VARIABLE>_FILE`` are validated with a placeholder
+    (the file is never read). Afterwards every credential key is restored to its raw value
+    from ``existing`` or removed, so a placeholder never reaches prompts or the config file.
+    """
+    validated = config_class.model_validate(
+        with_file_sourced_placeholders(config_class, existing)
+    ).model_dump()
+    for name in credential_fields(config_class):
+        if name in existing:
+            validated[name] = existing[name]
+        else:
+            validated.pop(name, None)
+    return validated
+
+
 def configure_client(
     client_type: str, client_class: str, service_config: DefectServiceConfig | None = None
 ) -> dict | None:
@@ -246,7 +264,7 @@ def configure_client(
     if service_config is not None:
         try:
             existing_config = get_client_config(service_config) or {}
-            existing_config = config_class.model_validate(existing_config).model_dump()
+            existing_config = load_existing_client_config(config_class, existing_config)
         except Exception:
             pass
 
