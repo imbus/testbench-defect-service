@@ -4,7 +4,7 @@ from pathlib import Path
 from ssl import SSLContext
 
 import click
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from sanic import Sanic
 from sanic.worker.loader import AppLoader
 
@@ -41,7 +41,8 @@ def print_wizard_banner():
 @click.pass_context
 def cli(ctx):
     ctx.max_content_width = 120
-    load_dotenv()
+    # Search from the working directory, where the wizard writes .env (not the package dir).
+    load_dotenv(find_dotenv(usecwd=True))
 
 
 @click.command()
