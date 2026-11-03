@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file path), never the value.
 - `.env` is now looked up from the working directory first (then the installation
   directory as before).
+- The wizard no longer pre-fills an existing credential into the masked prompt: press
+  Enter to keep it, or type a new value to replace it.
+- Re-running the wizard with a credential supplied through `<VARIABLE>_FILE` keeps the
+  other existing settings as prompt defaults.
 
 ### Security
 - `.env` and the OAuth2 token cache (`tmp/oauth2_tokens.toml`) are created readable and
