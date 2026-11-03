@@ -294,3 +294,27 @@ def test_open_private_file_writes_bytes_and_truncates(tmp_path: Path):
     with credentials.open_private_file(target) as fh:
         fh.write(b"x")
     assert target.read_bytes() == b"x"
+
+
+@pytest.mark.unit
+def test_with_file_sourced_placeholders_fills_only_file_sourced_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    missing = tmp_path / "missing"  # never read: reading it would raise
+    monkeypatch.setenv("JIRA_PASSWORD_FILE", str(missing))
+    monkeypatch.setenv("JIRA_OAUTH2_CLIENT_SECRET_FILE", str(missing))
+    monkeypatch.setenv("JIRA_OAUTH1_ACCESS_TOKEN_FILE", str(missing))
+    monkeypatch.setenv("JIRA_BEARER_TOKEN", "plain-value")
+    monkeypatch.setenv("JIRA_BEARER_TOKEN_FILE", str(missing))
+    monkeypatch.setenv("JIRA_USERNAME_FILE", str(missing))
+    config = {"auth_type": "basic", "oauth1_access_token": "present"}
+
+    result = credentials.with_file_sourced_placeholders(JiraDefectClientConfig, config)
+
+    assert result == {
+        "auth_type": "basic",
+        "oauth1_access_token": "present",
+        "password": "<from JIRA_PASSWORD_FILE>",
+        "oauth2_client_secret": "<from JIRA_OAUTH2_CLIENT_SECRET_FILE>",
+    }
+    assert config == {"auth_type": "basic", "oauth1_access_token": "present"}

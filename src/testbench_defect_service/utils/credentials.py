@@ -20,6 +20,7 @@ __all__ = [
     "open_private_file",
     "read_credential_from_env",
     "resolve_credentials",
+    "with_file_sourced_placeholders",
 ]
 
 FILE_SUFFIX = "_FILE"
@@ -125,6 +126,23 @@ def read_credential_from_env(env_var: str) -> tuple[str | None, str | None]:
     if not content:
         raise CredentialSourceError(f"{file_var} points to '{file_path}', which is empty.")
     return content, file_var
+
+
+def with_file_sourced_placeholders(
+    config_class: type[BaseModel], config: dict[str, Any]
+) -> dict[str, Any]:
+    """Return a copy of ``config`` with a placeholder for every ``_FILE``-sourced credential.
+
+    A credential field gets ``"<from <VAR>_FILE>"`` when ``config`` has no non-empty value for
+    it, ``<VAR>`` is unset or empty and ``<VAR>_FILE`` is set. The file is never read: this
+    lets the wizard validate a config whose secret only ``start`` will load.
+    """
+    result = dict(config)
+    for field, env_var in credential_fields(config_class).items():
+        file_var = f"{env_var}{FILE_SUFFIX}"
+        if not result.get(field) and not os.getenv(env_var) and os.getenv(file_var):
+            result[field] = f"<from {file_var}>"
+    return result
 
 
 def resolve_credentials(

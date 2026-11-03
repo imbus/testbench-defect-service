@@ -30,7 +30,11 @@ from testbench_defect_service.utils.config import (
     save_toml_config,
     update_config_files,
 )
-from testbench_defect_service.utils.credentials import credential_fields, ensure_private_file
+from testbench_defect_service.utils.credentials import (
+    credential_fields,
+    ensure_private_file,
+    with_file_sourced_placeholders,
+)
 from testbench_defect_service.utils.dependencies import check_client_dependencies
 from testbench_defect_service.utils.wizard import get_env_sourced_field_names, prompt_model_fields
 
@@ -148,7 +152,9 @@ def merge_with_defaults(
     Returns:
         Complete configuration dict with all fields (user values + defaults), TOML-serializable
     """
-    config_obj = config_class.model_validate(config_dict)
+    config_obj = config_class.model_validate(
+        with_file_sourced_placeholders(config_class, config_dict)
+    )
     env_sourced = get_env_sourced_field_names(config_class)
     merged_exclude = (exclude_fields or set()) | env_sourced
     exclude: set[str] | None = merged_exclude if merged_exclude else None

@@ -10,7 +10,11 @@ from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 from questionary import Choice
 
-from testbench_defect_service.utils.credentials import FILE_SUFFIX, is_credential_field
+from testbench_defect_service.utils.credentials import (
+    FILE_SUFFIX,
+    is_credential_field,
+    with_file_sourced_placeholders,
+)
 
 _MISSING = object()
 
@@ -1043,7 +1047,11 @@ def validate_field_value(
         Tuple of (is_valid, error_message)
     """
     try:
-        config_class.model_validate({**partial_config, field_name: field_value})
+        config_class.model_validate(
+            with_file_sourced_placeholders(
+                config_class, {**partial_config, field_name: field_value}
+            )
+        )
         return True, None
     except ValidationError as e:
         for error in e.errors():
@@ -1149,7 +1157,9 @@ def prompt_model_fields(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                     return None
 
             try:
-                config_class.model_validate(config_dict)
+                config_class.model_validate(
+                    with_file_sourced_placeholders(config_class, config_dict)
+                )
                 return config_dict
             except ValidationError as e:
                 click.echo("\n❌ Configuration validation failed:")

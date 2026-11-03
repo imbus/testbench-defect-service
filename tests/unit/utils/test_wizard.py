@@ -8,6 +8,7 @@ from testbench_defect_service.utils.wizard import (
     get_env_sourced_field_names,
     get_env_value,
     prompt_literal_field,
+    prompt_model_fields,
 )
 
 _WIZARD = "testbench_defect_service.utils.wizard"
@@ -137,3 +138,40 @@ def test_env_sourced_field_names_include_file_sourced_credentials(
 ):
     monkeypatch.setenv("JIRA_PASSWORD_FILE", "/run/secrets/pw")
     assert "password" in get_env_sourced_field_names(JiraDefectClientConfig)
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("_no_jira_env")
+def test_get_env_value_treats_empty_file_variable_as_unset(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("JIRA_PASSWORD_FILE", "")
+    assert get_env_value(JiraDefectClientConfig.model_fields["password"]) == (
+        "JIRA_PASSWORD",
+        None,
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("_no_jira_env")
+def test_prompt_model_fields_completes_when_credential_comes_from_file_variable(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys
+):
+    # The file does not exist: the wizard must never read it, only note that it is configured.
+    monkeypatch.setenv("JIRA_PASSWORD_FILE", str(tmp_path / "missing"))
+    questionary = _select_mock()
+    # A second wizard round (validation failure) would exhaust the answers and raise.
+    questionary.text.return_value.ask.side_effect = ["https://jira.example.com", "jira-user"]
+    with patch(f"{_WIZARD}.questionary", questionary):
+        result = prompt_model_fields(
+            JiraDefectClientConfig,
+            allowed_fields={"server_url", "auth_type", "username", "password"},
+        )
+
+    assert result == {
+        "server_url": "https://jira.example.com",
+        "auth_type": "basic",
+        "username": "jira-user",
+    }
+    questionary.password.assert_not_called()
+    out = capsys.readouterr().out
+    assert "✓ Using JIRA_PASSWORD_FILE from environment for password" in out
+    assert "validation failed" not in out

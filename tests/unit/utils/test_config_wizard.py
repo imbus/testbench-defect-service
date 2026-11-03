@@ -301,3 +301,16 @@ def test_configure_client_moves_existing_credentials_and_reports_them(
         in out
     )
     assert "old-pat" not in out
+
+
+@pytest.mark.unit
+def test_merge_with_defaults_succeeds_with_file_sourced_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("JIRA_PASSWORD_FILE", str(tmp_path / "missing"))
+    result = config_wizard.merge_with_defaults(
+        {"server_url": "https://jira.example.com", "auth_type": "basic", "username": "jira-user"},
+        JiraDefectClientConfig,
+    )
+    assert result["server_url"] == "https://jira.example.com"
+    assert "password" not in result
