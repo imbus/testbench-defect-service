@@ -9,9 +9,11 @@ from testbench_defect_service.utils.wizard import (
     get_env_value,
     prompt_literal_field,
     prompt_model_fields,
+    prompt_password_field,
 )
 
 _WIZARD = "testbench_defect_service.utils.wizard"
+_PASSWORD = f"{_WIZARD}.questionary.password"
 
 _AUTH_TYPE = Literal[
     "basic",
@@ -175,3 +177,43 @@ def test_prompt_model_fields_completes_when_credential_comes_from_file_variable(
     out = capsys.readouterr().out
     assert "✓ Using JIRA_PASSWORD_FILE from environment for password" in out
     assert "validation failed" not in out
+
+
+def _password_mock(answer):
+    password = MagicMock()
+    password.return_value.ask.return_value = answer
+    return password
+
+
+@pytest.mark.unit
+def test_prompt_password_field_keeps_existing_value_on_enter():
+    password = _password_mock("")
+    with patch(_PASSWORD, password):
+        result = prompt_password_field("Password", "old-secret")
+
+    assert result == "old-secret"
+    assert password.call_args.args[0].endswith("(press Enter to keep the current value):")
+    assert password.call_args.kwargs["default"] == ""
+
+
+@pytest.mark.unit
+def test_prompt_password_field_replaces_existing_value_when_typed():
+    with patch(_PASSWORD, _password_mock("new-secret")):
+        assert prompt_password_field("Password", "old-secret") == "new-secret"
+
+
+@pytest.mark.unit
+def test_prompt_password_field_without_default_prompts_plainly():
+    password = _password_mock("x")
+    with patch(_PASSWORD, password):
+        result = prompt_password_field("Password", None)
+
+    assert result == "x"
+    assert password.call_args.args[0] == "Password:"
+    assert password.call_args.kwargs["default"] == ""
+
+
+@pytest.mark.unit
+def test_prompt_password_field_returns_none_when_cancelled():
+    with patch(_PASSWORD, _password_mock(None)):
+        assert prompt_password_field("Password", "old-secret") is None

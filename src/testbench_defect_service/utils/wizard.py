@@ -938,7 +938,21 @@ def prompt_path_field(description: str, default: Any, only_directories: bool = T
 
 
 def prompt_password_field(description: str, default: Any) -> Any:
-    return questionary.password(f"{description}:", default=default if default else "").ask()
+    """Prompt for a masked value without ever pre-filling or printing the existing one.
+
+    With an existing value, an empty answer keeps it and typed text replaces it.
+    ``None`` (cancelled) is returned unchanged.
+    """
+    has_default = isinstance(default, str) and bool(default)
+    label = (
+        f"{description} (press Enter to keep the current value):"
+        if has_default
+        else f"{description}:"
+    )
+    answer = questionary.password(label, default="").ask()
+    if has_default and answer == "":
+        return default
+    return answer
 
 
 def prompt_single_field(  # noqa: C901, PLR0912, PLR0913, PLR0917
