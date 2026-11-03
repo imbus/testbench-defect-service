@@ -5,6 +5,24 @@ import pytest
 import testbench_defect_service.config as service_config
 from testbench_defect_service.clients.jira.config import JiraDefectClientConfig
 
+CREDENTIAL_ENV_VARS = [
+    "JIRA_PASSWORD",
+    "JIRA_BEARER_TOKEN",
+    "JIRA_OAUTH2_CLIENT_SECRET",
+    "JIRA_OAUTH1_ACCESS_TOKEN",
+    "JIRA_OAUTH1_ACCESS_TOKEN_SECRET",
+    "JIRA_OAUTH1_KEY_CERT",
+]
+
+
+@pytest.fixture(autouse=True)
+def _clean_jira_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in CREDENTIAL_ENV_VARS:
+        for name in (var, f"{var}_FILE"):
+            # setenv first so monkeypatch records the original state and restores it on teardown
+            monkeypatch.setenv(name, "")
+            monkeypatch.delenv(name)
+
 
 @pytest.fixture
 def jira_app_config() -> service_config.AppConfig:

@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A credential set in the environment or a `_FILE` now overrides the value in
   `config.toml`; a credential found in `config.toml` logs a warning at start.
 - The service refuses to start when a `_FILE` cannot be read or is empty, or when both
-  `<VARIABLE>` and `<VARIABLE>_FILE` are set. The message names the variable only.
+  `<VARIABLE>` and `<VARIABLE>_FILE` are set. The message names the variable (and the
+  file path), never the value.
 
 ### Security
 - `.env` and the OAuth2 token cache (`tmp/oauth2_tokens.toml`) are created readable and

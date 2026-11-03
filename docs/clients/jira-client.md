@@ -138,15 +138,19 @@ JIRA_PASSWORD_FILE=/run/secrets/jira_password
 
 Error messages name the variable (and, for file errors, the path), never the value.
 
+Values in `.env` are interpolated, so a secret containing `${` may not load as written; the wizard warns about such a value — put it in a `<VARIABLE>_FILE` instead, whose content is used literally.
+
 #### Credentials still in config.toml
 
 Existing configuration files with credentials keep working. At start the service logs a warning that names the field and recommends `.env` (`<VARIABLE>`) or `<VARIABLE>_FILE`. If the environment or a `_FILE` provides the same credential, it takes precedence and the warning says the value in the configuration file is ignored.
 
 Re-run `testbench-defect-service configure` to move the credentials into `.env`: the wizard writes them to `./.env` in the working directory, removes them from `config.toml` and prints `✓ Moved '<field>' out of the configuration file into .env (<VARIABLE>)`. If `<VARIABLE>` or `<VARIABLE>_FILE` is already set when the wizard runs, it skips the prompt, writes nothing and does not read the file.
 
+This also applies to a credential the wizard stored in `.env` earlier: its prompt is skipped on the next run, so rotate it by editing `.env`. If you later add `<VARIABLE>_FILE` while `.env` still holds `<VARIABLE>`, `start` refuses to start because both are set — remove the line from `.env`.
+
 #### File permissions
 
-On Linux and macOS the service creates `.env` and `tmp/oauth2_tokens.toml` with mode `600` (readable and writable by the owner only) and sets existing files to `600`. If changing the mode fails, a warning is logged.
+On Linux and macOS the wizard creates `.env` and the service creates `tmp/oauth2_tokens.toml` with mode `600` (readable and writable by the owner only) and sets existing files to `600`. If changing the mode fails, a warning is logged.
 
 On Windows the service does not change any permissions. Restrict both files to the service account yourself, e.g. in Explorer (**Properties → Security**) or with `icacls`.
 

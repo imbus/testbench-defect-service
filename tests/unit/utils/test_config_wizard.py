@@ -28,7 +28,7 @@ CREDENTIAL_ENV_VARS = [
 
 @pytest.fixture(autouse=True)
 def _clean_jira_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in CREDENTIAL_ENV_VARS:
+    for var in [*CREDENTIAL_ENV_VARS, "JIRA_USERNAME"]:
         for name in (var, f"{var}_FILE"):
             # setenv first so monkeypatch records the original state and restores it on teardown
             monkeypatch.setenv(name, "")
