@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
@@ -17,6 +17,7 @@ __all__ = [
     "ensure_private_file",
     "is_credential_field",
     "logger",
+    "open_private_file",
     "read_credential_from_env",
     "resolve_credentials",
 ]
@@ -68,6 +69,23 @@ def ensure_private_file(path: Path) -> None:
             f"Could not restrict '{path}' to the owner (chmod 600 failed); "
             "set the file permissions manually."
         )
+
+
+def open_private_file(path: Path) -> BinaryIO:
+    """Open ``path`` for binary writing, creating it with owner-only permissions (0600).
+
+    An already existing file is truncated and, on POSIX, restricted to the owner too.
+    Raises ``OSError`` like ``open``.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        handle = os.fdopen(fd, "wb")
+    except BaseException:
+        os.close(fd)
+        raise
+    ensure_private_file(path)
+    return handle
 
 
 def read_credential_from_env(env_var: str) -> tuple[str | None, str | None]:

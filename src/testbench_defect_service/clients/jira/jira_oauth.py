@@ -9,6 +9,8 @@ from urllib.parse import urlencode
 
 import tomli_w
 
+from testbench_defect_service.utils.credentials import open_private_file
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:
@@ -107,7 +109,7 @@ def _persist_token_store_to_disk() -> None:
     tmp_path = _TOKEN_CACHE_PATH.with_suffix(".tmp")
 
     try:
-        with tmp_path.open("wb") as cache_file:
+        with open_private_file(tmp_path) as cache_file:
             tomli_w.dump(payload, cache_file)
         tmp_path.replace(_TOKEN_CACHE_PATH)
     except OSError:

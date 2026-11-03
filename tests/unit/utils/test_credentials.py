@@ -274,3 +274,23 @@ def test_ensure_private_file_is_a_no_op_on_windows(tmp_path: Path, monkeypatch: 
     monkeypatch.setattr(credentials.os, "name", "nt")
     credentials.ensure_private_file(tmp_path / ".env")
     assert not (tmp_path / ".env").exists()
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file permissions")
+def test_open_private_file_creates_owner_only_binary_file(tmp_path: Path):
+    target = tmp_path / "cache.tmp"
+    with credentials.open_private_file(target) as fh:
+        fh.write(b"data")
+    assert target.read_bytes() == b"data"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+@pytest.mark.unit
+def test_open_private_file_writes_bytes_and_truncates(tmp_path: Path):
+    target = tmp_path / "cache.tmp"
+    with credentials.open_private_file(target) as fh:
+        fh.write(b"first")
+    with credentials.open_private_file(target) as fh:
+        fh.write(b"x")
+    assert target.read_bytes() == b"x"
