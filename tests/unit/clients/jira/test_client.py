@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import subprocess
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 import pytest
-from sanic import NotFound, ServerError
+from jira import Issue, JIRAError
+from sanic import Forbidden, NotFound, ServerError, Unauthorized
 
 from testbench_defect_service.clients.jira.client import (  # type: ignore[import-untyped]
+    PROTOCOL_DETAIL_LIMIT,
     JiraDefectClient,
+    protocol_message,
 )
 from testbench_defect_service.clients.jira.config import (  # type: ignore[import-untyped]
     JiraDefectClientConfig,
@@ -31,12 +35,15 @@ from testbench_defect_service.models.defects import (  # type: ignore[import-unt
     LocalSyncActions,
     Login,
     Protocol,
+    ProtocolCode,
     ProtocolledDefectSet,
     RemoteSyncActions,
     Results,
     SyncContext,
     UserDefinedFieldProperties,
 )
+
+from .conftest import JIRA_ISSUE_FIELD_NAMES
 
 
 @pytest.fixture
@@ -46,6 +53,7 @@ def mock_jira_config():
         "os.environ", {"JIRA_USERNAME": "test@example.com", "JIRA_PASSWORD": "token123"}
     ):
         return JiraDefectClientConfig(
+            name="Jira",
             server_url="https://test.atlassian.net",
             auth_type="basic",
             attributes=["title", "status", "priority"],
@@ -152,6 +160,31 @@ def _make_project_mock(name: str = "Test Project", key: str = "TEST") -> Mock:
     return p
 
 
+LEAKED_CREDENTIAL = "Basic c2VjcmV0OnRva2Vu"
+
+
+def _jira_error_with_credentials() -> JIRAError:
+    """Build a JIRAError shaped like one raised by a real failed HTTP call.
+
+    ``ResilientSession.raise_on_error`` attaches the outgoing request and the response,
+    so ``JIRAError.__str__`` dumps both header dicts - including the ``Authorization``
+    header ``requests`` composed onto the request.
+    """
+    request = Mock(spec=["headers", "text"])
+    request.headers = {"Authorization": LEAKED_CREDENTIAL}
+    request.text = ""
+    response = Mock(spec=["headers", "text"])
+    response.headers = {"X-Seraph-LoginReason": "AUTHENTICATED_FAILED"}
+    response.text = "No permission"
+    return JIRAError(
+        text="No permission to read fields",
+        status_code=403,
+        url="https://jira.example/rest/api/2/field",
+        request=request,
+        response=response,
+    )
+
+
 def _make_defect_with_id(**overrides) -> DefectWithID:
     defaults: dict[str, Any] = {
         "id": DefectID(root="TEST-1"),
@@ -220,7 +253,7 @@ class TestCheckLogin:
 class TestGetSettings:
     def test_returns_settings_with_config_values(self, mock_jira_client_instance):
         result = mock_jira_client_instance.get_settings()
-        assert result.name == "DefectService"
+        assert result.name == "Jira"
         assert result.readonly is False
 
     def test_readonly_reflected_in_settings(self, mock_jira_client_instance):
@@ -496,16 +529,20 @@ class TestGetControlFields:
 @pytest.mark.unit
 class TestGetDefects:
     def _setup(self):
-        mock_issue = Mock()
+        mock_issue = Mock(spec=Issue)
         mock_issue.key = "TEST-1"
+        mock_issue.fields = Mock(spec=JIRA_ISSUE_FIELD_NAMES)
         mock_issue.fields.summary = "Bug"
         mock_issue.fields.description = "desc"
         mock_issue.fields.updated = "2024-01-01T00:00:00.000+0000"
+        mock_issue.fields.status = Mock(spec=["name"])
         mock_issue.fields.status.name = "Open"
+        mock_issue.fields.priority = Mock(spec=["name"])
         mock_issue.fields.priority.name = "High"
+        mock_issue.fields.issuetype = Mock(spec=["name"])
         mock_issue.fields.issuetype.name = "Bug"
-        mock_issue.fields.creator = Mock()
-        mock_issue.fields.creator.displayName = "Alice"
+        mock_issue.fields.reporter = Mock(spec=["displayName"])
+        mock_issue.fields.reporter.displayName = "Alice"
         mock_issue.fields.attachment = []
         return mock_issue
 
@@ -535,6 +572,29 @@ class TestGetDefects:
             result = mock_jira_client_instance.get_defects("Test Project (TEST)", sync_context)
 
         assert result.protocol.errors
+
+    def test_field_fetch_failure_does_not_leak_credentials(
+        self, mock_jira_client_instance, sync_context, caplog
+    ):
+        """A raw JIRAError must never reach the protocol message verbatim.
+
+        Today ``get_all_project_fields`` wraps project-scoped failures in the sanitized
+        ``JiraProjectFieldsError``, so this path is safe only by that invariant - the
+        rendering here has to hold up on its own if a raw error ever gets through.
+        """
+        mock_jira_client_instance.jira_client.fetch_issues_by_jql.return_value = [self._setup()]
+        mock_jira_client_instance.jira_client.get_all_project_fields.side_effect = (
+            _jira_error_with_credentials()
+        )
+
+        with caplog.at_level("DEBUG"):
+            result = mock_jira_client_instance.get_defects("Test Project (TEST)", sync_context)
+
+        assert result.protocol.generalErrors
+        rendered = " ".join(error.message for error in result.protocol.generalErrors)
+        assert LEAKED_CREDENTIAL not in rendered
+        assert "request headers" not in rendered
+        assert LEAKED_CREDENTIAL not in caplog.text
 
     def test_returns_general_error_for_unknown_project(
         self, mock_jira_client_instance, sync_context
@@ -580,6 +640,25 @@ class TestGetDefectsBatch:
             "Unknown Project", [DefectID(root="X-1")], sync_context
         )
         assert result.protocol.generalErrors
+
+    def test_field_fetch_failure_does_not_leak_credentials(
+        self, mock_jira_client_instance, sync_context, caplog
+    ):
+        """See ``TestGetDefects.test_field_fetch_failure_does_not_leak_credentials``."""
+        mock_jira_client_instance.jira_client.get_all_project_fields.side_effect = (
+            _jira_error_with_credentials()
+        )
+
+        with caplog.at_level("DEBUG"):
+            result = mock_jira_client_instance.get_defects_batch(
+                "Test Project (TEST)", [DefectID(root="TEST-1")], sync_context
+            )
+
+        assert result.protocol.generalErrors
+        rendered = " ".join(error.message for error in result.protocol.generalErrors)
+        assert LEAKED_CREDENTIAL not in rendered
+        assert "request headers" not in rendered
+        assert LEAKED_CREDENTIAL not in caplog.text
 
     def test_skips_empty_defect_ids(self, mock_jira_client_instance, sync_context):
         mock_jira_client_instance.jira_client.get_all_project_fields.return_value = []
@@ -627,9 +706,7 @@ class TestCreateDefect:
             "Test Project (TEST)", defect, sync_context
         )
         assert result.protocol.errors
-        # Must be null, not "": TestBench reads an empty string as a created defect with an
-        # empty ID and aborts the whole sync on its non-empty ID assertion.
-        assert result.value is None
+        assert result.value == ""
 
     def test_returns_error_for_unknown_project(self, mock_jira_client_instance, sync_context):
         defect = _make_defect()
@@ -790,20 +867,49 @@ class TestDeleteDefect:
         )
         assert result.generalErrors
 
+    def test_returns_error_when_jira_rejects_the_delete(
+        self, mock_jira_client_instance, sync_context
+    ):
+        """A 403 from Jira must be a protocol entry, not an exception.
+
+        ``Issue.delete()`` raises ``JIRAError``, which subclasses only ``Exception`` -- the
+        common real-world case being an account that may browse and edit but lacks the
+        "Delete Issues" project permission.
+        """
+        defect = _make_defect()
+        mock_issue = Mock()
+        mock_issue.key = "TEST-1"
+        mock_jira_client_instance.jira_client.fetch_issue.return_value = mock_issue
+        mock_jira_client_instance.jira_client.delete_issue.side_effect = JIRAError(
+            "You do not have permission to delete issues", status_code=403
+        )
+
+        result = mock_jira_client_instance.delete_defect(
+            "Test Project (TEST)", "TEST-1", defect, sync_context
+        )
+        assert result.generalErrors
+        assert result.generalErrors[0].code == ProtocolCode.PUBLISH_ERROR
+        assert "permission" in result.generalErrors[0].message
+
 
 @pytest.mark.unit
 class TestGetDefectExtended:
     def _setup_issue(self):
-        issue = Mock()
+        issue = Mock(spec=Issue)
         issue.key = "TEST-1"
-        issue.changelog = Mock(histories=[])
+        issue.changelog = Mock(spec=["histories"], histories=[])
+        issue.fields = Mock(spec=JIRA_ISSUE_FIELD_NAMES)
         issue.fields.summary = "Bug"
         issue.fields.description = "desc"
         issue.fields.updated = "2024-01-01T00:00:00.000+0000"
+        issue.fields.status = Mock(spec=["name"])
         issue.fields.status.name = "Open"
+        issue.fields.priority = Mock(spec=["name"])
         issue.fields.priority.name = "High"
+        issue.fields.issuetype = Mock(spec=["name"])
         issue.fields.issuetype.name = "Bug"
-        issue.fields.reporter = Mock(displayName="Alice")
+        issue.fields.reporter = Mock(spec=["displayName"])
+        issue.fields.reporter.displayName = "Alice"
         issue.fields.attachment = []
         return issue
 
@@ -879,6 +985,27 @@ class TestGetUserDefinedAttributes:
         mock_jira_client_instance.jira_client.get_all_project_fields.return_value = []
         result = mock_jira_client_instance.get_user_defined_attributes("Test Project (TEST)")
         assert result == []
+
+    @pytest.mark.parametrize("project", [None, "Test Project (TEST)"])
+    def test_jira_error_does_not_leak_credentials(self, mock_jira_client_instance, caplog, project):
+        """A failed field fetch must not put the Authorization header in the response.
+
+        ``get_all_project_fields`` re-raises the raw ``JIRAError`` on the
+        ``project is None`` / Data Center path, so the message reaching the caller
+        has to be summarized rather than interpolated verbatim.
+        """
+        mock_jira_client_instance.jira_client.get_all_project_fields.side_effect = (
+            _jira_error_with_credentials()
+        )
+
+        with caplog.at_level("DEBUG"), pytest.raises(ServerError) as excinfo:
+            mock_jira_client_instance.get_user_defined_attributes(project)
+
+        assert LEAKED_CREDENTIAL not in str(excinfo.value)
+        assert "request headers" not in str(excinfo.value)
+        assert LEAKED_CREDENTIAL not in caplog.text
+        # The actionable part of the failure must survive the sanitization.
+        assert "403" in str(excinfo.value)
 
 
 @pytest.mark.unit
@@ -960,6 +1087,23 @@ class TestCorrectSyncResults:
             remote=None,
         )
         result = mock_jira_client_instance.correct_sync_results("Test Project (TEST)", body)
+        assert len(result.local.create) == 1
+
+    def test_unreadable_control_fields_pass_actions_through(self, mock_jira_client_instance):
+        """A Jira metadata failure must not turn the correct call into a 500."""
+        known = self._make_known_defect()
+        body = Results(
+            local=LocalSyncActions(create=[known], update=[], delete=[]),
+            remote=None,
+        )
+        with patch.object(
+            mock_jira_client_instance,
+            "get_control_fields",
+            side_effect=JIRAError(status_code=400, text="no write access"),
+        ):
+            result = mock_jira_client_instance.correct_sync_results("Test Project (TEST)", body)
+
+        assert isinstance(result, Results)
         assert len(result.local.create) == 1
 
     def test_invalid_defects_are_filtered_out(self, mock_jira_client_instance):
@@ -1110,72 +1254,154 @@ class TestBuildDefectWithAttributes:
 
 
 @pytest.mark.unit
-class TestSyncHookCommands:
-    """The wizard writes sync hooks to 'commands'; the client must read that same key."""
+class TestExecuteSyncHook:
+    """Tests for _execute_sync_hook method."""
 
-    @staticmethod
-    def _script(tmp_path):
-        script = tmp_path / "hook.bat"
-        script.write_text("@echo off", encoding="utf-8")
-        return script
+    def test_execute_hook_no_command_configured(self, mock_jira_client_instance):
+        """Test executing hook when no command is configured."""
+        sync_type = "manual"
 
-    def test_before_sync_runs_the_configured_presync_command(
-        self, mock_jira_client_instance, sync_context, tmp_path
-    ):
-        script = self._script(tmp_path)
-        mock_jira_client_instance.config.commands = PhaseCommands(
-            presync=SyncCommandConfig(manual=str(script))
+        protocol = mock_jira_client_instance._execute_sync_hook(
+            project="Test Project (TEST)", sync_type=sync_type, hook_type="presync"
         )
 
-        with patch("testbench_defect_service.clients.utils.subprocess.run") as run:
-            protocol = mock_jira_client_instance.before_sync("TEST", "manual", sync_context)
+        assert "Test Project (TEST)" in protocol.successes
+        assert len(protocol.successes["Test Project (TEST)"]) == 1
+        assert "no command configured" in protocol.successes["Test Project (TEST)"][0].message
 
-        run.assert_called_once_with([str(script), "TEST", "manual"], check=True)
-        assert protocol.successes
+    def test_execute_hook_unsupported_extension(self, mock_jira_client_instance, tmp_path):
+        """Test executing hook with unsupported file extension."""
+        # Create a test file with unsupported extension
+        test_script = tmp_path / "script.txt"
+        test_script.write_text("echo test")
 
-    def test_after_sync_runs_the_configured_postsync_command(
-        self, mock_jira_client_instance, sync_context, tmp_path
-    ):
-        script = self._script(tmp_path)
+        # Configure hook
         mock_jira_client_instance.config.commands = PhaseCommands(
-            postsync=SyncCommandConfig(scheduled=str(script))
+            presync=SyncCommandConfig(manual=str(test_script))
         )
 
-        with patch("testbench_defect_service.clients.utils.subprocess.run") as run:
-            protocol = mock_jira_client_instance.after_sync("TEST", "scheduled", sync_context)
+        sync_type = "manual"
 
-        run.assert_called_once_with([str(script), "TEST", "scheduled"], check=True)
-        assert protocol.successes
-
-    def test_project_commands_take_precedence_over_the_client_default(
-        self, mock_jira_client_instance, sync_context, tmp_path
-    ):
-        default_script = self._script(tmp_path)
-        project_script = tmp_path / "project_hook.bat"
-        project_script.write_text("@echo off", encoding="utf-8")
-
-        mock_jira_client_instance.config.commands = PhaseCommands(
-            presync=SyncCommandConfig(manual=str(default_script))
+        protocol = mock_jira_client_instance._execute_sync_hook(
+            project="Test Project (TEST)", sync_type=sync_type, hook_type="presync"
         )
-        mock_jira_client_instance.config.projects = {
-            "TEST": JiraProjectConfig(
-                commands=PhaseCommands(presync=SyncCommandConfig(manual=str(project_script)))
+
+        # Should return empty protocol (warning logged)
+        assert not protocol.successes or len(protocol.successes) == 0
+        assert not protocol.errors or len(protocol.errors) == 0
+
+    def test_execute_hook_nonexistent_file(self, mock_jira_client_instance):
+        """Test executing hook when file doesn't exist."""
+        # Configure hook with non-existent file
+        mock_jira_client_instance.config.commands = PhaseCommands(
+            presync=SyncCommandConfig(manual="/nonexistent/script.bat")
+        )
+
+        sync_type = "manual"
+
+        protocol = mock_jira_client_instance._execute_sync_hook(
+            project="Test Project (TEST)", sync_type=sync_type, hook_type="presync"
+        )
+
+        # Should return empty protocol (warning logged)
+        assert not protocol.successes or len(protocol.successes) == 0
+        assert not protocol.errors or len(protocol.errors) == 0
+
+    @patch("subprocess.run")
+    def test_execute_hook_success(self, mock_subprocess, mock_jira_client_instance, tmp_path):
+        """Test successful hook execution."""
+        # Create a test script
+        test_script = tmp_path / "script.bat"
+        test_script.write_text("@echo off\necho Success")
+
+        # Configure hook
+        mock_jira_client_instance.config.commands = PhaseCommands(
+            postsync=SyncCommandConfig(scheduled=str(test_script))
+        )
+
+        sync_type = "scheduled"
+
+        protocol = mock_jira_client_instance._execute_sync_hook(
+            project="Test Project (TEST)", sync_type=sync_type, hook_type="postsync"
+        )
+
+        assert "Test Project (TEST)" in protocol.successes
+        assert len(protocol.successes["Test Project (TEST)"]) == 1
+        assert "executed successfully" in protocol.successes["Test Project (TEST)"][0].message
+        assert protocol.successes["Test Project (TEST)"][0].code == ProtocolCode.PUBLISH_SUCCESS
+        mock_subprocess.assert_called_once()
+
+    @patch("subprocess.run")
+    def test_execute_hook_command_failure(
+        self, mock_subprocess, mock_jira_client_instance, tmp_path
+    ):
+        """Test hook execution when command fails."""
+        # Create a test script
+        test_script = tmp_path / "script.sh"
+        test_script.write_text("#!/bin/bash\nexit 1")
+
+        # Configure hook
+        mock_jira_client_instance.config.commands = PhaseCommands(
+            presync=SyncCommandConfig(manual=str(test_script))
+        )
+
+        # Mock subprocess to raise CalledProcessError
+        mock_subprocess.side_effect = subprocess.CalledProcessError(1, "cmd")
+
+        sync_type = "manual"
+
+        protocol = mock_jira_client_instance._execute_sync_hook(
+            project="Test Project (TEST)", sync_type=sync_type, hook_type="presync"
+        )
+
+        assert len(protocol.generalErrors) == 1
+        assert "failed with return code" in protocol.generalErrors[0].message
+        assert protocol.generalErrors[0].code == ProtocolCode.PUBLISH_ERROR
+
+    @patch("subprocess.run")
+    def test_execute_hook_os_error(self, mock_subprocess, mock_jira_client_instance, tmp_path):
+        """Test hook execution when OS error occurs."""
+        # Create a test script
+        test_script = tmp_path / "script.exe"
+        test_script.write_text("test")
+
+        # Configure hook
+        mock_jira_client_instance.config.commands = PhaseCommands(
+            presync=SyncCommandConfig(partial=str(test_script))
+        )
+
+        # Mock subprocess to raise OSError
+        mock_subprocess.side_effect = OSError("Permission denied")
+
+        sync_type = "partial"
+
+        protocol = mock_jira_client_instance._execute_sync_hook(
+            project="Test Project (TEST)", sync_type=sync_type, hook_type="presync"
+        )
+
+        assert len(protocol.generalErrors) == 1
+        assert "could not be executed" in protocol.generalErrors[0].message
+
+    def test_execute_hook_project_specific_command(self, mock_jira_client_instance, tmp_path):
+        """Test executing project-specific hook command."""
+        # Create test script
+        test_script = tmp_path / "project_script.bat"
+        test_script.write_text("echo test")
+
+        # Configure project-specific hook
+        mock_jira_client_instance.config.projects["Test Project (TEST)"] = JiraProjectConfig(
+            commands=PhaseCommands(postsync=SyncCommandConfig(manual=str(test_script)))
+        )
+
+        sync_type = "manual"
+
+        with patch("subprocess.run"):
+            protocol = mock_jira_client_instance._execute_sync_hook(
+                project="Test Project (TEST)", sync_type=sync_type, hook_type="postsync"
             )
-        }
 
-        with patch("testbench_defect_service.clients.utils.subprocess.run") as run:
-            mock_jira_client_instance.before_sync("TEST", "manual", sync_context)
-
-        run.assert_called_once_with([str(project_script), "TEST", "manual"], check=True)
-
-    def test_no_configured_command_is_acknowledged_without_running_anything(
-        self, mock_jira_client_instance, sync_context
-    ):
-        with patch("testbench_defect_service.clients.utils.subprocess.run") as run:
-            protocol = mock_jira_client_instance.before_sync("TEST", "manual", sync_context)
-
-        run.assert_not_called()
-        assert "no command configured" in protocol.successes["TEST"][0].message
+            assert "Test Project (TEST)" in protocol.successes
+            assert len(protocol.successes["Test Project (TEST)"]) == 1
 
 
 @pytest.mark.unit
@@ -1732,3 +1958,181 @@ class TestFetchProjectStatuses:
                 "Zu erledigen",
                 "Zurückgewiesen",
             ]
+
+
+@pytest.mark.unit
+class TestProtocolContract:
+    """Protocol-returning methods must never raise.
+
+    openapi.yaml documents ``200`` as the only response for these endpoints, and their
+    ``Protocol`` exists to report partial failure. An exception escaping to the router
+    replaces the whole result -- including any defects that did sync -- with an error page.
+
+    Each test below reproduces a path that previously escaped.
+    """
+
+    @staticmethod
+    def _protocol_of(result):
+        return result if isinstance(result, Protocol) else result.protocol
+
+    @pytest.fixture
+    def denied(self):
+        """Patch the lazy jira_client property to fail authorisation with a 403."""
+        with patch.object(JiraDefectClient, "jira_client", new_callable=PropertyMock) as prop:
+            prop.side_effect = Forbidden("Access denied by Jira")
+            yield prop
+
+    # ``Forbidden`` is raised by the jira_client property but was caught by no method:
+    # a token can authenticate (no 401) and still be denied on a project (403).
+
+    def test_get_defects_reports_forbidden(self, mock_jira_client_instance, sync_context, denied):
+        mock_jira_client_instance._projects = {}
+
+        result = mock_jira_client_instance.get_defects("Test Project (TEST)", sync_context)
+
+        assert isinstance(result, ProtocolledDefectSet)
+        assert result.value == []
+        assert result.protocol.generalErrors[0].code == ProtocolCode.INSERT_ACCESS_ERROR
+
+    def test_get_defects_batch_reports_forbidden(
+        self, mock_jira_client_instance, sync_context, denied
+    ):
+        mock_jira_client_instance._projects = {}
+
+        result = mock_jira_client_instance.get_defects_batch(
+            "Test Project (TEST)", [DefectID(root="TEST-1")], sync_context
+        )
+
+        assert isinstance(result, ProtocolledDefectSet)
+        assert result.protocol.generalErrors[0].code == ProtocolCode.INSERT_ACCESS_ERROR
+
+    def test_update_defect_reports_forbidden(self, mock_jira_client_instance, sync_context, denied):
+        result = mock_jira_client_instance.update_defect(
+            "Test Project (TEST)", "TEST-1", _make_defect(), sync_context
+        )
+
+        assert result.generalErrors[0].code == ProtocolCode.PUBLISH_ACCESS_ERROR
+
+    def test_delete_defect_reports_forbidden(self, mock_jira_client_instance, sync_context, denied):
+        """delete_defect called _resolve_jira_client outside any try block."""
+        result = mock_jira_client_instance.delete_defect(
+            "Test Project (TEST)", "TEST-1", _make_defect(), sync_context
+        )
+
+        assert result.generalErrors[0].code == ProtocolCode.PUBLISH_ACCESS_ERROR
+
+    # Per-user authentication builds a JiraClient directly, bypassing the property's
+    # translation of low-level Jira errors into Sanic exceptions.
+
+    def test_create_defect_reports_per_user_auth_failure(
+        self, mock_jira_client_instance, sync_context
+    ):
+        mock_jira_client_instance.config.projects["Test Project (TEST)"] = JiraProjectConfig(
+            enable_shared_auth=False
+        )
+        with patch("testbench_defect_service.clients.jira.client.JiraClient") as jira_client_cls:
+            jira_client_cls.side_effect = JIRAError(
+                "Basic auth with password is not allowed", status_code=401
+            )
+
+            result = mock_jira_client_instance.create_defect(
+                "Test Project (TEST)", _make_defect(), sync_context
+            )
+
+        assert result.value == ""
+        assert result.protocol.generalErrors[0].code == ProtocolCode.INSERT_ACCESS_ERROR
+
+    def test_create_defect_reports_unauthorized_project_lookup(
+        self, mock_jira_client_instance, sync_context
+    ):
+        """On the per-user path this is the first access to the shared connection."""
+        mock_jira_client_instance.config.projects["Test Project (TEST)"] = JiraProjectConfig(
+            enable_shared_auth=False
+        )
+        mock_jira_client_instance._projects = {}
+        with (
+            patch("testbench_defect_service.clients.jira.client.JiraClient"),
+            patch.object(JiraDefectClient, "projects", new_callable=PropertyMock) as projects,
+        ):
+            projects.side_effect = Unauthorized("token expired")
+
+            result = mock_jira_client_instance.create_defect(
+                "Test Project (TEST)", _make_defect(), sync_context
+            )
+
+        assert result.value == ""
+        assert result.protocol.generalErrors[0].code == ProtocolCode.INSERT_ACCESS_ERROR
+
+    # A misconfigured sync hook returned an all-empty protocol, indistinguishable from
+    # a clean no-op run.
+
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [("hook.sh1", "unsupported file extension"), ("missing.sh", "not found")],
+        ids=["unsupported_extension", "missing_file"],
+    )
+    def test_sync_hook_reports_misconfiguration(
+        self, mock_jira_client_instance, sync_context, tmp_path, command, expected
+    ):
+        mock_jira_client_instance.config.commands = PhaseCommands(
+            presync=SyncCommandConfig(manual=str(tmp_path / command))
+        )
+
+        protocol = mock_jira_client_instance.before_sync(
+            "Test Project (TEST)", "manual", sync_context
+        )
+
+        assert protocol.generalErrors, "misconfigured hook must not report an empty protocol"
+        assert protocol.generalErrors[0].code == ProtocolCode.PUBLISH_ERROR
+        assert expected in protocol.generalErrors[0].message
+
+
+@pytest.mark.unit
+class TestProtocolMessage:
+    """Protocol entries are read by a person in TestBench, not by a log parser.
+
+    A raw Jira failure carries a multi-line response body and collects a ``(HTTP nnn)``
+    suffix on every layer it passes, which made the entries unreadably long.
+    """
+
+    ACTION = "Reading defects of project 'Test Project (TEST)' failed"
+
+    def test_collapses_multiline_cause_onto_one_line(self):
+        exc = JIRAError(text="Gateway timeout\n  while reading\n\tthe project", status_code=504)
+
+        message = protocol_message(self.ACTION, exc)
+
+        assert "\n" not in message
+        assert message == f"{self.ACTION}: Gateway timeout while reading the project (HTTP 504)"
+
+    def test_truncates_a_long_cause(self):
+        exc = JIRAError(text="detail " * 200, status_code=400)
+
+        message = protocol_message(self.ACTION, exc)
+
+        assert message.startswith(f"{self.ACTION}: detail detail")
+        assert message.endswith("... (HTTP 400)")
+        assert len(message) < len(self.ACTION) + PROTOCOL_DETAIL_LIMIT + 20
+
+    def test_truncates_a_cause_without_spaces(self):
+        """A single long token must not be swallowed by the word-boundary cut."""
+        exc = JIRAError(text="x" * 500, status_code=400)
+
+        message = protocol_message(self.ACTION, exc)
+
+        assert message.startswith(f"{self.ACTION}: xxx")
+        assert message.endswith("... (HTTP 400)")
+
+    def test_reports_the_status_once(self):
+        """``describe_exception`` appends the status again on an already described cause."""
+        exc = Forbidden("Per-user authentication to Jira failed: denied (HTTP 403)")
+
+        message = protocol_message(self.ACTION, exc)
+
+        assert message.count("(HTTP 403)") == 1
+        assert message.endswith("denied (HTTP 403)")
+
+    def test_names_the_type_when_there_is_no_status(self):
+        message = protocol_message(self.ACTION, RuntimeError("connection reset by peer"))
+
+        assert message == f"{self.ACTION}: RuntimeError: connection reset by peer"
