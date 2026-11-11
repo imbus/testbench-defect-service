@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- Jira: creating or updating an issue wrote every user-defined field the defect
+  carried, including fields not configured for synchronization in TestBench. Only
+  the user-defined fields configured for synchronization are written now.
+- Jira: a defect without a title or description was synced with the literal text
+  `None` as the Jira summary or description. Both now map to an empty string.
+
 ## [0.4.0][0.4.0] - 2026-08-21
 
 ### Added
