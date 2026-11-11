@@ -13,6 +13,7 @@ from testbench_defect_service.clients.jira.defect_mapping_service import DefectT
 from testbench_defect_service.clients.jira.utils import FieldInfo
 from testbench_defect_service.models.defects import (
     Defect,
+    DefectFieldSyncOption,
     Login,
     SyncContext,
     UserDefinedFieldProperties,
@@ -24,6 +25,13 @@ _SYNC_CONTEXT = SyncContext(
     priorityAttribute="priority",
     classAttribute="issuetype",
 )
+
+
+def _sync_context_with_udas(*names: str) -> SyncContext:
+    """Return the default sync context with *names* configured as synced UDAs."""
+    return _SYNC_CONTEXT.model_copy(
+        update={"udaSyncOptions": dict.fromkeys(names, DefectFieldSyncOption.TIMESTAMP)}
+    )
 
 
 def _make_defect(**overrides) -> Defect:
@@ -119,6 +127,20 @@ class TestMapDefectToJiraIssue:
         )
         assert result["fields"]["summary"] == "My Summary"
         assert result["fields"]["description"] == "My Desc"
+
+    def test_none_description_mapped_as_empty_string(self, cloud_mapper):
+        defect = _make_defect(description=None)
+        result = cloud_mapper.map_defect_to_jira_issue(
+            defect, _minimal_issue_metadata(), _SYNC_CONTEXT
+        )
+        assert result["fields"]["description"] == ""
+
+    def test_none_title_mapped_as_empty_string(self, cloud_mapper):
+        defect = _make_defect(title=None)
+        result = cloud_mapper.map_defect_to_jira_issue(
+            defect, _minimal_issue_metadata(), _SYNC_CONTEXT
+        )
+        assert result["fields"]["summary"] == ""
 
     def test_priority_mapped_as_name_dict(self, cloud_mapper):
         defect = _make_defect(priority="High")
@@ -469,18 +491,41 @@ class TestGetUserId:
 
 @pytest.mark.unit
 class TestBuildIssueFields:
-    def test_user_defined_fields_included(self, cloud_mapper):
+    def test_user_defined_field_configured_for_sync_is_written(self, cloud_mapper):
+        udfs = [UserDefinedFieldProperties(name="My Label", value="foo")]
+        defect = _make_defect(userDefinedFields=udfs)
+        allowed = [_allowed("customfield_01", "My Label", "string")]
+        sync_context = _sync_context_with_udas("My Label")
+        result = cloud_mapper._build_issue_fields(defect, allowed, {}, sync_context)
+        assert result.get("customfield_01") == "foo"
+
+    def test_user_defined_field_not_configured_for_sync_is_not_written(self, cloud_mapper):
+        udfs = [
+            UserDefinedFieldProperties(name="My Label", value="foo"),
+            UserDefinedFieldProperties(name="Hidden", value="bar"),
+        ]
+        defect = _make_defect(userDefinedFields=udfs)
+        allowed = [
+            _allowed("customfield_01", "My Label", "string"),
+            _allowed("customfield_02", "Hidden", "string"),
+        ]
+        sync_context = _sync_context_with_udas("My Label")
+        result = cloud_mapper._build_issue_fields(defect, allowed, {}, sync_context)
+        assert "customfield_02" not in result
+
+    def test_no_user_defined_field_written_without_uda_sync_options(self, cloud_mapper):
         udfs = [UserDefinedFieldProperties(name="My Label", value="foo")]
         defect = _make_defect(userDefinedFields=udfs)
         allowed = [_allowed("customfield_01", "My Label", "string")]
         result = cloud_mapper._build_issue_fields(defect, allowed, {}, _SYNC_CONTEXT)
-        assert result.get("customfield_01") == "foo"
+        assert "customfield_01" not in result
 
     def test_user_defined_field_with_none_value_skipped(self, cloud_mapper):
         udfs = [UserDefinedFieldProperties(name="Empty", value=None)]
         defect = _make_defect(userDefinedFields=udfs)
         allowed = [_allowed("customfield_02", "Empty", "string")]
-        result = cloud_mapper._build_issue_fields(defect, allowed, {}, _SYNC_CONTEXT)
+        sync_context = _sync_context_with_udas("Empty")
+        result = cloud_mapper._build_issue_fields(defect, allowed, {}, sync_context)
         assert "customfield_02" not in result
 
     def test_none_values_stripped_from_result(self, cloud_mapper):
