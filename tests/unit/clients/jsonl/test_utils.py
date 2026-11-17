@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -47,7 +47,7 @@ def sample_defect() -> Defect:
         status="Open",
         classification="Bug",
         priority="High",
-        lastEdited=datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+        lastEdited=datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC),
         principal=Login(username="user", password="pass"),
     )
 
@@ -63,7 +63,7 @@ def sample_defect_with_id() -> DefectWithID:
         status="Open",
         classification="Bug",
         priority="High",
-        lastEdited=datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+        lastEdited=datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC),
         principal=Login(username="user", password="pass"),
     )
 
@@ -84,7 +84,7 @@ def _make_defect(defect_id: str, title: str = "Bug") -> DefectWithID:
         status="Open",
         classification="Bug",
         priority="High",
-        lastEdited=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        lastEdited=datetime(2024, 1, 1, tzinfo=UTC),
         principal=Login(username="u", password="p"),
     )
 
@@ -198,7 +198,7 @@ class TestValidateDefect:
             status="",
             classification="Bug",
             priority="High",
-            lastEdited=datetime.now(timezone.utc),
+            lastEdited=datetime.now(UTC),
             principal=Login(username="u", password="p"),
         )
         assert validate_defect(defect, {}) is False
@@ -209,7 +209,7 @@ class TestValidateDefect:
             status="Open",
             classification="",
             priority="High",
-            lastEdited=datetime.now(timezone.utc),
+            lastEdited=datetime.now(UTC),
             principal=Login(username="u", password="p"),
         )
         assert validate_defect(defect, {}) is False
@@ -220,7 +220,7 @@ class TestValidateDefect:
             status="Open",
             classification="Bug",
             priority="",
-            lastEdited=datetime.now(timezone.utc),
+            lastEdited=datetime.now(UTC),
             principal=Login(username="u", password="p"),
         )
         assert validate_defect(defect, {}) is False

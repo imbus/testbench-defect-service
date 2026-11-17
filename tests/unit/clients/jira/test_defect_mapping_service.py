@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import Mock
 
@@ -44,7 +44,7 @@ def _make_defect(**overrides) -> Defect:
         "classification": "Bug",
         "priority": "Medium",
         "userDefinedFields": [],
-        "lastEdited": datetime(2024, 1, 1, tzinfo=timezone.utc),
+        "lastEdited": datetime(2024, 1, 1, tzinfo=UTC),
         "references": [],
         "principal": Login(username="user", password="pass"),
     }

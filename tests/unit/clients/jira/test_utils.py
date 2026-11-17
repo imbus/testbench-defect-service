@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
@@ -416,7 +416,7 @@ class TestIso8601ToUnixTimestamp:
         assert isinstance(result, float)
         assert result > 0
 
-        dt = datetime.fromtimestamp(result, tz=timezone.utc)
+        dt = datetime.fromtimestamp(result, tz=UTC)
 
         assert dt.year == 2024
         assert dt.month == 1
@@ -504,7 +504,7 @@ class TestExtractChangelogAttributes:
         attributes = {}
 
         sync_context = SyncContext(
-            lastSync=datetime(2024, 1, 15, tzinfo=timezone.utc),
+            lastSync=datetime(2024, 1, 15, tzinfo=UTC),
             projects=["TEST"],
         )
 
@@ -534,7 +534,7 @@ class TestExtractChangelogAttributes:
         attributes = {}
 
         sync_context = SyncContext(
-            lastSync=datetime(2024, 1, 15, tzinfo=timezone.utc),
+            lastSync=datetime(2024, 1, 15, tzinfo=UTC),
             projects=["TEST"],
         )
 

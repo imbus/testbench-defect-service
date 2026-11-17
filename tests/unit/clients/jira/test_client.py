@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import Mock, PropertyMock, patch
 
@@ -92,7 +92,7 @@ def sample_defect_with_id():
         classification="Bug",
         priority="High",
         reporter="John Doe",
-        lastEdited=datetime(2024, 1, 15, 10, 30, 45, tzinfo=timezone.utc),
+        lastEdited=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
         references=["https://example.com/attachment.png"],
         principal=Login(username="test", password="test"),
         userDefinedFields=[UserDefinedFieldProperties(name="Environment", value="Production")],
@@ -109,7 +109,7 @@ def sample_defect():
         classification="Bug",
         priority="High",
         reporter="John Doe",
-        lastEdited=datetime(2024, 1, 15, 10, 30, 45, tzinfo=timezone.utc),
+        lastEdited=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
         principal=Login(username="test", password="test"),
     )
 
@@ -125,7 +125,7 @@ def sample_defect_with_local_pk():
         classification="Bug",
         priority="High",
         reporter="John Doe",
-        lastEdited=datetime(2024, 1, 15, 10, 30, 45, tzinfo=timezone.utc),
+        lastEdited=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
         principal=Login(username="test", password="test"),
     )
 
@@ -142,7 +142,7 @@ def sample_known_defect():
         classification="Bug",
         priority="High",
         reporter="John Doe",
-        lastEdited=datetime(2024, 1, 15, 10, 30, 45, tzinfo=timezone.utc),
+        lastEdited=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
         principal=Login(username="test", password="test"),
     )
 
@@ -150,7 +150,7 @@ def sample_known_defect():
 @pytest.fixture
 def sync_context():
     """Create a sample SyncContext."""
-    return SyncContext(lastSync=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc))
+    return SyncContext(lastSync=datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC))
 
 
 def _make_project_mock(name: str = "Test Project", key: str = "TEST") -> Mock:
@@ -195,7 +195,7 @@ def _make_defect_with_id(**overrides) -> DefectWithID:
         "priority": "High",
         "reporter": None,
         "userDefinedFields": [],
-        "lastEdited": datetime(2024, 1, 1, tzinfo=timezone.utc),
+        "lastEdited": datetime(2024, 1, 1, tzinfo=UTC),
         "references": [],
         "principal": Login(username="u", password="p"),
     }
@@ -212,7 +212,7 @@ def _make_defect(**overrides) -> Defect:
         "priority": "High",
         "reporter": None,
         "userDefinedFields": [],
-        "lastEdited": datetime(2024, 1, 1, tzinfo=timezone.utc),
+        "lastEdited": datetime(2024, 1, 1, tzinfo=UTC),
         "references": [],
         "principal": Login(username="u", password="p"),
     }
@@ -1012,7 +1012,7 @@ class TestGetUserDefinedAttributes:
 class TestSyncHooks:
     def test_before_sync_delegates_to_execute_hook(self, mock_jira_client_instance):
         sync_type = "manual"
-        sync_context = SyncContext(lastSync=datetime(2024, 1, 1, tzinfo=timezone.utc))
+        sync_context = SyncContext(lastSync=datetime(2024, 1, 1, tzinfo=UTC))
 
         result = mock_jira_client_instance.before_sync(
             "Test Project (TEST)", sync_type, sync_context
@@ -1021,7 +1021,7 @@ class TestSyncHooks:
 
     def test_after_sync_delegates_to_execute_hook(self, mock_jira_client_instance):
         sync_type = "manual"
-        sync_context = SyncContext(lastSync=datetime(2024, 1, 1, tzinfo=timezone.utc))
+        sync_context = SyncContext(lastSync=datetime(2024, 1, 1, tzinfo=UTC))
 
         result = mock_jira_client_instance.after_sync(
             "Test Project (TEST)", sync_type, sync_context
@@ -1051,7 +1051,7 @@ class TestCorrectSyncResults:
             status="Open",
             classification=issue_type,
             priority="High",
-            lastEdited=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            lastEdited=datetime(2024, 1, 1, tzinfo=UTC),
             principal=Login(username="u", password="p"),
         )
 
@@ -1437,7 +1437,7 @@ class TestValidateDefect:
             status="",
             classification="Bug",
             priority="High",
-            lastEdited=datetime.now(timezone.utc),
+            lastEdited=datetime.now(UTC),
             principal=Login(username="test", password="test"),
         )
 
@@ -1457,7 +1457,7 @@ class TestValidateDefect:
             status="Open",
             classification="",
             priority="High",
-            lastEdited=datetime.now(timezone.utc),
+            lastEdited=datetime.now(UTC),
             principal=Login(username="test", password="test"),
         )
 
@@ -1505,7 +1505,7 @@ class TestValidateDefect:
         defect.classification = "Bug"
         defect.priority = "High"
         defect.reporter = "John Doe"
-        defect.lastEdited = datetime.now(timezone.utc)
+        defect.lastEdited = datetime.now(UTC)
         defect.principal = Login(username="test", password="test")
         defect.severity = "Minor"
 
@@ -1591,7 +1591,7 @@ class TestValidateAndFilterActions:
             status="",
             classification="Bug",
             priority="High",
-            lastEdited=datetime.now(timezone.utc),
+            lastEdited=datetime.now(UTC),
             principal=Login(username="test", password="test"),
         )
 
@@ -1603,7 +1603,7 @@ class TestValidateAndFilterActions:
             status="",
             classification="Bug",
             priority="High",
-            lastEdited=datetime.now(timezone.utc),
+            lastEdited=datetime.now(UTC),
             principal=Login(username="test", password="test"),
         )
 

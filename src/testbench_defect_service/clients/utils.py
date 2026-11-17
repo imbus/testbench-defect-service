@@ -1,13 +1,9 @@
-import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 try:  # noqa: SIM105
     import javaproperties
 except ImportError:

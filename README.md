@@ -19,7 +19,7 @@ A lightweight REST API service for [imbus TestBench](https://www.testbench.com) 
 
 ## Installation
 
-**With pip** (Python 3.10–3.14 required):
+**With pip** (Python 3.11–3.15 required):
 
 ```bash
 pip install testbench-defect-service
