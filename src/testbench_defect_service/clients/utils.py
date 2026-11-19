@@ -51,7 +51,7 @@ def load_properties_config_from_path(config_path: Path) -> dict[str, str]:
         ImportError: If the file can't be read or parsing fails.
     """
     try:
-        with config_path.open("r") as config_file:
+        with config_path.open("rb") as config_file:
             return javaproperties.load(config_file)
     except Exception as e:
         raise ImportError(f"Importing client config from '{config_path}' failed.") from e

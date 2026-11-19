@@ -301,7 +301,7 @@ class JsonlDefectClient(AbstractDefectClient):
             return []
 
         logger.debug(f"Reading UDF definitions from: {udf_file_path}")
-        with udf_file_path.open("r") as file:
+        with udf_file_path.open("r", encoding="utf-8") as file:
             udf_definitions = json.load(file)
             validate_udf_structure(udf_definitions)
 
