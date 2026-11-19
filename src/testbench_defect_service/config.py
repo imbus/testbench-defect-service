@@ -28,7 +28,7 @@ from testbench_defect_service.utils.config_wizard import run_jira_oauth_wizard
 class AppConfig(Config):
     """Sanic configuration with uppercase attributes (Sanic requirement)."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         config_path: Path | None = None,
         client_class: str | None = None,
@@ -46,12 +46,6 @@ class AppConfig(Config):
 
         # Sanic-specific settings
         self.FALLBACK_ERROR_FORMAT = "json"
-        self.OAS_UI_DEFAULT = "swagger"
-        self.OAS_UI_REDOC = False
-        self.OAS_CUSTOM_FILE = (Path(__file__).parent / "openapi.yaml").resolve().as_posix()
-        self.OAS_PATH_TO_SWAGGER_HTML = (
-            (Path(__file__).parent / "static/swagger-ui/index.html").resolve().as_posix()
-        )
 
         # Load and validate config from file
         self.CONFIG_PATH = resolve_config_file_path(config_path)

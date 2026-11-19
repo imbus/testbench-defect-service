@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from sanic import Sanic
 
 from testbench_defect_service.config import AppConfig
+from testbench_defect_service.docs import docs_router
 from testbench_defect_service.exceptions import (
     AppErrorHandler,
     handle_jira_error,
@@ -65,6 +66,7 @@ def create_app(name: str, config: AppConfig | None = None) -> Sanic:
     register_middlewares(app)
     register_exception_handlers(app)
     app.blueprint(router)
+    app.blueprint(docs_router)
 
     # Serve static assets
     static_path = (Path(__file__).parent / "static/swagger-ui").resolve().as_posix()
