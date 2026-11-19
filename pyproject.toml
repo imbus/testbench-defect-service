@@ -38,7 +38,6 @@ classifiers = [
 ]
 dependencies = [
   "sanic>=25.12,<26.0",
-  "sanic-ext>=25.12,<26.0",
   "pydantic>=2.12.5,<3.0.0",
   "click>=8.3.1,<9.0.0",
   "tomli-w>=1.2.0,<2.0.0",
@@ -51,7 +50,9 @@ dependencies = [
 jira = ["jira>=3.10.5,<4.0.0", "beautifulsoup4>=4.14.3,<5.0.0"]
 dev = [
   "ruff>=0.9.6",
-  "pre-commit>=4.1.0",
+  # pre-commit needs PyYAML, which has no Python 3.15 wheel and fails to build without
+  # Microsoft C++ Build Tools. Install pre-commit separately (pipx/uv tool) on 3.15.
+  "pre-commit>=4.1.0; python_version < '3.15'",
   "invoke>=2.2.0",
   "mypy>=1.15.0",
   "flit>=3.10.1",
