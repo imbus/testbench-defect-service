@@ -1,7 +1,7 @@
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal, TypedDict, get_args, get_origin
+from typing import Any, Literal, TypedDict, cast, get_args, get_origin
 
 import click
 import questionary
@@ -163,7 +163,7 @@ def get_field_type(field_info: FieldInfo) -> type:
         non_none_types = [arg for arg in args if arg is not type(None)]
         if non_none_types:
             return non_none_types[0]  # type: ignore[no-any-return]
-    return field_type
+    return cast(type, field_type)
 
 
 def prompt_with_validation(
@@ -221,7 +221,7 @@ def get_field_default(field_info: FieldInfo) -> Any:
     return None
 
 
-def should_skip_field(  # noqa: PLR0913
+def should_skip_field(  # noqa: PLR0913, PLR0917
     field_name: str,
     field_info: FieldInfo,
     config_dict: dict[str, Any],
@@ -931,7 +931,7 @@ def prompt_password_field(description: str, default: Any) -> Any:
     return questionary.password(f"{description}:", default=default if default else "").ask()
 
 
-def prompt_single_field(  # noqa: C901, PLR0912, PLR0913
+def prompt_single_field(  # noqa: C901, PLR0912, PLR0913, PLR0917
     field_name: str,
     field_info: FieldInfo,
     field_value: Any,

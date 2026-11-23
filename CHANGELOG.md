@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ------------------------------------------------
 
+## [Unreleased]
+
+### Fixed
+
+- Installing with pip on Python 3.15 for Windows failed without Microsoft C++
+  Build Tools, because PyYAML has no Python 3.15 wheel and its source build needs
+  a C compiler. PyYAML is no longer a dependency: the Swagger UI and OpenAPI spec
+  under `/docs` are now served by the service itself instead of `sanic-ext`, and
+  `pre-commit` (which needs PyYAML) is left out of the `dev` extra on Python 3.15.
+  Install it separately there, for example with `pipx install pre-commit`.
+
+### Removed
+
+- The `sanic-ext` dependency, including its automatic `HEAD`/`OPTIONS` handlers.
+
+---
+
 ## [0.3.1][0.3.1] 11.11.2026
 
 ### Fixed

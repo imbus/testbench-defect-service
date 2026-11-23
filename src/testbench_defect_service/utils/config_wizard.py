@@ -518,7 +518,7 @@ def view_env_config(dotenv_path: Path = Path(".env")) -> None:
     click.echo("─" * 50)
 
     try:
-        with dotenv_path.open() as f:
+        with dotenv_path.open(encoding="utf-8") as f:
             for line in f:
                 line_stripped = line.rstrip()
                 if line_stripped and not line_stripped.startswith("#") and "=" in line_stripped:

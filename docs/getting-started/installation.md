@@ -48,7 +48,7 @@ Use this option if you have Python installed or are about to install it.
 
 ### Requirements
 
-- **Python 3.10–3.14** — 3.13 recommended ([download](https://www.python.org/downloads/))
+- **Python 3.11–3.15** — 3.13 recommended ([download](https://www.python.org/downloads/))
 - **pip** (included with Python)
 
 ### Set up a virtual environment

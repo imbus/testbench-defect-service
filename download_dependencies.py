@@ -9,7 +9,7 @@ Usage:
 Options:
     --extras           Comma-separated optional dependency groups (default: excel,jira,sql,dev)
     --platform         Target pip platform tag (default: win_amd64)
-    --python-versions  Comma-separated Python versions in compact form (default: 310,311,312,313)
+    --python-versions  Python versions, compact form (default: 311,312,313,314,315)
     --dest             Destination root folder for downloads (default: downloads)
     --zip              Also zip each per-version folder as <name>-<version>-<platform>-py<pyver>.zip
 """
@@ -20,21 +20,9 @@ import argparse
 import re
 import subprocess
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
-
-# tomllib is stdlib from 3.11; use tomli backport on 3.10
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    try:
-        import tomli as tomllib  # type: ignore[import-not-found,no-redef]
-    except ImportError as exc:
-        print(
-            "Missing 'tomli' package. Install via: python -m pip install tomli",
-            file=sys.stderr,
-        )
-        raise SystemExit(1) from exc
 
 try:
     from packaging.requirements import Requirement
@@ -63,7 +51,7 @@ def target_env(pyver: str, platform: str) -> dict[str, str]:
     """Build a PEP 508 marker environment dict for the given Python version and platform.
 
     Args:
-        pyver: Python version in compact form, e.g. '310', '311'
+        pyver: Python version in compact form, e.g. '311', '312'
         platform: Platform tag, e.g. 'win_amd64', 'manylinux_2_17_x86_64'
 
     Raises:
@@ -71,7 +59,7 @@ def target_env(pyver: str, platform: str) -> dict[str, str]:
     """
     if not pyver or len(pyver) < 2 or not pyver.isdigit():  # noqa: PLR2004
         raise ValueError(
-            f"Invalid Python version format: '{pyver}' (expected compact form like '310', '311')"
+            f"Invalid Python version format: '{pyver}' (expected compact form like '311', '312')"
         )
     major = int(pyver[0])
     minor = int(pyver[1:])
@@ -379,8 +367,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--python-versions",
-        default="310,311,312,313,314",
-        help="Comma-separated Python versions in compact form (default: 310,311,312,313,314).",
+        default="311,312,313,314,315",
+        help="Python versions, compact form (default: 311,312,313,314,315).",
     )
     parser.add_argument(
         "--dest",
