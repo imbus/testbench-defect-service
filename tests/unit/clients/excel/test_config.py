@@ -10,6 +10,7 @@ from testbench_defect_service.clients.excel.config import (
     ProjectConfig,
     Transition,
     _normalize_legacy_excel_config,
+    control_field_names_match,
 )
 
 
@@ -64,15 +65,33 @@ class TestControlFieldTransitions:
 
         assert len(control_field.transitions) == 1
 
-    def test_class_name_still_normalizes_to_classification(self) -> None:
+    def test_class_name_is_kept_as_configured(self) -> None:
+        """TestBench sends the control field name back as the sync attribute. A project set up
+        against the legacy connector sends `class`, so the name must not be rewritten."""
         control_field = ControlFields(
-            name="class",
+            name=" class ",
             column_number=6,
             values=["Crash", "Other"],
             transitions=[Transition(from_state="Crash", to_state="Other")],
         )
 
-        assert control_field.name == "classification"
+        assert control_field.name == "class"
+
+    @pytest.mark.parametrize(
+        ("attribute", "field_name", "expected"),
+        [
+            ("status", "status", True),
+            ("class", "class", True),
+            ("class", "classification", True),
+            ("classification", "class", True),
+            ("status", "classification", False),
+            (None, "class", False),
+        ],
+    )
+    def test_class_and_classification_address_the_same_control_field(
+        self, attribute: str | None, field_name: str, expected: bool
+    ) -> None:
+        assert control_field_names_match(attribute, field_name) is expected
 
 
 @pytest.mark.unit
@@ -110,7 +129,7 @@ class TestLegacyTransitionNormalization:
         assert by_name["priority"]["transitions"] == [{"from_state": "Low", "to_state": "High"}]
         assert len(by_name["status"]["transitions"]) == 2
 
-    def test_class_prefix_normalizes_to_classification(self) -> None:
+    def test_class_prefix_stays_class(self) -> None:
         data = {
             "controlFields": "class",
             "class.columnNo": "6",
@@ -121,9 +140,41 @@ class TestLegacyTransitionNormalization:
         normalized = _normalize_legacy_excel_config(data)
 
         by_name = {field["name"]: field for field in normalized["control_fields"]}
-        assert by_name["classification"]["transitions"] == [
+        assert by_name["class"]["transitions"] == [{"from_state": "Crash", "to_state": "Other"}]
+
+    def test_class_transitions_reach_a_field_named_classification(self) -> None:
+        data = {
+            "control_fields": [
+                {"name": "classification", "column_number": 6, "values": ["Crash", "Other"]}
+            ],
+            "class.transition1": "Crash-Other",
+        }
+
+        normalized = _normalize_legacy_excel_config(data)
+
+        assert normalized["control_fields"][0]["transitions"] == [
             {"from_state": "Crash", "to_state": "Other"}
         ]
+
+    def test_state_keyed_transitions_go_to_the_field_status_controlfield_name_names(self) -> None:
+        """`Open` is a value of both fields; the connector read `<state>.transitionN` only
+        for the field `status.controlfield.name` names, wherever it sits in the list."""
+        data = {
+            "controlFields": "phase,state",
+            "phase.columnNo": "4",
+            "phase.value": "Open,Closed",
+            "state.columnNo": "5",
+            "state.value": "Open,Closed",
+            "status.controlfield.name": "state",
+            "Open.transition.number": "1",
+            "Open.transition1": "Open-Closed",
+        }
+
+        normalized = _normalize_legacy_excel_config(data)
+
+        by_name = {field["name"]: field for field in normalized["control_fields"]}
+        assert by_name["state"]["transitions"] == [{"from_state": "Open", "to_state": "Closed"}]
+        assert "transitions" not in by_name["phase"]
 
     def test_transition_number_key_is_not_parsed_as_a_transition(self) -> None:
         normalized = _normalize_legacy_excel_config(self._legacy_data())
@@ -390,3 +441,50 @@ class TestLegacyCompositeKeysOnProjectConfig:
 
         assert project_config.control_fields is None
         assert project_config.udfs is None
+
+
+@pytest.mark.unit
+class TestLegacyCommandNormalization:
+    """`presync.<type>.command` / `postsync.<type>.command`, as the DMProxy connector had them."""
+
+    def test_command_keys_become_the_commands_table(self) -> None:
+        data = {
+            "presync.manual.command": r'"C:\hooks\export.bat" "%1"',
+            "postsync.scheduled.command": r"C:\hooks\notify.bat",
+            "presync.partial.command": "",
+        }
+
+        normalized = _normalize_legacy_excel_config(data)
+
+        assert normalized["commands"] == {
+            "presync": {"manual": r'"C:\hooks\export.bat" "%1"'},
+            "postsync": {"scheduled": r"C:\hooks\notify.bat"},
+        }
+
+    def test_an_explicit_commands_table_wins(self) -> None:
+        data = {
+            "commands": {"presync": {"manual": "new.bat"}},
+            "presync.manual.command": "old.bat",
+        }
+
+        normalized = _normalize_legacy_excel_config(data)
+
+        assert normalized["commands"] == {"presync": {"manual": "new.bat"}}
+
+    def test_commands_reach_the_global_and_the_project_model(self, tmp_path: Path) -> None:
+        data = {"excelFilePath": str(tmp_path), "postsync.partial.command": "notify.bat"}
+
+        config = ExcelDefectClientConfig.model_validate(data)
+        project = ProjectConfig.model_validate({"postsync.partial.command": "notify.bat"})
+
+        assert config.commands is not None
+        assert config.commands.postsync is not None
+        assert config.commands.postsync.partial == "notify.bat"
+        assert project.commands is not None
+        assert project.commands.postsync is not None
+        assert project.commands.postsync.partial == "notify.bat"
+
+    def test_no_command_keys_leave_commands_unset(self, tmp_path: Path) -> None:
+        config = ExcelDefectClientConfig.model_validate({"excelFilePath": str(tmp_path)})
+
+        assert config.commands is None

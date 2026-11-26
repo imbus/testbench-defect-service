@@ -237,12 +237,12 @@ values        = ["bug", "change_request"]
 
 | Field             | Type           | Description                                                                                                                                                                       |
 | ----------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`          | String         | Field name as used by TestBench.`"class"` is accepted as an alias for `"classification"`.                                                                                     |
+| `name`          | String         | Field name as shown to and sent back by TestBench. It is passed on exactly as written here.                                                                                     |
 | `column_number` | Integer        | 1-based column of the field in the file.                                                                                                                                          |
 | `values`        | List           | Allowed values. Presented as a dropdown in TestBench.                                                                                                                             |
 | `transitions`   | List of tables | Allowed changes to this field's value. Omit to allow any change. Each entry needs`from_state` and `to_state`, and both must appear in `values` when `values` is declared. |
 
-TestBench tells the service at sync time which attribute it uses for status, priority and classification. Each of those attribute names must match a control field `name`:
+TestBench tells the service at sync time which attribute it uses for status, priority and classification. Each of those attribute names must match a control field `name`. The one exception: `class` and `classification` address the same control field, whichever of the two names it was configured with — the legacy connector's sample configuration says `class`, so a TestBench project set up against it keeps working unchanged.
 
 - **No matching control field** — the import is rejected with `sync attribute '<name>' for '<field>' is not configured in the Excel control fields`.
 - **Value outside `values`** — create and update are rejected with the list of allowed values.
@@ -264,8 +264,9 @@ transitions   = [
 ```
 
 An update that changes the value to a state without a matching transition is
-rejected with a warning naming the control field. Updates that leave the value
-unchanged are always allowed.
+rejected with an `INVALID_ATTRIBUTES` error for that defect, naming the control
+field; nothing is written. Updates that leave the value unchanged are always
+allowed.
 
 Every `from_state` and `to_state` must be one of the field's `values`. A state
 outside that list is a configuration error and the service refuses to start —
@@ -316,7 +317,7 @@ falseValue = "no"
 | `value`                      | String                        | Fallback value used when the column is not present in the file.                                           |
 | `trueValue` / `falseValue` | String                        | Cell values representing`true` / `false` for `BOOLEAN` fields. Default to `"true"` / `"false"`. |
 
-`BOOLEAN` values are translated in both directions: cells matching `trueValue` are read as `true`, and writes convert `true` / `false` back to `trueValue` / `falseValue`. A cell that matches neither is reported as unset.
+`BOOLEAN` values are translated in both directions: cells matching `trueValue` are read as `true`, cells matching `falseValue` as `false`, and writes convert `true` / `false` back to `trueValue` / `falseValue`. An empty cell is unset. A cell that holds anything else is never taken for `false`: the attribute is left out of that defect, a warning names the value, and the cell stays as it is in the file.
 
 ---
 
@@ -339,10 +340,16 @@ simple_date_format = "yyyy-MM-dd HH:mm:ss"
 
 Parsing behavior:
 
-- The configured format is tried first, and is also used when writing the last-edited value.
-- If a cell does not match, the client falls back to automatic date detection and reports a single warning per sync.
-- If a value cannot be parsed at all — or the cell is empty — the current UTC timestamp is used and a warning is added for that defect.
-- Values without a timezone are treated as UTC.
+- A real date cell in an Excel file is read with its full time of day, whatever format the column is displayed in. `simple_date_format = "dd.MM.yyyy"` therefore does not cut the time off.
+- For text — delimited files, or Excel cells formatted as text — the configured format is tried first.
+- If a text value does not match, the client falls back to automatic date detection and reports a single warning per sync.
+- If a value cannot be parsed at all — or the cell is empty — the current timestamp is used and a warning is added for that defect.
+- Values without a timezone are the **local time of the machine running the service**, as they were for the legacy connector. A value that carries its own UTC offset keeps it.
+
+Writing the last-edited value:
+
+- In an `.xlsx` file it is written as a date cell holding the local date and time, displayed in `simple_date_format` (or `yyyy-mm-dd hh:mm:ss` when none is configured).
+- In a delimited file it is written as text in `simple_date_format`, in local time. A date-only format can only store the day there; include `HH:mm:ss` if changes within a day matter. Without a configured format an ISO timestamp with its UTC offset is written.
 
 Setting `lastedit_column_no = 0` disables change timestamps for the whole client, and TestBench then treats every defect as potentially changed.
 
@@ -358,7 +365,9 @@ defect_id_digit_numbers   = 4
 defect_id_starting_value  = "1"
 ```
 
-With the settings above, the first defect becomes `BUG0001`, the next `BUG0002`. IDs that do not start with `id_prefix` are ignored when determining the next number.
+With the settings above, the first defect becomes `BUG0001`, the next `BUG0002`. IDs that do not start with `id_prefix` are ignored when determining the next number. Whitespace between the prefix and the number does not matter for that: a file numbered `Bug 0117` continues with 118 whether the prefix is `"Bug "` or `"Bug"` — but the new ID is built from the prefix exactly as configured, so keep the trailing space if the IDs have one.
+
+When the next number no longer fits into `defect_id_digit_numbers`, creating a defect fails with an error instead of handing out a longer ID. Raise the digit count to continue.
 
 `defect_id_starting_value` decides where numbering begins while no ID in the file matches `id_prefix` — set it to `"500"` and the first defect becomes `BUG0500`. It is consulted for that first ID only: as soon as the file carries matching IDs, the next one continues from the highest of them, so raising the value later never renumbers a project that is already in use. A value that is not a number is ignored with a warning and numbering starts at 1.
 
@@ -464,10 +473,26 @@ scheduled = "C:\\scripts\\checkin-workbook.bat"
 scheduled = "C:\\scripts\\project-1-checkout.bat"
 ```
 
-`scheduled`, `manual` and `partial` select the script by sync type. Each value
-must be a path to a `.bat`, `.sh` or `.exe` file; anything else is logged and
-skipped. The service waits for the script to finish before continuing, and
-passes the project key and the sync type to it as arguments.
+`scheduled`, `manual` and `partial` select the script by sync type. The script
+must be a `.bat`, `.sh` or `.exe` file. The service waits for it to finish
+before continuing.
+
+A value is read in one of two ways:
+
+- **A bare script path** — may contain spaces, needs no quoting. The script is
+  called with the project name and the sync type as its two arguments.
+- **A command line** — the script followed by its own arguments, each quoted
+  where it contains a space. The script is called with exactly those arguments,
+  and an argument `%1` is replaced by the full path of the project's defect
+  file. This is the form the legacy connector used:
+
+  ```toml
+  manual = '"C:\scripts\export.bat" "%1" "--verbose"'
+  ```
+
+A hook that cannot be run — unsupported extension, missing script, unbalanced
+quote, a non-zero exit code, or a `%1` for a project that has no defect file —
+is reported as an error in the sync protocol.
 
 A project's `commands` table replaces the global one for that project rather
 than merging with it. See [Pre/post sync commands](../configuration.md#prepost-sync-commands)
@@ -559,8 +584,10 @@ Structured settings are reassembled from their numbered legacy keys:
 
 | Legacy pattern                                                                                           | Becomes                                                                                                                                             |
 | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `controlFields`, `<field>.columnNo`, `<field>.value`                                               | one`control_fields` entry per listed field (`class` → `classification`)                                                                      |
-| `<field>.transition<n>` or `<state>.transition<n>` with a `from-to` value                             | one`transitions` entry on the control field named by the prefix (`class` → `classification`), or on the field that lists the prefix among its `values`; a prefix that is neither is logged and ignored |
+| `controlFields`, `<field>.columnNo`, `<field>.value`                                               | one`control_fields` entry per listed field, under the name it has in the file                                                                      |
+| `<field>.transition<n>` or `<state>.transition<n>` with a `from-to` value                             | one`transitions` entry on the control field named by the prefix. A state prefix (`New.transition1=New-InProgress`, the connector's own spelling) goes to the field `status.controlfield.name` names, or without that key to the first field listing the state among its `values`; a prefix that is neither is logged and ignored |
+| `status.controlfield.name`                                                                           | names the control field that receives the `<state>.transition<n>` entries |
+| `presync.<type>.command`, `postsync.<type>.command` (`scheduled`, `manual`, `partial`)             | the `commands` table; the command line is kept as written, including its arguments and `%1`. See [Sync hooks](#sync-hooks) |
 | `udf.attr<n>.name`, `.column`, `.type`, `.required`, `.value`, `.trueValue`, `.falseValue` | one`udfs` entry each                                                                                                                              |
 
 :::note
@@ -571,10 +598,18 @@ Both spellings work in either file format — a `.toml` file may use the legacy 
 
 ## Writing behavior
 
-When a defect is created, updated or deleted, the client rewrites only the **mapped columns**, at the configured header and data rows. Columns that are not part of the mapping are left untouched, as are other worksheets.
+A write touches the **one row** it is about:
+
+- **Create** appends a row below the last one, filling the mapped columns.
+- **Update** writes the mapped columns of that defect's row. A field TestBench does not send keeps its cell; the ID cell is never rewritten.
+- **Delete** removes the whole row — including cells in columns the client does not map — and moves the rows below it up.
+
+Every other row keeps its cells exactly as they were, with their types: a date stays a date and a number a number. Columns that are not part of the mapping and other worksheets are left untouched. A header cell is only filled in when it is empty.
+
+The changed file is first written next to the original as `<defect file>.tmp` and then put in its place in one step, so a write that fails — for example because the workbook is open in Excel — leaves the original file as it was.
 
 :::warning
-Rewriting an `.xlsx` file with openpyxl does not preserve everything Excel can store. Charts, images, pivot tables and conditional formatting can be lost, and formulas in mapped columns are replaced by the written values. Keep a backup of production files, or set `readonly = true` for workbooks that contain more than a defect table.
+Rewriting an `.xlsx` file with openpyxl does not preserve everything Excel can store. Charts, images, pivot tables and conditional formatting can be lost, and a formula in a cell that is written is replaced by the written value. Deleting a row does not adjust merged cells or formulas that refer to the rows below it. Keep a backup of production files, or set `readonly = true` for workbooks that contain more than a defect table.
 :::
 
 ### Concurrent writers

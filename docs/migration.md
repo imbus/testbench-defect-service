@@ -182,18 +182,26 @@ defects.data.startingLine=2
 defect.id.columnNo=1
 defect.title.columnNo=2
 
-controlFields=status,priority
+defect.lastedited.columnNo=5
+# The prefix ends in a space, which is kept: ids look like "Bug 0117".
+defect.id.prefix=Bug 
+
+controlFields=status,priority,class
 status.columnNo=7
 status.value=open,in_progress,closed
 
-status.transition.number=2
-status.transition1=open-in_progress
-status.transition2=in_progress-closed
+status.controlfield.name=status
+open.transition.number=1
+open.transition1=open-in_progress
+in_progress.transition.number=1
+in_progress.transition1=in_progress-closed
+
+presync.manual.command="C:\scripts\export.bat" "%1"
 
 udf.attr.number=1
 udf.attr1.name=Customer
 udf.attr1.column=10
-udf.attr1.type=STRING
+udf.attr1.type=0
 ```
 
 ### What is carried over
@@ -206,14 +214,36 @@ The Excel client reads the legacy key names itself, so the whole file is convert
 - **Composite keys** are reassembled into their nested shape: `controlFields` plus the
   per-field `*.columnNo` / `*.value` keys become `control_fields`, `*.transition<n>` entries
   become `transitions` on the control field they belong to, and `udf.attr<n>.*` become `udfs`.
-- **Unknown keys are ignored** — settings from the old wrapper that the client has no option for
-  simply do not appear in the result.
+- **Control field names are kept** as they are in the file. A field called `class` stays `class`,
+  which is what the TestBench project that was synchronized through the old wrapper sends.
+- **Status transitions** written the wrapper's way — `<state>.transition<n>=<state>-<next>` —
+  land on the control field `status.controlfield.name` names.
+- **Sync commands** — `presync.<type>.command` and `postsync.<type>.command` for `scheduled`,
+  `manual` and `partial` — become the `commands` table. The command line is kept as written,
+  and `%1` still stands for the project's defect file. See
+  [Sync hooks](clients/excel-client.md#sync-hooks).
+- **The trailing space of `defect.id.prefix`** is kept: `Bug ` stays `Bug `, so the defect
+  after `Bug 0117` is created as `Bug 0118`.
+- **Keys without an equivalent are listed** at the end of the run — for the Excel wrapper's own
+  sample file that is `systemVersion` only. See
+  [Entries that were not carried over](#entries-that-were-not-carried-over).
 - `excelFilePath` is resolved and written as an **absolute** path, relative to the directory
   `migrate` runs in. A relative path in the legacy file would otherwise be resolved against the
   service's working directory later, which is a different directory when it runs as a Windows
   service.
 
 The only prompt is for the **service credentials**; everything else comes from the file.
+
+### What behaves differently from the old wrapper
+
+| Topic | Old wrapper | Defect service |
+| ----- | ----------- | -------------- |
+| **`.xls` files** | Read and written. | Read only. Convert the workbook with [`migrate workbook`](cli.md#migrate-workbook) and set `fileType=.xlsx` to create, update or delete defects. |
+| **No transitions configured** | No status change was possible. | Every change is allowed. As soon as one transition is configured for a control field, only the configured ones are. |
+| **Transitions** | Checked for the status field only. | Can be configured for any control field. |
+| **Deleting a defect** | Not supported. | The defect's row is removed from the file. |
+| **Timestamps** | Local time of the server. | The same: a value without a time zone is the local time of the machine running the service. |
+| **Sync commands** | Any executable. | The script must be a `.bat`, `.sh` or `.exe` file. |
 
 :::tip[Per-project properties files]
 A `<Project>.properties` file next to the project's data directory does not need migrating. The

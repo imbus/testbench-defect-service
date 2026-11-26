@@ -168,7 +168,8 @@ def get_field_type(field_info: FieldInfo) -> type:
         non_none_types = [arg for arg in args if arg is not type(None)]
         if non_none_types:
             return non_none_types[0]  # type: ignore[no-any-return]
-    return field_type
+    # pydantic annotates this as a type form; every caller treats it as the plain class.
+    return field_type  # type: ignore[return-value]
 
 
 def prompt_with_validation(

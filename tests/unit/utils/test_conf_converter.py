@@ -15,6 +15,7 @@ from testbench_defect_service.utils.conf_converter import (
     convert_legacy_config,
     generate_excel_base_toml,
     generate_jira_base_toml,
+    parse_properties_file,
     prompt_jira_auth_config,
 )
 
@@ -336,7 +337,8 @@ class TestGenerateExcelBaseToml:
         by_name = {field["name"]: field for field in client_config["control_fields"]}
         assert by_name["status"]["values"] == ["New", "InProgress", "Done"]
         assert by_name["status"]["transitions"] == [{"from_state": "New", "to_state": "InProgress"}]
-        assert by_name["classification"]["column_number"] == 6
+        # The name TestBench was set up with is carried over as it is.
+        assert by_name["class"]["column_number"] == 6
 
     def test_user_defined_attributes_keep_their_value_type(self) -> None:
         client_config = _excel_client_config()
@@ -845,3 +847,67 @@ class TestProjectQueriesBecomeItbProjects:
             self._convert(tmp_path, "}\n")
 
     _AUTH: ClassVar[dict[str, Any]] = {"auth_type": "token", "token": "pat-123"}
+
+
+@pytest.mark.unit
+class TestLegacyExcelConnectorParity:
+    """Settings of the DMProxy Excel connector that used to be lost on the way."""
+
+    def test_the_trailing_space_of_the_id_prefix_survives_the_parser(self, tmp_path) -> None:
+        """The connector built ids as prefix plus number. Trimmed to `Bug`, the defect after
+        `Bug 0117` would be created as `Bug0118`."""
+        legacy_path = tmp_path / "ExcelWrapper.properties"
+        legacy_path.write_text("defect.id.prefix=Bug \nworksheetName = defect \n", encoding="utf-8")
+
+        parsed = parse_properties_file(legacy_path)
+
+        assert parsed["defect.id.prefix"] == "Bug "
+        assert parsed["worksheetName"] == "defect"
+
+    def test_sync_commands_are_carried_over_and_not_reported(self, capsys) -> None:
+        command = r'"C:\hooks\export.bat" "%1"'
+
+        client_config = _excel_client_config(
+            **{"presync.manual.command": command, "status.controlfield.name": "status"}
+        )
+
+        assert client_config["commands"]["presync"]["manual"] == command
+        assert "not carried over" not in capsys.readouterr().out
+
+    def test_the_original_sample_file_converts_without_a_lost_setting(self, capsys) -> None:
+        """The keys of the `ExcelWrapper.properties` the connector shipped, minus the one
+        setting with no equivalent here."""
+        properties = {
+            **_EXCEL_PROPERTIES,
+            "controlFields": "status,priority,class",
+            "status.value": "New,InProgress,Test,Flop,Rejected,Done",
+            "priority.columnNo": "5",
+            "priority.value": "Patch,Update",
+            "status.controlfield.name": "status",
+            "New.transition.number": "2",
+            "New.transition1": "New-InProgress",
+            "New.transition2": "New-Rejected",
+            "InProgress.transition.number": "1",
+            "InProgress.transition1": "InProgress-Test",
+            "udf.attr.number": "2",
+            "udf.attr2.name": "attributes",
+            "udf.attr2.column": "10",
+            "udf.attr2.type": "0",
+            "systemVersion": "1.0",
+        }
+
+        toml_text = generate_excel_base_toml(properties, _CREDENTIALS)
+
+        output = capsys.readouterr().out
+        client_config = tomllib.loads(toml_text)["testbench-defect-service"]["client_config"]
+        by_name = {field["name"]: field for field in client_config["control_fields"]}
+        assert list(by_name) == ["status", "priority", "class"]
+        assert by_name["status"]["transitions"] == [
+            {"from_state": "InProgress", "to_state": "Test"},
+            {"from_state": "New", "to_state": "InProgress"},
+            {"from_state": "New", "to_state": "Rejected"},
+        ]
+        assert client_config["lastedit_column_no"] == 7
+        assert client_config["id_prefix"] == "Bug "
+        assert "1 legacy setting(s) were NOT carried over" in output
+        assert "systemVersion" in output

@@ -1,11 +1,17 @@
 import time
+import zipfile
+from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
+import openpyxl
 import pandas as pd
 
 from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig
 from testbench_defect_service.clients.excel.utils import (
+    _format_last_edited,
+    boolean_udf_labels,
     coerce_cell_to_string,
     get_column_mapping_for_config,
     get_visible_sheets,
@@ -13,6 +19,8 @@ from testbench_defect_service.clients.excel.utils import (
     resolve_delimited_separator,
     resolve_sheet_name,
     resolve_visible_sheet_name,
+    to_excel_number_format,
+    to_local_wall_time,
     to_python_datetime_format,
 )
 from testbench_defect_service.log import logger
@@ -23,6 +31,10 @@ _REQUIRED_DATA_COLUMNS: tuple[str, ...] = ("id",)
 _EXCEL_SUFFIXES: tuple[str, ...] = (".xlsx", ".xls")
 _DELIMITED_SUFFIXES: tuple[str, ...] = (".csv", ".tsv", ".txt")
 _DELIMITED_ENCODINGS: tuple[str, ...] = ("utf-8-sig", "windows-1252")
+
+#: Suffix of the file a write is staged in before it replaces the defect file. It is not a
+#: `file_type` the client can be configured with, so a leftover is never picked up as data.
+_STAGING_SUFFIX = ".tmp"
 
 
 def read_data_frame_from_file_path(
@@ -70,23 +82,31 @@ def read_data_frame_from_file_path(
 def map_boolean_values(config: ExcelDefectClientConfig, df: pd.DataFrame) -> None:
     for udf in config.udfs:
         if udf.type == ValueType.BOOLEAN:
+            true_value, false_value = boolean_udf_labels(udf)
             try:
                 df[udf.name] = df[udf.name].map(
-                    lambda v, t=udf.trueValue: _map_boolean_read_value(v, t)
+                    lambda v, t=true_value, f=false_value: _map_boolean_read_value(v, t, f)
                 )
             except KeyError:
                 logger.warning(f"{udf.name} not in the dataframe")
 
 
-def _map_boolean_read_value(value: Any, true_value: str | None) -> str:
+def _map_boolean_read_value(value: Any, true_value: str, false_value: str) -> str:
     """Map a boolean UDF cell to the internal 'true'/'false' form.
 
     A blank cell stays blank: it is unset, not false. Coercing it would also
     re-fill an otherwise-empty row on the next write.
+
+    A cell holding neither label is left as it is. Calling it false would send TestBench a
+    value nobody entered; the defect builder reports the cell and leaves the attribute out.
     """
     if is_blank_cell(value):
         return ""
-    return "true" if value == true_value else "false"
+    if value == true_value:
+        return "true"
+    if value == false_value:
+        return "false"
+    return str(value)
 
 
 def _validate_column_mapping(
@@ -163,6 +183,19 @@ def _apply_column_mapping(
     return cast(pd.DataFrame, mapped_df)
 
 
+def _coerce_timestamp_cell(value: Any, date_format: str | None) -> str:
+    """Render a cell of the last-edited column without cutting the time off a real date.
+
+    `simple_date_format` says how the date is *shown* - `dd.MM.yyyy` is typical - while the
+    cell itself holds the time of day as well. Formatting it with that pattern threw the time
+    away, so a change made later on the day of the last sync looked older than the sync.
+    Text cells have nothing more to give and are rendered as before.
+    """
+    if value is not None and value is not pd.NaT and isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    return coerce_cell_to_string(value, date_format)
+
+
 def _load_dataframe(
     file_path: Path,
     config: ExcelDefectClientConfig,
@@ -201,9 +234,19 @@ def _load_dataframe(
         raise ValueError(f"Unsupported file format: {file_path.suffix}")
 
     date_format = to_python_datetime_format(config.simple_date_format)
-    normalized_df = df.apply(
-        lambda column: column.map(lambda value: coerce_cell_to_string(value, date_format))
-    )
+    last_edited_idx = config.lastedit_column_no - 1
+    normalized_columns = [
+        df.iloc[:, position].map(
+            lambda value, keep_time=(position == last_edited_idx): (
+                _coerce_timestamp_cell(value, date_format)
+                if keep_time
+                else coerce_cell_to_string(value, date_format)
+            )
+        )
+        for position in range(len(df.columns))
+    ]
+    normalized_df = pd.concat(normalized_columns, axis=1) if normalized_columns else df.copy()
+    normalized_df.columns = df.columns
     return cast(pd.DataFrame, normalized_df)
 
 
@@ -224,220 +267,283 @@ def _read_delimited_dataframe(
     raise last_error
 
 
-def write_defect_data(
+# --- Writing ---------------------------------------------------------------------------------
+#
+# A write touches the one row it is about and nothing else. Rewriting every mapped column of
+# every row - which is what this module used to do - turned each date and number in the file
+# into text on the first defect created, because the frame the cells were rewritten from
+# holds strings only.
+
+
+def write_defect_row(
     sync_context: SyncContext,
     defect_path: Path,
     config: ExcelDefectClientConfig,
-    header: dict[int, str],
-    df_with_new_defect: pd.DataFrame,
+    row_position: int,
+    values: Mapping[str, Any],
 ) -> None:
-    """Dispatch a defect write to the writer matching the target file's format."""
+    """Write one defect's cells into the data row at *row_position* (0 = first data row).
+
+    Only the fields named in *values* are written; a field that is absent keeps whatever the
+    file holds. A position one past the last row appends a new defect.
+
+    Raises:
+        ValueError: When the file format cannot be written.
+        OSError: When the file cannot be read or replaced.
+    """
     suffix = defect_path.suffix.lower()
-    if suffix in _EXCEL_SUFFIXES:
-        write_defect_data_to_excel(sync_context, defect_path, config, header, df_with_new_defect)
-    elif suffix in _DELIMITED_SUFFIXES:
-        write_defect_data_to_csv(sync_context, defect_path, config, header, df_with_new_defect)
+    if suffix not in (*_EXCEL_SUFFIXES, *_DELIMITED_SUFFIXES):
+        raise ValueError(f"Unsupported file format for writing: '{defect_path.suffix}'.")
+    _reject_legacy_xls(defect_path)
+
+    column_positions = get_column_mapping_for_config(config, sync_context)
+    if not column_positions:
+        return
+
+    as_text = suffix in _DELIMITED_SUFFIXES
+    cells: dict[int, tuple[str, Any]] = {}
+    for col_idx, col_names in column_positions.items():
+        col_name = col_names[0]
+        if col_name not in values:
+            continue
+        cells[col_idx] = (col_name, _cell_value(config, col_name, values[col_name], as_text))
+
+    if as_text:
+        _write_row_to_delimited(defect_path, config, row_position, cells)
+    else:
+        _write_row_to_excel(defect_path, config, row_position, cells)
+
+
+def delete_defect_row(
+    defect_path: Path,
+    config: ExcelDefectClientConfig,
+    row_position: int,
+) -> None:
+    """Remove the data row at *row_position* (0 = first data row), closing the gap.
+
+    The whole row goes, not only the columns the client maps: cells in columns it does not
+    know about belong to the defect just as much, and leaving them behind would hand them to
+    whichever defect moves up into that row.
+
+    Raises:
+        ValueError: When the file format cannot be written.
+        OSError: When the file cannot be read or replaced.
+    """
+    suffix = defect_path.suffix.lower()
+    if suffix in _DELIMITED_SUFFIXES:
+        _delete_row_from_delimited(defect_path, config, row_position)
+    elif suffix in _EXCEL_SUFFIXES:
+        _reject_legacy_xls(defect_path)
+        _delete_row_from_excel(defect_path, config, row_position)
     else:
         raise ValueError(f"Unsupported file format for writing: '{defect_path.suffix}'.")
 
 
-def write_defect_data_to_excel(
-    sync_context: SyncContext,
-    defect_path: Path,
-    config: ExcelDefectClientConfig,
-    header: dict[int, str],
-    df_with_new_defect: pd.DataFrame,
-):
-    column_positions = get_column_mapping_for_config(config, sync_context)
-    if not column_positions:
-        return
+def _reject_legacy_xls(defect_path: Path) -> None:
     if defect_path.suffix.lower() == ".xls":
         raise ValueError(
             f"Writing to legacy .xls files is not supported: '{defect_path.name}'. "
             "Convert the file to .xlsx to create or update defects."
         )
-    sheet_name = resolve_visible_sheet_name(defect_path, config)
-
-    logger.debug("Writing defect data to '%s' on sheet '%s'", defect_path, sheet_name)
-    is_existing_xlsx = defect_path.exists() and defect_path.suffix.lower() == ".xlsx"
-    writer_kwargs: dict[str, Any] = {"engine": "openpyxl"}
-    if is_existing_xlsx:
-        writer_kwargs["mode"] = "a"
-        writer_kwargs["if_sheet_exists"] = "overlay"
-    written_column_indices: list[int] = []
-    with pd.ExcelWriter(defect_path, **writer_kwargs) as writer:
-        for col_idx, col_names in column_positions.items():
-            col_name = col_names[0]
-            if col_name not in df_with_new_defect.columns:
-                continue
-            original_header = header.get(col_idx + 1, col_name)
-
-            _apply_boolean_udf_write_mapping(config, df_with_new_defect, col_name)
-
-            # --- STEP 1: Write ONLY the Header ---
-            header_only_df = (
-                df_with_new_defect[[col_name]].iloc[0:0].rename(columns={col_name: original_header})
-            )
-            header_only_df.to_excel(
-                writer,
-                sheet_name=sheet_name,
-                startcol=col_idx,
-                startrow=config.defects_data_header_line - 1,
-                index=False,
-                header=True,
-            )
-
-            # --- STEP 2: Write ONLY the Values ---
-            df_with_new_defect[[col_name]].to_excel(
-                writer,
-                sheet_name=sheet_name,
-                startcol=col_idx,
-                startrow=config.defects_data_starting_line - 1,
-                index=False,
-                header=False,
-            )
-            written_column_indices.append(col_idx)
-
-        worksheet = writer.sheets.get(sheet_name)
-        if worksheet is not None:
-            _clear_stale_excel_rows(
-                worksheet,
-                config.defects_data_starting_line + len(df_with_new_defect),
-                written_column_indices,
-            )
 
 
-def _clear_stale_delimited_rows(
-    grid_df: pd.DataFrame,
-    end_row_idx: int,
-    written_column_indices: list[int],
-) -> pd.DataFrame:
-    """Blank leftover cells below the freshly written data.
-
-    Rows past the new data are leftovers of removed defects; blank them so a
-    deleted defect does not survive as a duplicate, then drop rows that are
-    now entirely empty.
-    """
-    if len(grid_df) <= end_row_idx:
-        return grid_df
-    for col_idx in written_column_indices:
-        grid_df.iloc[end_row_idx:, col_idx] = ""
-    while len(grid_df) > end_row_idx and grid_df.iloc[-1].eq("").all():
-        grid_df = grid_df.iloc[:-1]
-    return grid_df
-
-
-def _apply_boolean_udf_write_mapping(
+def _cell_value(
     config: ExcelDefectClientConfig,
-    df: pd.DataFrame,
     col_name: str,
-) -> None:
-    """Convert internal 'true'/'false' values back to the configured UDF labels."""
+    value: Any,
+    as_text: bool,
+) -> Any:
+    """Turn one logical value into what its cell should hold."""
+    if isinstance(value, datetime):
+        if as_text:
+            return _format_last_edited(value, config)
+        return to_local_wall_time(value)
+    if is_blank_cell(value):
+        return ""
     for udf in config.udfs:
         if udf.name == col_name and udf.type == ValueType.BOOLEAN:
-            true_val: str | None = udf.trueValue
-            false_val: str | None = udf.falseValue
-
-            def _map_bool(
-                v: str, tv: str | None = true_val, fv: str | None = false_val
-            ) -> str | None:
-                if is_blank_cell(v):
-                    return ""
-                return tv if str(v).lower() == "true" else fv
-
-            df[col_name] = df[col_name].map(_map_bool)
+            return _map_boolean_write_value(value, *boolean_udf_labels(udf))
+    return str(value)
 
 
-def _clear_stale_excel_rows(
-    worksheet: Any,
-    first_stale_row: int,
-    column_indices: list[int],
-) -> None:
-    """Blank leftover cells below the freshly written data.
+def _map_boolean_write_value(value: Any, true_value: str, false_value: str) -> str:
+    """Convert the internal 'true'/'false' back to the configured cell contents."""
+    normalized = str(value).strip().lower()
+    if normalized == "true":
+        return true_value
+    if normalized == "false":
+        return false_value
+    return str(value)
 
-    The overlay write only covers as many rows as the new frame has; after a
-    delete the old last row would otherwise survive as a duplicate defect.
+
+def _staging_path(defect_path: Path) -> Path:
+    return defect_path.with_name(defect_path.name + _STAGING_SUFFIX)
+
+
+def _replace_defect_file(staged_path: Path, defect_path: Path) -> None:
+    """Put the finished file in place of the defect file in one step.
+
+    Writing straight into the defect file left it truncated when the write failed half way.
+    The replace also fails cleanly while the file is open in Excel, with the file untouched.
     """
-    for row in range(first_stale_row, worksheet.max_row + 1):
-        for col_idx in column_indices:
-            worksheet.cell(row=row, column=col_idx + 1).value = None
+    try:
+        staged_path.replace(defect_path)
+    except OSError:
+        staged_path.unlink(missing_ok=True)
+        raise
 
 
-def write_defect_data_to_csv(
-    sync_context: SyncContext,
+def _open_workbook_for_writing(defect_path: Path) -> Any:
+    try:
+        return openpyxl.load_workbook(defect_path)
+    except (KeyError, zipfile.BadZipFile) as exc:
+        raise ValueError(
+            f"File '{defect_path.name}' does not appear to be a valid xlsx file "
+            f"(it may be corrupted or in a different format): {exc}"
+        ) from exc
+
+
+def _save_workbook(workbook: Any, defect_path: Path) -> None:
+    staged_path = _staging_path(defect_path)
+    try:
+        workbook.save(staged_path)
+    except OSError:
+        staged_path.unlink(missing_ok=True)
+        raise
+    _replace_defect_file(staged_path, defect_path)
+
+
+def _write_row_to_excel(
     defect_path: Path,
     config: ExcelDefectClientConfig,
-    header: dict[int, str],
-    df_with_new_defect: pd.DataFrame,
-):
-    column_positions = get_column_mapping_for_config(config, sync_context)
-    if not column_positions:
-        return
+    row_position: int,
+    cells: dict[int, tuple[str, Any]],
+) -> None:
+    sheet_name = resolve_visible_sheet_name(defect_path, config)
+    file_row = config.defects_data_starting_line + row_position
+    logger.debug("Writing defect row %d to '%s' on sheet '%s'", file_row, defect_path, sheet_name)
 
-    separator = resolve_delimited_separator(defect_path, config)
-    logger.debug("Overlaying defect data to delimited file '%s'", defect_path)
+    workbook = _open_workbook_for_writing(defect_path)
+    try:
+        worksheet = workbook[sheet_name]
+        for col_idx, (col_name, value) in cells.items():
+            # A column the file does not have yet gets a header; an existing one is kept.
+            header_cell = worksheet.cell(row=config.defects_data_header_line, column=col_idx + 1)
+            if is_blank_cell(header_cell.value):
+                header_cell.value = col_name
 
-    grid_df = pd.DataFrame()
-    encoding = "utf-8"
-    if defect_path.exists() and defect_path.suffix.lower() in _DELIMITED_SUFFIXES:
-        # dtype=str and keep_default_na=False keep untouched cells byte-for-byte:
-        # no "007" -> 7, no "N/A" -> NaN -> "".
-        grid_df, encoding = _read_delimited_dataframe(
-            defect_path,
-            separator,
-            header=None,
-            dtype=str,
-            keep_default_na=False,
+            cell = worksheet.cell(row=file_row, column=col_idx + 1)
+            if isinstance(value, datetime):
+                cell.value = value
+                cell.number_format = to_excel_number_format(config.simple_date_format)
+            else:
+                cell.value = None if value == "" else value
+        _save_workbook(workbook, defect_path)
+    finally:
+        workbook.close()
+
+
+def _delete_row_from_excel(
+    defect_path: Path,
+    config: ExcelDefectClientConfig,
+    row_position: int,
+) -> None:
+    sheet_name = resolve_visible_sheet_name(defect_path, config)
+    file_row = config.defects_data_starting_line + row_position
+    logger.debug(
+        "Deleting defect row %d from '%s' on sheet '%s'", file_row, defect_path, sheet_name
+    )
+
+    workbook = _open_workbook_for_writing(defect_path)
+    try:
+        workbook[sheet_name].delete_rows(file_row, 1)
+        _save_workbook(workbook, defect_path)
+    finally:
+        workbook.close()
+
+
+def _read_delimited_grid(defect_path: Path, separator: str) -> tuple[pd.DataFrame, str]:
+    """Read a delimited file as a raw grid of strings, with the encoding to write it back in.
+
+    dtype=str and keep_default_na=False keep untouched cells byte-for-byte: no "007" -> 7,
+    no "N/A" -> NaN -> "".
+    """
+    grid_df, encoding = _read_delimited_dataframe(
+        defect_path,
+        separator,
+        header=None,
+        dtype=str,
+        keep_default_na=False,
+    )
+    # utf-8-sig also decodes plain utf-8; only write a BOM if the file had one.
+    if encoding == "utf-8-sig":
+        with defect_path.open("rb") as handle:
+            if handle.read(3) != b"\xef\xbb\xbf":
+                encoding = "utf-8"
+    return grid_df, encoding
+
+
+def _save_delimited_grid(
+    grid_df: pd.DataFrame, defect_path: Path, separator: str, encoding: str
+) -> None:
+    staged_path = _staging_path(defect_path)
+    try:
+        grid_df.to_csv(
+            staged_path,
+            mode="w",
+            index=False,
+            header=False,
+            na_rep="",
+            sep=separator,
+            encoding=encoding,
         )
-        # utf-8-sig also decodes plain utf-8; only write a BOM if the file had one.
-        if encoding == "utf-8-sig":
-            with defect_path.open("rb") as handle:
-                if handle.read(3) != b"\xef\xbb\xbf":
-                    encoding = "utf-8"
+    except OSError:
+        staged_path.unlink(missing_ok=True)
+        raise
+    _replace_defect_file(staged_path, defect_path)
+
+
+def _write_row_to_delimited(
+    defect_path: Path,
+    config: ExcelDefectClientConfig,
+    row_position: int,
+    cells: dict[int, tuple[str, Any]],
+) -> None:
+    separator = resolve_delimited_separator(defect_path, config)
+    logger.debug("Writing defect row to delimited file '%s'", defect_path)
+    grid_df, encoding = _read_delimited_grid(defect_path, separator)
 
     header_row_idx = config.defects_data_header_line - 1
-    start_row_idx = config.defects_data_starting_line - 1
-    num_new_rows = len(df_with_new_defect)
-    required_rows = max(header_row_idx + 1, start_row_idx + num_new_rows)
-
-    # Expand grid rows if necessary
+    grid_row_idx = config.defects_data_starting_line - 1 + row_position
+    required_rows = max(header_row_idx, grid_row_idx) + 1
     if len(grid_df) < required_rows:
         padding = pd.DataFrame(
             "", index=range(len(grid_df), required_rows), columns=grid_df.columns
         )
-        # Using concat to add the required empty rows to the bottom
         grid_df = pd.concat([grid_df, padding], ignore_index=True)
 
-    written_column_indices: list[int] = []
-    for col_idx, col_names in column_positions.items():
-        col_name = col_names[0]
-        if col_name not in df_with_new_defect.columns:
-            continue
-
-        original_header = header.get(col_idx + 1, col_name)
-
-        _apply_boolean_udf_write_mapping(config, df_with_new_defect, col_name)
-
+    for col_idx, (col_name, value) in cells.items():
         while col_idx >= len(grid_df.columns):
             grid_df[len(grid_df.columns)] = ""
+        if is_blank_cell(grid_df.iat[header_row_idx, col_idx]):
+            grid_df.iat[header_row_idx, col_idx] = col_name
+        grid_df.iat[grid_row_idx, col_idx] = value
 
-        # Overlay the Header at the specific coordinate
-        grid_df.iat[header_row_idx, col_idx] = original_header
-        grid_df.iloc[start_row_idx : start_row_idx + num_new_rows, col_idx] = df_with_new_defect[
-            col_name
-        ].values
-        written_column_indices.append(col_idx)
+    _save_delimited_grid(grid_df, defect_path, separator, encoding)
 
-    grid_df = _clear_stale_delimited_rows(
-        grid_df, start_row_idx + num_new_rows, written_column_indices
-    )
 
-    grid_df.to_csv(
-        defect_path,
-        mode="w",
-        index=False,
-        header=False,
-        na_rep="",
-        sep=separator,
-        encoding=encoding,
-    )
+def _delete_row_from_delimited(
+    defect_path: Path,
+    config: ExcelDefectClientConfig,
+    row_position: int,
+) -> None:
+    separator = resolve_delimited_separator(defect_path, config)
+    logger.debug("Deleting defect row from delimited file '%s'", defect_path)
+    grid_df, encoding = _read_delimited_grid(defect_path, separator)
+
+    grid_row_idx = config.defects_data_starting_line - 1 + row_position
+    if grid_row_idx >= len(grid_df):
+        return
+    grid_df = grid_df.drop(index=grid_df.index[grid_row_idx]).reset_index(drop=True)
+
+    _save_delimited_grid(grid_df, defect_path, separator, encoding)

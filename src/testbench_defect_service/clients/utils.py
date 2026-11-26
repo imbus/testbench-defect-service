@@ -1,3 +1,4 @@
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -197,15 +198,55 @@ def get_defect_client(app) -> AbstractDefectClient:
     return app.ctx.defect_client  # type: ignore
 
 
-def execute_sync_hook(project: str, sync_type: str, hook_type: str, commands: str) -> Protocol:
-    """Execute a pre-sync or post-sync hook command."""
+HOOK_EXTENSIONS = frozenset({".bat", ".sh", ".exe"})
+
+#: Placeholder the legacy DMProxy connectors replaced with the path of the project's defect
+#: file, as in `presync.manual.command="C:\hooks\export.bat" "%1"`.
+DEFECT_FILE_PLACEHOLDER = "%1"
+
+
+def split_hook_command(command: str) -> list[str]:
+    """Split a configured hook into the script and the arguments written after it.
+
+    A hook is either the bare path of a script - which may contain spaces and needs no
+    quoting - or a command line as the legacy connectors took it: the script followed by
+    arguments, each quoted where it contains a space.
+
+    Raises:
+        ValueError: When a quote is opened but not closed.
+    """
+    command = command.strip()
+    if '"' not in command and Path(command).suffix.lower() in HOOK_EXTENSIONS:
+        return [command]
+
+    # Non-POSIX rules: a backslash is part of a Windows path, not an escape character.
+    parts = shlex.split(command, posix=False)
+    return [
+        part[1:-1] if len(part) > 1 and part[0] == part[-1] and part[0] in "\"'" else part
+        for part in parts
+    ]
+
+
+def execute_sync_hook(
+    project: str,
+    sync_type: str,
+    hook_type: str,
+    commands: Any,
+    defect_file: Path | None = None,
+) -> Protocol:
+    """Execute a pre-sync or post-sync hook command.
+
+    A hook configured as a bare script path is called with the project name and the sync
+    type. One configured with its own arguments is called with exactly those, a `%1` among
+    them standing for *defect_file* - which is how the legacy connectors ran their hooks.
+    """
     logger.debug(f"Executing {hook_type} hook for project '{project}' with sync type: {sync_type}")
     protocol = Protocol()
 
     hook_commands = getattr(commands, hook_type, None)
     command_str = getattr(hook_commands, sync_type, None) if hook_commands else None
 
-    if not command_str:
+    if not command_str or not command_str.strip():
         logger.debug(f"No {hook_type} command configured for project '{project}'")
         protocol.add_success(
             key=str(project),
@@ -214,11 +255,41 @@ def execute_sync_hook(project: str, sync_type: str, hook_type: str, commands: st
         )
         return protocol
 
-    command_path = Path(command_str)
+    try:
+        command_parts = split_hook_command(command_str)
+    except ValueError as exc:
+        logger.warning(f"{hook_type} hook command could not be parsed: {command_str} ({exc})")
+        protocol.add_general_error(
+            protocol_code=ProtocolCode.PUBLISH_ERROR,
+            message=f"{hook_type.capitalize()} hook command could not be parsed: {exc}.",
+        )
+        return protocol
+
+    command_path = Path(command_parts[0])
+    arguments = command_parts[1:] or [project, sync_type]
+    if any(argument.strip() == DEFECT_FILE_PLACEHOLDER for argument in arguments):
+        if defect_file is None:
+            logger.warning(
+                f"{hook_type} hook '{command_path.name}' expects the defect file "
+                f"({DEFECT_FILE_PLACEHOLDER}), but project '{project}' has none"
+            )
+            protocol.add_general_error(
+                protocol_code=ProtocolCode.PUBLISH_ERROR,
+                message=(
+                    f"{hook_type.capitalize()} hook '{command_path.name}' expects the defect "
+                    f"file ({DEFECT_FILE_PLACEHOLDER}), but none was found for project "
+                    f"'{project}'."
+                ),
+            )
+            return protocol
+        arguments = [
+            str(defect_file) if argument.strip() == DEFECT_FILE_PLACEHOLDER else argument
+            for argument in arguments
+        ]
     logger.debug(f"Validating {hook_type} hook command: {command_path}")
 
     # Validate command file extension
-    if command_path.suffix.lower() not in {".bat", ".sh", ".exe"}:
+    if command_path.suffix.lower() not in HOOK_EXTENSIONS:
         logger.warning(f"{hook_type} hook '{command_path.name}' has unsupported file extension")
         protocol.add_general_error(
             protocol_code=ProtocolCode.PUBLISH_ERROR,
@@ -241,7 +312,7 @@ def execute_sync_hook(project: str, sync_type: str, hook_type: str, commands: st
     # Execute command
     logger.info(f"Executing {hook_type} hook command: {command_path}")
     try:
-        subprocess.run([str(command_path), project, sync_type], check=True)
+        subprocess.run([str(command_path), *arguments], check=True)
         logger.info(f"{hook_type} hook '{command_path.name}' executed successfully")
         protocol.add_success(
             key=str(project),

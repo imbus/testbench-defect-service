@@ -21,7 +21,27 @@ LEGACY_COMPOSITE_KEY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r".+\.transition\.number"),
     re.compile(r"udf\.attr\.number"),
     re.compile(r"udf\.attr\d+\..+"),
+    re.compile(r"status\.controlfield\.name"),
+    re.compile(r"(?:presync|postsync)\.(?:scheduled|manual|partial)\.command"),
 )
+
+_LEGACY_COMMAND_KEY = re.compile(r"(presync|postsync)\.(scheduled|manual|partial)\.command")
+_LEGACY_STATUS_FIELD_KEY = "status.controlfield.name"
+
+#: The DMProxy connector's sample configuration names the classification control field
+#: `class`; this service's own examples say `classification`. A TestBench project stores
+#: whichever name it was set up with, so the two are treated as one when a sync attribute is
+#: matched to a control field - the field keeps the name it was configured with.
+_CLASS_FIELD_NAMES = frozenset({"class", "classification"})
+
+
+def control_field_names_match(attribute: str | None, field_name: str) -> bool:
+    """Whether a sync attribute sent by TestBench addresses the control field *field_name*."""
+    if attribute is None:
+        return False
+    if attribute == field_name:
+        return True
+    return attribute in _CLASS_FIELD_NAMES and field_name in _CLASS_FIELD_NAMES
 
 
 def _split_csv(raw_value: Any) -> list[str]:
@@ -44,10 +64,13 @@ def _normalize_file_type(value: Any) -> str | None:
 
 
 def _normalize_control_field_name(name: str) -> str:
-    normalized_name = name.strip()
-    if normalized_name == "class":
-        return "classification"
-    return normalized_name
+    """Trim the name and nothing else.
+
+    The name is what TestBench is shown and what it sends back as the sync attribute, so it
+    must stay the one from the configuration. Rewriting `class` to `classification` here
+    broke every TestBench project still set up against the legacy connector's `class`.
+    """
+    return name.strip()
 
 
 def _parse_legacy_control_fields(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -93,29 +116,46 @@ def _control_field_owning_state(control_fields: list[dict[str, Any]], state: str
     return None
 
 
+def _index_of_control_field(control_fields: list[dict[str, Any]], name: str | None) -> int | None:
+    """Return the index of the control field called *name*, if there is one."""
+    if not name:
+        return None
+    for index, field in enumerate(control_fields):
+        field_name = _normalize_control_field_name(str(field.get("name", "")))
+        if field_name and control_field_names_match(name, field_name):
+            return index
+    return None
+
+
 def _attach_legacy_transitions(
-    normalized: dict[str, Any], legacy_transitions: dict[str, list[dict[str, str]]]
+    normalized: dict[str, Any],
+    legacy_transitions: dict[str, list[dict[str, str]]],
+    status_field_name: str | None = None,
 ) -> None:
     """Attach each legacy transition group to the control field it belongs to.
 
-    A group's key prefix is either the control field itself (`status.transition1`, the
-    spelling `docs/clients/excel-client.md` documents) or the state the transitions lead
-    away from (`New.transition1=New-InProgress`, the spelling the DMProxy connector
-    ships). State-keyed groups therefore all land on the same control field and have to
-    accumulate; a field that already declares `transitions` explicitly keeps them.
+    A group's key prefix is either the control field itself (`status.transition1`) or the
+    state the transitions lead away from (`New.transition1=New-InProgress`, the spelling the
+    DMProxy connector ships). State-keyed groups therefore all land on the same control
+    field and have to accumulate; a field that already declares `transitions` explicitly
+    keeps them.
+
+    A state-keyed group goes to the field `status.controlfield.name` names when that field
+    lists the state, which is the only place the connector looked. Without that key it goes
+    to the first field listing the state.
     """
     control_fields = [
         field for field in normalized.get("control_fields") or [] if isinstance(field, dict)
     ]
-    index_by_name = {
-        _normalize_control_field_name(str(field["name"])): index
-        for index, field in enumerate(control_fields)
-        if "name" in field
-    }
+    status_index = _index_of_control_field(control_fields, status_field_name)
 
     collected: dict[int, list[dict[str, str]]] = {}
     for prefix, transitions in legacy_transitions.items():
-        index = index_by_name.get(prefix)
+        index = _index_of_control_field(control_fields, prefix)
+        if index is None and status_index is not None:
+            status_values = control_fields[status_index].get("values") or []
+            if any(str(value) == prefix for value in status_values):
+                index = status_index
         if index is None:
             index = _control_field_owning_state(control_fields, prefix)
         if index is None:
@@ -165,12 +205,29 @@ def _parse_legacy_udfs(data: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def _parse_legacy_commands(data: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """Collect `presync.<type>.command` / `postsync.<type>.command` into a `commands` table.
+
+    The value stays the command line the connector ran, arguments and `%1` included;
+    `execute_sync_hook` is what splits it and fills in the defect file.
+    """
+    commands: dict[str, dict[str, str]] = {}
+    for key, value in data.items():
+        match = _LEGACY_COMMAND_KEY.fullmatch(str(key))
+        if not match or value in (None, ""):
+            continue
+        command = str(value).strip()
+        if command:
+            commands.setdefault(match.group(1), {})[match.group(2)] = command
+    return commands
+
+
 def _normalize_legacy_excel_config(data: dict[str, Any]) -> dict[str, Any]:
     """Fold legacy `.properties` *structures* into their modern shape.
 
     Only the composite keys need work here - the ones where several flat properties become one
-    nested model (control fields, transitions, UDFs). Legacy *scalar* keys are handled by the
-    `validation_alias=AliasChoices(<modern>, <legacy>)` declared on each field, on both
+    nested model (control fields, transitions, UDFs, sync commands). Legacy *scalar* keys are
+    handled by the `validation_alias=AliasChoices(<modern>, <legacy>)` on each field, on both
     `ExcelDefectClientConfig` and `ProjectConfig`, so they need no remapping. `TestLegacyScalarKeys`
     pins every documented scalar key against those aliases.
     """
@@ -189,12 +246,22 @@ def _normalize_legacy_excel_config(data: dict[str, Any]) -> dict[str, Any]:
                 ", ".join(sorted(legacy_transitions)),
             )
         else:
-            _attach_legacy_transitions(normalized, legacy_transitions)
+            status_field_name = data.get(_LEGACY_STATUS_FIELD_KEY)
+            _attach_legacy_transitions(
+                normalized,
+                legacy_transitions,
+                str(status_field_name).strip() if status_field_name else None,
+            )
 
     if "udfs" not in normalized:
         udfs = _parse_legacy_udfs(data)
         if udfs:
             normalized["udfs"] = udfs
+
+    if "commands" not in normalized:
+        commands = _parse_legacy_commands(data)
+        if commands:
+            normalized["commands"] = commands
 
     return normalized
 

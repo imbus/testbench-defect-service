@@ -12,23 +12,25 @@ from sanic import NotFound, ServerError
 from testbench_defect_service.clients.abstract_client import AbstractDefectClient
 from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig, ProjectConfig
 from testbench_defect_service.clients.excel.file_utils import (
+    delete_defect_row,
     read_data_frame_from_file_path,
-    write_defect_data,
+    write_defect_row,
 )
 from testbench_defect_service.clients.excel.locking import lock_defect_file
 from testbench_defect_service.clients.excel.utils import (
-    add_defect_to_dataframe,
     add_general_warning_once,
+    boolean_udf_labels,
     check_defect_transitions,
-    create_defect_data_frame,
+    defect_row_values,
     describe_ambiguous_id,
     describe_duplicated_id_rows,
     describe_write_error,
     duplicated_ids,
+    from_local_wall_time,
     is_blank_row,
+    next_defect_id,
     optional_row_value,
     parse_boolean_udf_value,
-    read_header_columns_from_file_path,
     row_value,
     split_references,
     to_python_datetime_format,
@@ -376,7 +378,6 @@ class ExcelDefectClient(AbstractDefectClient):
         protocol: Protocol,
     ) -> ProtocolledString:
         try:
-            header = read_header_columns_from_file_path(target.path, target.config)
             df = self._read_dataframe_from_disk(target, sync_context, protocol)
         except (OSError, ValueError) as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.READ_ACCESS_ERROR)
@@ -385,11 +386,19 @@ class ExcelDefectClient(AbstractDefectClient):
         if protocol.generalErrors:
             return ProtocolledString(value=None, protocol=protocol)
 
-        df_with_new_defect = add_defect_to_dataframe(defect, target.config, df, protocol)
-        new_defect_id = str(df_with_new_defect.iloc[-1]["id"])
+        try:
+            new_defect_id = next_defect_id(df, target.config)
+        except ValueError as exc:
+            protocol.add_general_error(str(exc), protocol_code=ProtocolCode.INSERT_ERROR)
+            logger.error("Failed to create defect in project '%s': %s", target.project, exc)
+            return ProtocolledString(value=None, protocol=protocol)
+
+        values = defect_row_values(defect, target.config, new_defect_id, protocol)
 
         try:
-            write_defect_data(sync_context, target.path, target.config, header, df_with_new_defect)
+            # The frame keeps every row of the file, blank ones included, so its length is
+            # the position of the first free row.
+            write_defect_row(sync_context, target.path, target.config, len(df), values)
         except (OSError, ValueError) as exc:
             message = describe_write_error(exc, target.path)
             protocol.add_general_error(message, protocol_code=ProtocolCode.INSERT_ERROR)
@@ -452,7 +461,6 @@ class ExcelDefectClient(AbstractDefectClient):
         protocol: Protocol,
     ) -> Protocol:
         try:
-            header = read_header_columns_from_file_path(target.path, target.config)
             df = self._read_dataframe_from_disk(target, sync_context, protocol)
         except (OSError, ValueError) as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.READ_ACCESS_ERROR)
@@ -489,13 +497,13 @@ class ExcelDefectClient(AbstractDefectClient):
             defect, df.loc[row_idx], target.config, sync_context, protocol
         ):
             return protocol
-        new_row_df = create_defect_data_frame(defect, target.config, defect_id, protocol)
-        new_row_df.index = row_idx
-        updated_df = df.copy()
-        updated_df.update(new_row_df)
+        values = defect_row_values(defect, target.config, defect_id, protocol)
+        # The id is what located the row; rewriting it would only reformat the cell.
+        values.pop("id", None)
+        row_position = int(df.index.get_loc(row_idx[0]))
 
         try:
-            write_defect_data(sync_context, target.path, target.config, header, updated_df)
+            write_defect_row(sync_context, target.path, target.config, row_position, values)
         except (OSError, ValueError) as exc:
             message = describe_write_error(exc, target.path)
             protocol.add_error(defect_id, message, protocol_code=ProtocolCode.PUBLISH_ERROR)
@@ -551,7 +559,6 @@ class ExcelDefectClient(AbstractDefectClient):
         protocol: Protocol,
     ) -> Protocol:
         try:
-            header = read_header_columns_from_file_path(target.path, target.config)
             df = self._read_dataframe_from_disk(target, sync_context, protocol)
         except (OSError, ValueError) as exc:
             protocol.add_general_error(str(exc), protocol_code=ProtocolCode.READ_ACCESS_ERROR)
@@ -585,10 +592,10 @@ class ExcelDefectClient(AbstractDefectClient):
             )
             return protocol
 
-        df = df.drop(index=row_idx)
+        row_position = int(df.index.get_loc(row_idx[0]))
 
         try:
-            write_defect_data(sync_context, target.path, target.config, header, df)
+            delete_defect_row(target.path, target.config, row_position)
         except (OSError, ValueError) as exc:
             message = describe_write_error(exc, target.path)
             protocol.add_general_error(message, protocol_code=ProtocolCode.PUBLISH_ERROR)
@@ -676,12 +683,31 @@ class ExcelDefectClient(AbstractDefectClient):
         return udfs
 
     def before_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
-        commands = self._get_config_value("commands", project=project)
-        return execute_sync_hook(project, sync_type, "presync", commands)
+        return self._run_sync_hook(project, sync_type, "presync")
 
     def after_sync(self, project: str, sync_type: str, sync_context: SyncContext) -> Protocol:
+        return self._run_sync_hook(project, sync_type, "postsync")
+
+    def _run_sync_hook(self, project: str, sync_type: str, hook_type: str) -> Protocol:
         commands = self._get_config_value("commands", project=project)
-        return execute_sync_hook(project, sync_type, "postsync", commands)
+        return execute_sync_hook(
+            project,
+            sync_type,
+            hook_type,
+            commands,
+            defect_file=self._find_defect_file(project),
+        )
+
+    def _find_defect_file(self, project: str) -> Path | None:
+        """The project's defect file for a hook's `%1`, or None while there is none.
+
+        A pre-sync hook may be the very thing that produces the file, so a missing one is
+        not an error here; `execute_sync_hook` complains only when a hook asks for it.
+        """
+        try:
+            return self._get_file_path(project).resolve()
+        except FileNotFoundError:
+            return None
 
     def supports_changes_timestamps(self) -> bool:
         return self.config.lastedit_column_no > 0
@@ -932,7 +958,7 @@ class ExcelDefectClient(AbstractDefectClient):
             classification=row_value(row, "classification"),
             priority=row_value(row, "priority"),
             userDefinedFields=self._build_user_defined_fields(
-                row, config, sync_context.udaSyncOptions or {}
+                row, config, sync_context.udaSyncOptions or {}, protocol, defect_id
             ),
             lastEdited=self._parse_last_edited(
                 row_value(row, "lastEdited"),
@@ -949,6 +975,8 @@ class ExcelDefectClient(AbstractDefectClient):
         row: pd.Series,
         config: ExcelDefectClientConfig,
         sync_options: dict[str, DefectFieldSyncOption],
+        protocol: Protocol | None = None,
+        defect_id: str = "",
     ) -> list[UserDefinedFieldProperties]:
         result: list[UserDefinedFieldProperties] = []
         for udf in config.udfs:
@@ -957,6 +985,26 @@ class ExcelDefectClient(AbstractDefectClient):
             has_column_value = udf.name in row.index
             value = row_value(row, udf.name) if has_column_value else udf.value
             if not has_column_value and value is None:
+                continue
+            if (
+                has_column_value
+                and udf.type is ValueType.BOOLEAN
+                and value not in ("", "true", "false")
+            ):
+                # Neither label: leave the attribute out rather than report a 'false'
+                # nobody entered, which TestBench would then take over as the value.
+                true_value, false_value = boolean_udf_labels(udf)
+                message = (
+                    f"Value '{value}' of attribute '{udf.name}' is neither '{true_value}' "
+                    f"nor '{false_value}'; the attribute is not synchronized for this defect."
+                )
+                logger.warning("Defect '%s': %s", defect_id, message)
+                if protocol:
+                    protocol.add_warning(
+                        key=defect_id,
+                        message=message,
+                        protocol_code=ProtocolCode.IMPORT_WARNING,
+                    )
                 continue
             result.append(
                 UserDefinedFieldProperties(
@@ -1008,16 +1056,12 @@ class ExcelDefectClient(AbstractDefectClient):
 
         format_string = to_python_datetime_format(config.simple_date_format)
         format_mismatch_detected = False
+        # A timestamp without a time zone is the wall-clock time of whoever keeps the file,
+        # which is how the legacy connector read it as well - not UTC.
         if format_string:
             try:
-                return cast(
-                    datetime,
-                    pd.to_datetime(
-                        raw_value,
-                        format=format_string,
-                        utc=True,
-                    ).to_pydatetime(),
-                )
+                parsed = pd.to_datetime(raw_value, format=format_string).to_pydatetime()
+                return from_local_wall_time(cast(datetime, parsed))
             except ValueError:
                 format_mismatch_detected = True
                 logger.debug(
@@ -1025,6 +1069,13 @@ class ExcelDefectClient(AbstractDefectClient):
                     raw_value,
                     config.simple_date_format,
                 )
+
+        # A real date cell arrives in ISO form with its time of day, whatever format the
+        # column is displayed in. That is not a mismatch worth warning about.
+        try:
+            return from_local_wall_time(datetime.fromisoformat(raw_value))
+        except ValueError:
+            pass
 
         parsed_fallback = pd.to_datetime(raw_value, errors="coerce", utc=False)
         if not pd.isna(parsed_fallback):
@@ -1037,10 +1088,7 @@ class ExcelDefectClient(AbstractDefectClient):
                     ),
                     ProtocolCode.IMPORT_WARNING,
                 )
-            parsed_dt = cast(datetime, parsed_fallback.to_pydatetime())
-            if parsed_dt.tzinfo is None:
-                parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
-            return parsed_dt.astimezone(timezone.utc)
+            return from_local_wall_time(cast(datetime, parsed_fallback.to_pydatetime()))
 
         if protocol:
             protocol.add_warning(

@@ -283,7 +283,15 @@ The built-in clients support running shell commands before and after TestBench s
 | `manual` | Script or executable to run during manual syncs. |
 | `partial` | Script or executable to run during partial syncs. |
 
-The process is launched via `subprocess` and the service waits for it to complete before continuing.
+The process is launched via `subprocess` and the service waits for it to complete before continuing. The script must be a `.bat`, `.sh` or `.exe` file.
+
+Each value is either the bare path of a script, which is then called with the project name and the sync type as arguments, or a command line: the script followed by its own arguments, each quoted where it contains a space. A command line is run with exactly the arguments written. For the Excel client an argument `%1` is replaced by the full path of the project's defect file:
+
+```toml
+manual = '"C:\scripts\export.bat" "%1"'
+```
+
+A hook that cannot be run, or that exits with a non-zero code, is reported as an error in the sync protocol.
 
 **Example:**
 

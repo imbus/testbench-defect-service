@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import openpyxl
@@ -11,12 +12,11 @@ from testbench_defect_service.clients.excel.config import (
     UserDefiendAttributes,
 )
 from testbench_defect_service.clients.excel.file_utils import (
-    _apply_boolean_udf_write_mapping,
+    _cell_value,
+    delete_defect_row,
     map_boolean_values,
     read_data_frame_from_file_path,
-    write_defect_data,
-    write_defect_data_to_csv,
-    write_defect_data_to_excel,
+    write_defect_row,
 )
 from testbench_defect_service.clients.excel.utils import is_blank_row
 from testbench_defect_service.models.defects import Protocol, SyncContext, ValueType
@@ -63,114 +63,222 @@ def header() -> dict[int, str]:
     return {1: "Defect ID", 2: "Title"}
 
 
+def _save_workbook(path: Path, rows: list[list[object]], sheet_name: str = "Sheet1") -> None:
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.title = sheet_name
+    for row in rows:
+        worksheet.append(row)
+    workbook.save(path)
+
+
+def _sheet(path: Path, sheet_name: str = "Sheet1"):
+    return openpyxl.load_workbook(path)[sheet_name]
+
+
 @pytest.mark.unit
-class TestWriteDefectDataToExcel:
-    def test_new_file_uses_write_mode(
+class TestWriteDefectRowToExcel:
+    """A write touches the row it is about and leaves every other cell as it was."""
+
+    def test_update_writes_only_the_addressed_row(
         self,
         tmp_path: Path,
         config: ExcelDefectClientConfig,
         sync_context: SyncContext,
-        df: pd.DataFrame,
-        header: dict[int, str],
     ):
-        defect_path = tmp_path / "output.xlsx"
-        assert not defect_path.exists()
+        defect_path = tmp_path / "defects.xlsx"
+        stamp = datetime(2024, 1, 2, 3, 4, 5)  # noqa: DTZ001 - Excel cells are naive
+        _save_workbook(
+            defect_path,
+            [["id", "title", "notes"], ["D-1", "Bug", 7], ["D-2", "Other", stamp]],
+        )
 
-        with (
-            patch(f"{_MODULE}.pd.ExcelWriter") as mock_excel_writer,
-            patch(f"{_MODULE}.resolve_visible_sheet_name", return_value="Sheet1"),
-            patch(f"{_MODULE}._clear_stale_excel_rows"),
-            patch.object(pd.DataFrame, "to_excel"),
-        ):
-            write_defect_data_to_excel(sync_context, defect_path, config, header, df)
+        write_defect_row(sync_context, defect_path, config, 0, {"title": "Changed"})
 
-        mock_excel_writer.assert_called_once()
-        call_kwargs = mock_excel_writer.call_args.kwargs
-        assert call_kwargs["engine"] == "openpyxl"
-        assert "mode" not in call_kwargs
-        assert "if_sheet_exists" not in call_kwargs
+        sheet = _sheet(defect_path)
+        assert [cell.value for cell in sheet[2]] == ["D-1", "Changed", 7]
+        # The untouched row keeps its cell types - a date stays a date, not text.
+        assert [cell.value for cell in sheet[3]] == ["D-2", "Other", stamp]
 
-    def test_existing_xlsx_uses_append_mode_with_overlay(
+    def test_position_past_the_last_row_appends_a_defect(
         self,
         tmp_path: Path,
         config: ExcelDefectClientConfig,
         sync_context: SyncContext,
-        df: pd.DataFrame,
-        header: dict[int, str],
     ):
-        defect_path = tmp_path / "existing.xlsx"
-        defect_path.write_bytes(b"")
+        defect_path = tmp_path / "defects.xlsx"
+        _save_workbook(defect_path, [["id", "title"], ["D-1", "Bug"], ["D-2", "Other"]])
 
-        with (
-            patch(f"{_MODULE}.pd.ExcelWriter") as mock_excel_writer,
-            patch(f"{_MODULE}.resolve_visible_sheet_name", return_value="Sheet1"),
-            patch(f"{_MODULE}._clear_stale_excel_rows"),
-            patch.object(pd.DataFrame, "to_excel"),
-        ):
-            write_defect_data_to_excel(sync_context, defect_path, config, header, df)
+        write_defect_row(sync_context, defect_path, config, 2, {"id": "D-3", "title": "New"})
 
-        mock_excel_writer.assert_called_once()
-        call_kwargs = mock_excel_writer.call_args.kwargs
-        assert call_kwargs["engine"] == "openpyxl"
-        assert call_kwargs["mode"] == "a"
-        assert call_kwargs["if_sheet_exists"] == "overlay"
+        sheet = _sheet(defect_path)
+        assert sheet.max_row == 4
+        assert [cell.value for cell in sheet[2]] == ["D-1", "Bug"]
+        assert [cell.value for cell in sheet[4]] == ["D-3", "New"]
 
-    def test_xls_target_raises_without_opening_writer(
+    def test_existing_header_is_kept_and_a_missing_one_is_filled(
         self,
         tmp_path: Path,
         config: ExcelDefectClientConfig,
         sync_context: SyncContext,
-        df: pd.DataFrame,
-        header: dict[int, str],
+    ):
+        defect_path = tmp_path / "defects.xlsx"
+        _save_workbook(defect_path, [["Defect ID"], ["D-1"]])
+
+        write_defect_row(sync_context, defect_path, config, 0, {"title": "Bug"})
+
+        sheet = _sheet(defect_path)
+        assert sheet["A1"].value == "Defect ID"
+        assert sheet["B1"].value == "title"
+        assert sheet["B2"].value == "Bug"
+
+    def test_last_edited_becomes_a_date_cell_in_local_time(
+        self,
+        tmp_path: Path,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        defect_path = tmp_path / "defects.xlsx"
+        _save_workbook(defect_path, [["id", "title", "edited"], ["D-1", "Bug", None]])
+        dated_config = config.model_copy(
+            update={"lastedit_column_no": 3, "simple_date_format": "dd.MM.yyyy"}
+        )
+        edited = datetime(2026, 11, 26, 14, 30, 5, tzinfo=timezone.utc)
+
+        write_defect_row(sync_context, defect_path, dated_config, 0, {"lastEdited": edited})
+
+        cell = _sheet(defect_path)["C2"]
+        # A real date with its time of day, shown in the configured format.
+        assert cell.value == edited.astimezone().replace(tzinfo=None)
+        assert cell.number_format == "dd.mm.yyyy"
+
+    def test_empty_value_clears_the_cell(
+        self,
+        tmp_path: Path,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        defect_path = tmp_path / "defects.xlsx"
+        _save_workbook(defect_path, [["id", "title"], ["D-1", "Bug"]])
+
+        write_defect_row(sync_context, defect_path, config, 0, {"title": ""})
+
+        assert _sheet(defect_path)["B2"].value is None
+
+    def test_xls_target_raises_and_leaves_the_file_untouched(
+        self,
+        tmp_path: Path,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
     ):
         defect_path = tmp_path / "existing.xls"
         original_bytes = b"\xd0\xcf\x11\xe0legacy-xls-content"
         defect_path.write_bytes(original_bytes)
 
-        with (
-            patch(f"{_MODULE}.pd.ExcelWriter") as mock_excel_writer,
-            pytest.raises(ValueError, match=r"\.xls"),
-        ):
-            write_defect_data_to_excel(sync_context, defect_path, config, header, df)
+        with pytest.raises(ValueError, match=r"\.xls"):
+            write_defect_row(sync_context, defect_path, config, 0, {"title": "Bug"})
+        with pytest.raises(ValueError, match=r"\.xls"):
+            delete_defect_row(defect_path, config, 0)
 
-        mock_excel_writer.assert_not_called()
         assert defect_path.read_bytes() == original_bytes
 
-    def test_none_column_positions_returns_early_without_writing(
+    @pytest.mark.parametrize("column_positions", [None, {}])
+    def test_no_column_mapping_returns_without_touching_the_file(
         self,
         tmp_path: Path,
         config: ExcelDefectClientConfig,
         sync_context: SyncContext,
-        df: pd.DataFrame,
-        header: dict[int, str],
+        column_positions: dict | None,
     ):
-        defect_path = tmp_path / "output.xlsx"
+        defect_path = tmp_path / "defects.xlsx"
+        _save_workbook(defect_path, [["id", "title"], ["D-1", "Bug"]])
+        original_bytes = defect_path.read_bytes()
 
-        with (
-            patch(f"{_MODULE}.get_column_mapping_for_config", return_value=None),
-            patch(f"{_MODULE}.pd.ExcelWriter") as mock_excel_writer,
-        ):
-            write_defect_data_to_excel(sync_context, defect_path, config, header, df)
+        with patch(f"{_MODULE}.get_column_mapping_for_config", return_value=column_positions):
+            write_defect_row(sync_context, defect_path, config, 0, {"title": "Changed"})
 
-        mock_excel_writer.assert_not_called()
+        assert defect_path.read_bytes() == original_bytes
 
-    def test_empty_column_positions_returns_early_without_writing(
+    def test_no_staging_file_is_left_behind(
         self,
         tmp_path: Path,
         config: ExcelDefectClientConfig,
         sync_context: SyncContext,
-        df: pd.DataFrame,
-        header: dict[int, str],
     ):
-        defect_path = tmp_path / "output.xlsx"
+        defect_path = tmp_path / "defects.xlsx"
+        _save_workbook(defect_path, [["id", "title"], ["D-1", "Bug"]])
+
+        write_defect_row(sync_context, defect_path, config, 0, {"title": "Changed"})
+
+        assert [entry.name for entry in tmp_path.iterdir()] == ["defects.xlsx"]
+
+    def test_failed_replace_keeps_the_file_and_removes_the_staging_file(
+        self,
+        tmp_path: Path,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        """What happens while the file is open in Excel: the write is refused as a whole."""
+        defect_path = tmp_path / "defects.xlsx"
+        _save_workbook(defect_path, [["id", "title"], ["D-1", "Bug"]])
+        original_bytes = defect_path.read_bytes()
 
         with (
-            patch(f"{_MODULE}.get_column_mapping_for_config", return_value={}),
-            patch(f"{_MODULE}.pd.ExcelWriter") as mock_excel_writer,
+            patch(f"{_MODULE}.Path.replace", side_effect=PermissionError(13, "denied")),
+            pytest.raises(PermissionError),
         ):
-            write_defect_data_to_excel(sync_context, defect_path, config, header, df)
+            write_defect_row(sync_context, defect_path, config, 0, {"title": "Changed"})
 
-        mock_excel_writer.assert_not_called()
+        assert defect_path.read_bytes() == original_bytes
+        assert [entry.name for entry in tmp_path.iterdir()] == ["defects.xlsx"]
+
+    def test_delete_removes_the_whole_row_including_unmapped_columns(
+        self,
+        tmp_path: Path,
+        config: ExcelDefectClientConfig,
+    ):
+        defect_path = tmp_path / "defects.xlsx"
+        _save_workbook(
+            defect_path,
+            [
+                ["id", "title", "notes"],
+                ["D-1", "Bug", "n1"],
+                ["D-2", "Other", "n2"],
+                ["D-3", "Third", "n3"],
+            ],
+        )
+
+        delete_defect_row(defect_path, config, 1)
+
+        sheet = _sheet(defect_path)
+        assert sheet.max_row == 3
+        assert [cell.value for cell in sheet[2]] == ["D-1", "Bug", "n1"]
+        # The note moves up with its defect instead of staying behind for the next one.
+        assert [cell.value for cell in sheet[3]] == ["D-3", "Third", "n3"]
+
+    def test_row_position_counts_blank_rows_like_the_reader_does(
+        self,
+        tmp_path: Path,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        """The position handed to the writer comes from the frame the reader built, so the
+        two have to agree on where a row is - also past an empty row in the middle."""
+        defect_path = tmp_path / "defects.xlsx"
+        _save_workbook(
+            defect_path,
+            [["id", "title"], ["D-1", "Bug"], [None, None], ["D-2", "Other"]],
+        )
+
+        df = read_data_frame_from_file_path(defect_path, config, sync_context, Protocol())
+        position = df["id"].tolist().index("D-2")
+        write_defect_row(sync_context, defect_path, config, position, {"title": "Changed"})
+
+        sheet = _sheet(defect_path)
+        assert sheet["A4"].value == "D-2"
+        assert sheet["B4"].value == "Changed"
+        assert sheet["B2"].value == "Bug"
 
 
 @pytest.mark.unit
@@ -319,50 +427,39 @@ class TestReadDataFrameFromFilePath:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def two_row_df() -> pd.DataFrame:
-    return pd.DataFrame({"id": ["D-1", "D-2"], "title": ["Bug", "New"]})
-
-
 @pytest.mark.unit
-class TestWriteDefectDataToCsvFormats:
+class TestWriteDefectRowToDelimited:
+    NEW_DEFECT: ClassVar[dict[str, str]] = {"id": "D-2", "title": "New"}
+
     def test_semicolon_separator_preserves_file_structure(
         self,
         tmp_path: Path,
         config: ExcelDefectClientConfig,
         sync_context: SyncContext,
-        two_row_df: pd.DataFrame,
-        header: dict[int, str],
     ):
         defect_path = tmp_path / "defects.csv"
         defect_path.write_text("id;title\nD-1;Bug\n", encoding="utf-8")
         semicolon_config = config.model_copy(update={"separator": ";"})
 
-        write_defect_data_to_csv(
-            sync_context, defect_path, semicolon_config, {1: "id", 2: "title"}, two_row_df
-        )
+        write_defect_row(sync_context, defect_path, semicolon_config, 1, self.NEW_DEFECT)
 
         lines = defect_path.read_text(encoding="utf-8").splitlines()
-        assert lines[0] == "id;title"
-        assert lines[1] == "D-1;Bug"
-        assert lines[2] == "D-2;New"
+        assert lines == ["id;title", "D-1;Bug", "D-2;New"]
 
-    def test_unmapped_na_like_values_are_preserved(
+    def test_update_changes_only_the_addressed_row(
         self,
         tmp_path: Path,
         config: ExcelDefectClientConfig,
         sync_context: SyncContext,
-        two_row_df: pd.DataFrame,
     ):
         defect_path = tmp_path / "defects.csv"
-        defect_path.write_text("id,title,notes\nD-1,Bug,N/A\n", encoding="utf-8")
+        defect_path.write_text("id,title,notes\nD-1,Bug,007\nD-2,Other,N/A\n", encoding="utf-8")
 
-        write_defect_data_to_csv(
-            sync_context, defect_path, config, {1: "id", 2: "title"}, two_row_df
-        )
+        write_defect_row(sync_context, defect_path, config, 0, {"title": "Changed"})
 
-        content = defect_path.read_text(encoding="utf-8")
-        assert "N/A" in content
+        lines = defect_path.read_text(encoding="utf-8").splitlines()
+        # Unmapped cells survive byte for byte: no "007" -> 7, no "N/A" -> empty.
+        assert lines == ["id,title,notes", "D-1,Changed,007", "D-2,Other,N/A"]
 
     def test_windows_1252_file_is_written_back_in_same_encoding(
         self,
@@ -372,9 +469,8 @@ class TestWriteDefectDataToCsvFormats:
     ):
         defect_path = tmp_path / "defects.csv"
         defect_path.write_bytes("id,title\nD-1,Käfer\n".encode("windows-1252"))
-        df = pd.DataFrame({"id": ["D-1", "D-2"], "title": ["Käfer", "New"]})
 
-        write_defect_data_to_csv(sync_context, defect_path, config, {1: "id", 2: "title"}, df)
+        write_defect_row(sync_context, defect_path, config, 1, self.NEW_DEFECT)
 
         content = defect_path.read_bytes().decode("windows-1252")
         assert "Käfer" in content
@@ -385,15 +481,12 @@ class TestWriteDefectDataToCsvFormats:
         tmp_path: Path,
         config: ExcelDefectClientConfig,
         sync_context: SyncContext,
-        two_row_df: pd.DataFrame,
     ):
         defect_path = tmp_path / "defects.csv"
         defect_path.write_text("id,title\nD-1,Bug\n", encoding="utf-8")
         no_separator_config = config.model_copy(update={"separator": None})
 
-        write_defect_data_to_csv(
-            sync_context, defect_path, no_separator_config, {1: "id", 2: "title"}, two_row_df
-        )
+        write_defect_row(sync_context, defect_path, no_separator_config, 1, self.NEW_DEFECT)
 
         lines = defect_path.read_text(encoding="utf-8").splitlines()
         assert lines[0] == "id,title"
@@ -404,102 +497,91 @@ class TestWriteDefectDataToCsvFormats:
         tmp_path: Path,
         config: ExcelDefectClientConfig,
         sync_context: SyncContext,
-        two_row_df: pd.DataFrame,
     ):
         defect_path = tmp_path / "defects.txt"
         defect_path.write_text("id,title,notes\nD-1,Bug,keep-me\n", encoding="utf-8")
 
-        write_defect_data_to_csv(
-            sync_context, defect_path, config, {1: "id", 2: "title"}, two_row_df
-        )
+        write_defect_row(sync_context, defect_path, config, 1, self.NEW_DEFECT)
 
         content = defect_path.read_text(encoding="utf-8")
         assert "keep-me" in content
         assert "D-2" in content
 
-    def test_stale_trailing_row_is_cleared_after_delete(
-        self,
-        tmp_path: Path,
-        config: ExcelDefectClientConfig,
-        sync_context: SyncContext,
-        two_row_df: pd.DataFrame,
-    ):
-        defect_path = tmp_path / "defects.csv"
-        defect_path.write_text(
-            "id,title\nD-1,Bug\nD-2,New\nD-3,Deleted\n",
-            encoding="utf-8",
-        )
-
-        write_defect_data_to_csv(
-            sync_context, defect_path, config, {1: "id", 2: "title"}, two_row_df
-        )
-
-        content = defect_path.read_text(encoding="utf-8")
-        assert "D-3" not in content
-        assert "Deleted" not in content
-
-
-@pytest.mark.unit
-class TestWriteDefectDataDispatch:
     def test_tsv_is_written_tab_separated(
         self,
         tmp_path: Path,
         config: ExcelDefectClientConfig,
         sync_context: SyncContext,
-        two_row_df: pd.DataFrame,
     ):
         defect_path = tmp_path / "defects.tsv"
         defect_path.write_text("id\ttitle\nD-1\tBug\n", encoding="utf-8")
 
-        write_defect_data(sync_context, defect_path, config, {1: "id", 2: "title"}, two_row_df)
+        write_defect_row(sync_context, defect_path, config, 1, self.NEW_DEFECT)
 
         lines = defect_path.read_text(encoding="utf-8").splitlines()
         assert lines[0] == "id\ttitle"
         assert lines[2] == "D-2\tNew"
+
+    def test_last_edited_is_written_as_text_in_local_time(
+        self,
+        tmp_path: Path,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        defect_path = tmp_path / "defects.csv"
+        defect_path.write_text("id,title,edited\nD-1,Bug,\n", encoding="utf-8")
+        dated_config = config.model_copy(
+            update={"lastedit_column_no": 3, "simple_date_format": "dd.MM.yyyy HH:mm:ss"}
+        )
+        edited = datetime(2026, 11, 26, 14, 30, 5, tzinfo=timezone.utc)
+
+        write_defect_row(sync_context, defect_path, dated_config, 0, {"lastEdited": edited})
+
+        expected = edited.astimezone().strftime("%d.%m.%Y %H:%M:%S")
+        assert defect_path.read_text(encoding="utf-8").splitlines()[1] == f"D-1,Bug,{expected}"
+
+    def test_delete_removes_the_row_with_its_unmapped_columns(
+        self,
+        tmp_path: Path,
+        config: ExcelDefectClientConfig,
+    ):
+        defect_path = tmp_path / "defects.csv"
+        defect_path.write_text(
+            "id,title,notes\nD-1,Bug,n1\nD-2,Deleted,n2\nD-3,Third,n3\n",
+            encoding="utf-8",
+        )
+
+        delete_defect_row(defect_path, config, 1)
+
+        lines = defect_path.read_text(encoding="utf-8").splitlines()
+        assert lines == ["id,title,notes", "D-1,Bug,n1", "D-3,Third,n3"]
+
+    def test_no_staging_file_is_left_behind(
+        self,
+        tmp_path: Path,
+        config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        defect_path = tmp_path / "defects.csv"
+        defect_path.write_text("id,title\nD-1,Bug\n", encoding="utf-8")
+
+        write_defect_row(sync_context, defect_path, config, 1, self.NEW_DEFECT)
+
+        assert [entry.name for entry in tmp_path.iterdir()] == ["defects.csv"]
 
     def test_unsupported_suffix_raises_value_error(
         self,
         tmp_path: Path,
         config: ExcelDefectClientConfig,
         sync_context: SyncContext,
-        two_row_df: pd.DataFrame,
     ):
         defect_path = tmp_path / "defects.ods"
         defect_path.write_text("irrelevant", encoding="utf-8")
 
         with pytest.raises(ValueError, match="Unsupported file format"):
-            write_defect_data(sync_context, defect_path, config, {1: "id", 2: "title"}, two_row_df)
-
-
-@pytest.mark.unit
-class TestWriteDefectDataToExcelStaleRows:
-    def test_stale_trailing_row_is_cleared_after_delete(
-        self,
-        tmp_path: Path,
-        config: ExcelDefectClientConfig,
-        sync_context: SyncContext,
-        two_row_df: pd.DataFrame,
-    ):
-        defect_path = tmp_path / "defects.xlsx"
-        workbook = openpyxl.Workbook()
-        worksheet = workbook.active
-        assert worksheet is not None
-        worksheet.title = "Sheet1"
-        worksheet.append(["id", "title"])
-        worksheet.append(["D-1", "Bug"])
-        worksheet.append(["D-2", "New"])
-        worksheet.append(["D-3", "Deleted"])
-        workbook.save(defect_path)
-
-        write_defect_data_to_excel(
-            sync_context, defect_path, config, {1: "id", 2: "title"}, two_row_df
-        )
-
-        saved = openpyxl.load_workbook(defect_path)
-        sheet = saved["Sheet1"]
-        assert sheet["A4"].value in (None, "")
-        assert sheet["B4"].value in (None, "")
-        assert sheet["A3"].value == "D-2"
+            write_defect_row(sync_context, defect_path, config, 0, self.NEW_DEFECT)
+        with pytest.raises(ValueError, match="Unsupported file format"):
+            delete_defect_row(defect_path, config, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -509,25 +591,34 @@ class TestWriteDefectDataToExcelStaleRows:
 
 @pytest.mark.unit
 class TestLoadDataFrameFormats:
-    def test_excel_datetime_cells_use_configured_date_format(
+    def test_last_edited_date_cell_keeps_its_time_of_day(
         self,
         tmp_path: Path,
         config: ExcelDefectClientConfig,
         sync_context: SyncContext,
     ):
+        """`simple_date_format` is how the column is displayed; the cell knows the time too.
+        Cutting it off made a change later on the day of the last sync look older than it."""
         defect_path = tmp_path / "defects.xlsx"
-        workbook = openpyxl.Workbook()
-        worksheet = workbook.active
-        assert worksheet is not None
-        worksheet.title = "Sheet1"
-        worksheet.append(["id", "title", "edited"])
-        worksheet.append(["D-1", "Bug", datetime(2024, 1, 5)])  # noqa: DTZ001 - Excel cells are naive
-        workbook.save(defect_path)
-        date_config = config.model_copy(update={"lastedit_column_no": 3})
+        _save_workbook(
+            defect_path,
+            [
+                ["id", "title", "edited", "due"],
+                ["D-1", "Bug", datetime(2024, 1, 5, 13, 45, 10), datetime(2024, 2, 1, 8, 0)],  # noqa: DTZ001 - Excel cells are naive
+            ],
+        )
+        date_config = config.model_copy(
+            update={
+                "lastedit_column_no": 3,
+                "udfs": [UserDefiendAttributes(name="due", column=4, type=ValueType.STRING)],
+            }
+        )
 
         df = read_data_frame_from_file_path(defect_path, date_config, sync_context)
 
-        assert df["lastEdited"].iloc[0] == "2024-01-05"
+        assert df["lastEdited"].iloc[0] == "2024-01-05 13:45:10"
+        # Any other date column is still rendered the way the file shows it.
+        assert df["due"].iloc[0] == "2024-02-01"
 
     def test_boolean_udf_maps_when_header_differs_from_udf_name(
         self,
@@ -680,19 +771,46 @@ class TestBooleanUdfBlankPreservation:
         assert df["isOpen"].tolist() == ["true", "false", "", ""]
 
     def test_write_mapping_keeps_blank_cells_blank(self, boolean_config: ExcelDefectClientConfig):
-        df = pd.DataFrame({"isOpen": ["true", "false", ""]})
+        written = [
+            _cell_value(boolean_config, "isOpen", value, as_text=True)
+            for value in ["true", "false", ""]
+        ]
 
-        _apply_boolean_udf_write_mapping(boolean_config, df, "isOpen")
-
-        assert df["isOpen"].tolist() == ["1-yes", "2-no", ""]
+        assert written == ["1-yes", "2-no", ""]
 
     def test_blank_boolean_cell_round_trips_as_blank(self, boolean_config: ExcelDefectClientConfig):
         df = pd.DataFrame({"isOpen": ["1-yes", ""]})
 
         map_boolean_values(boolean_config, df)
-        _apply_boolean_udf_write_mapping(boolean_config, df, "isOpen")
+        written = [
+            _cell_value(boolean_config, "isOpen", value, as_text=True)
+            for value in df["isOpen"].tolist()
+        ]
 
-        assert df["isOpen"].tolist() == ["1-yes", ""]
+        assert written == ["1-yes", ""]
+
+    def test_cell_with_neither_label_is_not_turned_into_false(
+        self, boolean_config: ExcelDefectClientConfig
+    ):
+        """'maybe' is not 'no'. Reporting it as false would hand TestBench a value nobody
+        entered; the cell is passed on as it is and the defect builder reports it."""
+        df = pd.DataFrame({"isOpen": ["1-yes", "maybe"]})
+
+        map_boolean_values(boolean_config, df)
+
+        assert df["isOpen"].tolist() == ["true", "maybe"]
+
+    def test_labels_default_to_true_and_false(self, config: ExcelDefectClientConfig):
+        """Without configured labels the cells hold 'true' and 'false', as in the legacy
+        connector - not a blank for true and 'false' for everything read."""
+        config.udfs = [UserDefiendAttributes(name="isOpen", column=3, type=ValueType.BOOLEAN)]
+        df = pd.DataFrame({"isOpen": ["true", "false", ""]})
+
+        map_boolean_values(config, df)
+
+        assert df["isOpen"].tolist() == ["true", "false", ""]
+        assert _cell_value(config, "isOpen", "true", as_text=True) == "true"
+        assert _cell_value(config, "isOpen", "false", as_text=True) == "false"
 
     def test_empty_row_stays_blank_through_a_read_with_a_boolean_udf(
         self,

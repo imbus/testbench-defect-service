@@ -1,6 +1,7 @@
 import csv
 import math
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -8,7 +9,12 @@ import openpyxl
 import pandas as pd
 import xlrd
 
-from testbench_defect_service.clients.excel.config import ExcelDefectClientConfig, Transition
+from testbench_defect_service.clients.excel.config import (
+    ExcelDefectClientConfig,
+    Transition,
+    UserDefiendAttributes,
+    control_field_names_match,
+)
 from testbench_defect_service.log import logger
 from testbench_defect_service.models.defects import (
     Defect,
@@ -52,11 +58,11 @@ def get_column_mapping_for_config(
     class_column_no = None
 
     for control_field in config.control_fields:
-        if sync_context.statusAttribute == control_field.name:
+        if control_field_names_match(sync_context.statusAttribute, control_field.name):
             status_column_no = control_field.column_number
-        if sync_context.priorityAttribute == control_field.name:
+        if control_field_names_match(sync_context.priorityAttribute, control_field.name):
             priority_column_no = control_field.column_number
-        if sync_context.classAttribute == control_field.name:
+        if control_field_names_match(sync_context.classAttribute, control_field.name):
             class_column_no = control_field.column_number
 
     if _add_missing_control_field_errors(
@@ -402,25 +408,65 @@ def _first_defect_number(config: ExcelDefectClientConfig) -> int:
         return 1
 
 
+def next_defect_id(df: pd.DataFrame, config: ExcelDefectClientConfig) -> str:
+    """The id for the next defect created in this file.
+
+    Existing ids are recognised as the prefix, optional whitespace and digits, which is how
+    the legacy connector matched them: a file numbered `Bug 0112` keeps counting whether the
+    prefix is configured as `Bug ` or as `Bug`.
+
+    Raises:
+        ValueError: When the next number no longer fits into the configured digit count.
+            Handing out a longer id instead would break the id format the file relies on.
+    """
+    prefix = config.id_prefix
+    id_pattern = re.compile(rf"{re.escape(prefix)}\s*(\d+)")
+    numeric_ids = [
+        int(match.group(1))
+        for id_val in df["id"]
+        if (match := id_pattern.fullmatch(str(id_val).strip()))
+    ]
+    next_number = max(numeric_ids) + 1 if numeric_ids else _first_defect_number(config)
+
+    digits = config.defect_id_digit_numbers
+    if digits > 0 and next_number > 10**digits - 1:
+        raise ValueError(
+            f"Cannot create a new defect id: number {next_number} does not fit into the "
+            f"configured {digits} digit(s). Raise 'defect_id_digit_numbers' to continue."
+        )
+
+    logger.debug("Assigning new defect ID '%s%d' (prefix: '%s')", prefix, next_number, prefix)
+    return prefix + str(next_number).rjust(digits, "0")
+
+
 def add_defect_to_dataframe(
     defect: Defect,
     config: ExcelDefectClientConfig,
     df: pd.DataFrame,
     protocol: Protocol,
 ) -> pd.DataFrame:
-    prefix = config.id_prefix
-    numeric_ids = [
-        int(id_val[len(prefix) :])
-        for id_val in df["id"]
-        if id_val.startswith(prefix) and id_val[len(prefix) :].isdigit()
-    ]
-    next_number = max(numeric_ids) + 1 if numeric_ids else _first_defect_number(config)
-    logger.debug("Assigning new defect ID '%s%d' (prefix: '%s')", prefix, next_number, prefix)
-    defect_id = config.id_prefix + str(next_number).rjust(config.defect_id_digit_numbers, "0")
+    defect_id = next_defect_id(df, config)
 
     defect_info_data_frame = create_defect_data_frame(defect, config, defect_id, protocol)
 
     return pd.concat([df, defect_info_data_frame], ignore_index=True)
+
+
+def defect_row_values(
+    defect: Defect,
+    config: ExcelDefectClientConfig,
+    defect_id: str,
+    protocol: Protocol,
+) -> dict[str, Any]:
+    """The cells one defect occupies, keyed by logical field name.
+
+    `lastEdited` stays a datetime here: only the writer knows whether the target can hold a
+    real date cell or needs it rendered as text.
+    """
+    frame = create_defect_data_frame(defect, config, defect_id, protocol)
+    values: dict[str, Any] = {str(name): frame[name].iloc[0] for name in frame.columns}
+    values["lastEdited"] = defect.lastEdited
+    return values
 
 
 def _cell_for_optional_field(value: str | None) -> str:
@@ -463,6 +509,36 @@ def create_defect_data_frame(
     return defect_info_data_frame
 
 
+def to_local_wall_time(value: datetime) -> datetime:
+    """Render an aware timestamp as the naive wall-clock time of the machine running this.
+
+    A date in a spreadsheet carries no time zone; whoever reads the file takes it as local
+    time, and so did the legacy connector. Writing UTC wall-clock time instead put every
+    timestamp off by the UTC offset for the people looking at the file.
+    """
+    if value.tzinfo is None:
+        return value
+    return value.astimezone().replace(tzinfo=None)
+
+
+def from_local_wall_time(value: datetime) -> datetime:
+    """Read a naive spreadsheet timestamp as local time and return it as aware UTC."""
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc)
+    try:
+        return value.astimezone().astimezone(timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        # Outside what the platform can convert (Windows rejects dates before 1970).
+        return value.replace(tzinfo=timezone.utc)
+
+
+def to_excel_number_format(simple_date_format: str | None) -> str:
+    """Translate the configured date pattern into the number format of an Excel date cell."""
+    if not simple_date_format:
+        return "yyyy-mm-dd hh:mm:ss"
+    return simple_date_format.replace("MM", "mm").replace("HH", "hh")
+
+
 def _format_last_edited(
     value: datetime | None,
     config: ExcelDefectClientConfig,
@@ -471,7 +547,7 @@ def _format_last_edited(
         return ""
     format_string = to_python_datetime_format(config.simple_date_format)
     if format_string:
-        return value.strftime(format_string)
+        return to_local_wall_time(value).strftime(format_string)
     return value.isoformat()
 
 
@@ -608,6 +684,11 @@ def add_general_warning_once(
     protocol.add_general_warning(message, protocol_code=protocol_code)
 
 
+def boolean_udf_labels(udf: UserDefiendAttributes) -> tuple[str, str]:
+    """The cell contents standing for true and false, `true`/`false` unless configured."""
+    return udf.trueValue or "true", udf.falseValue or "false"
+
+
 def logical_field_names(sync_context: SyncContext) -> dict[str, str]:
     """Map each configured sync attribute name to the logical defect field it feeds."""
     mapping = {
@@ -618,6 +699,14 @@ def logical_field_names(sync_context: SyncContext) -> dict[str, str]:
     return {name: logical for name, logical in mapping.items() if name is not None}
 
 
+def logical_field_for(control_field_name: str, sync_context: SyncContext) -> str | None:
+    """The logical defect field a control field feeds under this sync context, if any."""
+    for attribute, logical in logical_field_names(sync_context).items():
+        if control_field_names_match(attribute, control_field_name):
+            return logical
+    return None
+
+
 def validate_control_fields(
     defect: Defect,
     config: ExcelDefectClientConfig,
@@ -625,11 +714,10 @@ def validate_control_fields(
     protocol: Protocol,
 ) -> bool:
     logical_names = logical_field_names(sync_context)
-    required_attributes = set(logical_names)
     validated: set[str] = set()
 
     for control_field in config.control_fields:
-        logical = logical_names.get(control_field.name)
+        logical = logical_field_for(control_field.name, sync_context)
         if logical is None:
             continue
         value = getattr(defect, logical)
@@ -643,9 +731,11 @@ def validate_control_fields(
                 protocol_code=ProtocolCode.PUBLISH_ERROR,
             )
             return False
-        validated.add(control_field.name)
+        validated.add(logical)
 
-    missing_attributes = required_attributes - validated
+    missing_attributes = {
+        attribute for attribute, logical in logical_names.items() if logical not in validated
+    }
     if missing_attributes:
         # Without this the caller aborts with an empty protocol, leaving TestBench to report
         # a failed defect with no reason attached.
@@ -684,13 +774,16 @@ def _check_transitions_for_field(  # noqa
         for transition in transitions
     ):
         return True
-    protocol.add_warning(
-        key=str(new_value),
+    # An error, not a warning: the update is refused, and a refusal reported as a mere
+    # warning leaves TestBench believing the defect was published.
+    defect_id = str(df["id"].values[0]) if "id" in df.columns else str(new_value)
+    protocol.add_error(
+        key=defect_id,
         message=(
             f"No valid transition from '{current_value}' to '{new_value}' is configured "
             f"for control field '{display_name}'."
         ),
-        protocol_code=ProtocolCode.INSERT_WARNING,
+        protocol_code=ProtocolCode.INVALID_ATTRIBUTES,
     )
     return False
 
@@ -702,11 +795,10 @@ def check_defect_transitions(
     sync_context: SyncContext,
     protocol: Protocol,
 ) -> bool:
-    logical_names = logical_field_names(sync_context)
     status_has_own_transitions = False
 
     for control_field in config.control_fields:
-        logical_name = logical_names.get(control_field.name)
+        logical_name = logical_field_for(control_field.name, sync_context)
         if logical_name is None or not control_field.transitions:
             continue
         if logical_name == "status":

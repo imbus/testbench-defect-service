@@ -24,6 +24,7 @@ from testbench_defect_service.clients.excel.utils import (
     is_blank_row,
     logical_field_names,
     map_and_rename_columns,
+    next_defect_id,
     optional_row_value,
     parse_boolean_udf_value,
     read_header_columns_from_file_path,
@@ -1221,7 +1222,7 @@ class TestCheckDefectTransitions:
         assert result is True
         assert not protocol.warnings
 
-    def test_invalid_transition_returns_false_and_adds_warning(self) -> None:
+    def test_invalid_transition_returns_false_and_adds_error(self) -> None:
         defect = _make_defect(status="Done")
         config = self._make_config_with_transitions(
             [
@@ -1234,13 +1235,15 @@ class TestCheckDefectTransitions:
         result = check_defect_transitions(defect, df, config, _make_sync_context(), protocol)
 
         assert result is False
-        assert protocol.warnings is not None
-        assert "Done" in protocol.warnings
-        warning = protocol.warnings["Done"][0]
-        assert warning.message is not None
-        assert "New" in warning.message
-        assert "Done" in warning.message
-        assert warning.code == ProtocolCode.INSERT_WARNING
+        # A refused update is an error: as a warning TestBench took it for published.
+        assert not protocol.warnings
+        assert protocol.errors is not None
+        assert "Done" in protocol.errors
+        error = protocol.errors["Done"][0]
+        assert error.message is not None
+        assert "New" in error.message
+        assert "Done" in error.message
+        assert error.code == ProtocolCode.INVALID_ATTRIBUTES
 
     def test_matching_transition_among_multiple_returns_true(self) -> None:
         defect = _make_defect(status="Done")
@@ -1272,8 +1275,8 @@ class TestCheckDefectTransitions:
         result = check_defect_transitions(defect, df, config, _make_sync_context(), protocol)
 
         assert result is False
-        assert protocol.warnings is not None
-        assert "Done" in protocol.warnings
+        assert protocol.errors is not None
+        assert "Done" in protocol.errors
 
     def test_same_status_transition_allowed_when_configured(self) -> None:
         defect = _make_defect(status="New")
@@ -1353,13 +1356,13 @@ class TestCheckDefectTransitions:
         )
 
         assert result is False
-        assert protocol.warnings is not None
-        warning = protocol.warnings["Low"][0]
-        assert warning.message is not None
-        assert "priority" in warning.message
-        assert "High" in warning.message
-        assert "Low" in warning.message
-        assert warning.code == ProtocolCode.INSERT_WARNING
+        assert protocol.errors is not None
+        error = protocol.errors["Low"][0]
+        assert error.message is not None
+        assert "priority" in error.message
+        assert "High" in error.message
+        assert "Low" in error.message
+        assert error.code == ProtocolCode.INVALID_ATTRIBUTES
 
     def test_control_field_without_transitions_allows_any_change(self) -> None:
         defect = _make_defect(priority="Low")
@@ -1481,5 +1484,51 @@ class TestCheckDefectTransitions:
         )
 
         assert rejected_result is False
-        assert rejected_protocol.warnings is not None
-        assert "InProgress" in rejected_protocol.warnings
+        assert rejected_protocol.errors is not None
+        assert "InProgress" in rejected_protocol.errors
+
+
+# ---------------------------------------------------------------------------
+# Tests: next_defect_id
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestNextDefectId:
+    @staticmethod
+    def _config(**overrides: Any) -> ExcelDefectClientConfig:
+        return _make_config([]).model_copy(update=overrides)
+
+    @pytest.mark.parametrize(
+        ("prefix", "expected"),
+        [("Bug ", "Bug 0118"), ("Bug", "Bug0118")],
+    )
+    def test_numbering_continues_across_whitespace_after_the_prefix(
+        self, prefix: str, expected: str
+    ) -> None:
+        """The legacy connector matched ids as prefix, optional whitespace, digits. A file
+        numbered `Bug 0117` must not start over at 1 because the prefix lost its space."""
+        config = self._config(id_prefix=prefix, defect_id_digit_numbers=4)
+        df = pd.DataFrame({"id": ["Bug 0112", "Bug 0117", "Other-9000", ""]})
+
+        assert next_defect_id(df, config) == expected
+
+    def test_an_empty_file_starts_at_the_configured_value(self) -> None:
+        config = self._config(
+            id_prefix="D-", defect_id_digit_numbers=3, defect_id_starting_value="42"
+        )
+
+        assert next_defect_id(pd.DataFrame({"id": []}), config) == "D-042"
+
+    def test_a_number_that_outgrows_the_digit_count_is_refused(self) -> None:
+        config = self._config(id_prefix="D-", defect_id_digit_numbers=2)
+        df = pd.DataFrame({"id": ["D-99"]})
+
+        with pytest.raises(ValueError, match="does not fit"):
+            next_defect_id(df, config)
+
+    def test_a_prefix_with_regex_characters_is_taken_literally(self) -> None:
+        config = self._config(id_prefix="A.B(", defect_id_digit_numbers=2)
+        df = pd.DataFrame({"id": ["A.B(07", "AxB(50"]})
+
+        assert next_defect_id(df, config) == "A.B(08"

@@ -93,6 +93,8 @@ class _LegacyLineFormat(NamedTuple):
     other_source_type: str
     #: Whether `key: {` ... `}` blocks are read, flattened to dotted keys.
     nested_blocks: bool = False
+    #: Keys whose value keeps its trailing whitespace, because the wrapper read it untrimmed.
+    untrimmed_keys: frozenset[str] = frozenset()
 
 
 _CONF_LINE_FORMAT = _LegacyLineFormat(
@@ -114,6 +116,9 @@ _PROPERTIES_LINE_FORMAT = _LegacyLineFormat(
     other_separator=":",
     other_description="a Jira .conf file",
     other_source_type="jira",
+    # `defect.id.prefix=Bug ` ends in a space on purpose: the connector built ids as prefix
+    # plus number, so trimming it would number the next defect `Bug0118` after `Bug 0117`.
+    untrimmed_keys=frozenset({"defect.id.prefix"}),
 )
 
 
@@ -152,14 +157,20 @@ def _track_block(line: str, blocks: list[str], location: str) -> bool:
     return False
 
 
-def _split_entry(line: str, line_format: _LegacyLineFormat) -> tuple[str, str]:
-    """Split a `key<separator>value` *line* into its stripped key and value."""
+def _split_entry(line: str, line_format: _LegacyLineFormat, raw_line: str) -> tuple[str, str]:
+    """Split a `key<separator>value` *line* into its stripped key and value.
+
+    The value of an `untrimmed_keys` entry is taken from *raw_line* instead, so that it keeps
+    the trailing whitespace the stripped *line* no longer has.
+    """
     raw_key, raw_value = line.split(line_format.separator, 1)
     key = raw_key.strip()
     value = raw_value.strip()
     if line_format.strip_quotes:
         key = key.removeprefix('"').removesuffix('"')
         value = value.removeprefix('"').removesuffix('"')
+    if key in line_format.untrimmed_keys:
+        value = raw_line.split(line_format.separator, 1)[1].lstrip()
     return key, value
 
 
@@ -202,7 +213,7 @@ def _parse_legacy_file(file_path: Path, line_format: _LegacyLineFormat) -> dict[
                 f"{_wrong_format_hint(line, line_format)}"
             )
 
-        key, value = _split_entry(line, line_format)
+        key, value = _split_entry(line, line_format, raw_line)
         key = ".".join([*blocks, key])
 
         previous = config.get(key)

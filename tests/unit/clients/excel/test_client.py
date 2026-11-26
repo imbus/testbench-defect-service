@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+import openpyxl
 import pytest
 from sanic import NotFound, ServerError
 
@@ -12,13 +13,16 @@ from testbench_defect_service.clients.excel.config import (
     ExcelDefectClientConfig,
     ProjectConfig,
     Transition,
+    UserDefiendAttributes,
 )
 from testbench_defect_service.models.config import PhaseCommands, SyncCommandConfig
 from testbench_defect_service.models.defects import (
     Defect,
+    DefectFieldSyncOption,
     Login,
     ProtocolCode,
     SyncContext,
+    ValueType,
 )
 
 
@@ -170,7 +174,7 @@ def test_create_defect_returns_null_id_when_file_is_locked(
         raise PermissionError(13, "Permission denied", str(locked_path))
 
     monkeypatch.setattr(
-        "testbench_defect_service.clients.excel.client.write_defect_data",
+        "testbench_defect_service.clients.excel.client.write_defect_row",
         raise_permission_error,
     )
     client = ExcelDefectClient(syncable_config)
@@ -195,7 +199,7 @@ def test_create_defect_reports_locked_file_hint_when_permission_is_denied(
         raise PermissionError(13, "Permission denied", str(locked_path))
 
     monkeypatch.setattr(
-        "testbench_defect_service.clients.excel.client.write_defect_data",
+        "testbench_defect_service.clients.excel.client.write_defect_row",
         raise_permission_error,
     )
     client = ExcelDefectClient(syncable_config)
@@ -222,17 +226,40 @@ def test_create_defect_explains_why_when_a_sync_attribute_has_no_control_field(
         iTBProject="itb",
         statusAttribute="status",
         priorityAttribute="priority",
-        classAttribute="class",  # config exposes this control field as 'classification'
+        classAttribute="severity",  # the config has no control field of that name
     )
 
     result = client.create_defect("demo", defect, sync_context)
 
     assert result.value is None
     assert result.protocol.errors
-    assert "class" in result.protocol.errors
-    message = result.protocol.errors["class"][0].message
+    assert "severity" in result.protocol.errors
+    message = result.protocol.errors["severity"][0].message
     assert message is not None
     assert "not configured as a control field" in message
+
+
+@pytest.mark.unit
+def test_class_attribute_of_a_legacy_project_reaches_the_classification_field(
+    syncable_config: ExcelDefectClientConfig,
+    defect: Defect,
+):
+    """A TestBench project set up against the legacy connector sends `class`. It must keep
+    working against a config that calls the control field `classification`."""
+    client = ExcelDefectClient(syncable_config)
+    sync_context = SyncContext(
+        iTBProject="itb",
+        statusAttribute="status",
+        priorityAttribute="priority",
+        classAttribute="class",
+    )
+
+    listed = client.get_defects("demo", sync_context)
+    created = client.create_defect("demo", defect, sync_context)
+
+    assert not listed.protocol.generalErrors
+    assert [d.classification for d in listed.value] == ["Bug"]
+    assert created.value is not None
 
 
 @pytest.mark.unit
@@ -280,7 +307,7 @@ def test_update_defect_does_not_poison_buffer_when_write_fails(
         raise PermissionError(13, "Permission denied", str(defect_path))
 
     monkeypatch.setattr(
-        "testbench_defect_service.clients.excel.client.write_defect_data",
+        "testbench_defect_service.clients.excel.client.write_defect_row",
         raise_permission_error,
     )
     client = ExcelDefectClient(syncable_config)
@@ -1368,3 +1395,223 @@ class TestBufferCleanupThreadSizing:
         )
 
         assert self._started_thread_args(config) == (120.0, 1800.0)
+
+
+# ---------------------------------------------------------------------------
+# Parity with the legacy DMProxy Excel connector
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestLegacyHookCommandLine:
+    @staticmethod
+    def _script(tmp_path: Path) -> Path:
+        script = tmp_path / "hook.bat"
+        script.write_text("@echo off", encoding="utf-8")
+        return script
+
+    def test_percent_one_becomes_the_projects_defect_file(
+        self,
+        syncable_config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+        tmp_path: Path,
+    ):
+        script = self._script(tmp_path)
+        syncable_config.commands = PhaseCommands(
+            presync=SyncCommandConfig(manual=f'"{script}" "%1"')
+        )
+        client = ExcelDefectClient(syncable_config)
+        defect_file = (syncable_config.excel_file_path / "demo" / "defects.csv").resolve()
+
+        with patch("testbench_defect_service.clients.utils.subprocess.run") as run:
+            protocol = client.before_sync("demo", "manual", sync_context)
+
+        run.assert_called_once_with([str(script), str(defect_file)], check=True)
+        assert protocol.successes
+
+    def test_percent_one_for_a_project_without_a_file_is_reported(
+        self,
+        syncable_config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+        tmp_path: Path,
+    ):
+        script = self._script(tmp_path)
+        syncable_config.commands = PhaseCommands(
+            postsync=SyncCommandConfig(manual=f'"{script}" "%1"')
+        )
+        client = ExcelDefectClient(syncable_config)
+
+        with patch("testbench_defect_service.clients.utils.subprocess.run") as run:
+            protocol = client.after_sync("no-such-project", "manual", sync_context)
+
+        run.assert_not_called()
+        assert protocol.generalErrors
+
+
+@pytest.mark.unit
+class TestLastEditedIsLocalTime:
+    """A timestamp in a defect file has no time zone; it is the wall-clock time of whoever
+    keeps the file, which is how the legacy connector read and wrote it."""
+
+    def test_a_timestamp_in_the_file_is_read_as_local_time(
+        self,
+        syncable_config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        client = ExcelDefectClient(syncable_config)
+
+        result = client.get_defects("demo", sync_context)
+
+        local_midnight = datetime(2024, 1, 1).astimezone()
+        assert result.value[0].lastEdited == local_midnight
+
+    def test_a_created_defect_reads_back_with_the_timestamp_it_was_given(
+        self,
+        syncable_config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+        defect: Defect,
+    ):
+        syncable_config.simple_date_format = "yyyy-MM-dd HH:mm:ss"
+        defect.lastEdited = datetime(2024, 5, 1, 10, 20, 30, tzinfo=timezone.utc)
+        client = ExcelDefectClient(syncable_config)
+
+        created = client.create_defect("demo", defect, sync_context)
+        by_id = {d.id.root: d for d in client.get_defects("demo", sync_context).value}
+
+        assert created.value is not None
+        assert by_id[created.value].lastEdited == defect.lastEdited
+
+    def test_a_date_cell_keeps_its_time_under_a_date_only_format(
+        self,
+        tmp_path: Path,
+        syncable_config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        project_path = tmp_path / "dated"
+        project_path.mkdir()
+        workbook = openpyxl.Workbook()
+        worksheet = workbook.active
+        assert worksheet is not None
+        worksheet.append(
+            ["id", "title", "refs", "reporter", "edited", "description", "status", "prio", "cls"]
+        )
+        edited = datetime(2024, 3, 4, 15, 16, 17)  # noqa: DTZ001 - Excel cells are naive
+        worksheet.append(
+            ["D-0001", "Demo", None, "Alice", edited, "Example", "Open", "High", "Bug"]
+        )
+        workbook.save(project_path / "defects.xlsx")
+        syncable_config.file_type = ".xlsx"
+        syncable_config.simple_date_format = "dd.MM.yyyy"
+        client = ExcelDefectClient(syncable_config)
+
+        result = client.get_defects("dated", sync_context)
+
+        assert result.value[0].lastEdited == edited.astimezone()
+        assert not result.protocol.generalWarnings
+
+
+@pytest.mark.unit
+class TestBooleanAttributeWithUnknownCell:
+    @pytest.fixture
+    def boolean_config(self, syncable_config: ExcelDefectClientConfig) -> ExcelDefectClientConfig:
+        (syncable_config.excel_file_path / "demo" / "defects.csv").write_text(
+            "id,title,references,reporter,lastEdited,description,status,priority,classification,"
+            "isOpen\n"
+            "D-0001,One,,Alice,2024-01-01,Example,Open,High,Bug,yes\n"
+            "D-0002,Two,,Alice,2024-01-01,Example,Open,High,Bug,maybe\n",
+            encoding="utf-8",
+        )
+        syncable_config.udfs = [
+            UserDefiendAttributes(
+                name="isOpen", column=10, type=ValueType.BOOLEAN, trueValue="yes", falseValue="no"
+            )
+        ]
+        return syncable_config
+
+    def test_the_attribute_is_left_out_and_the_cell_is_reported(
+        self,
+        boolean_config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+    ):
+        """'maybe' must not reach TestBench as false - it would be taken over as the value."""
+        sync_context.udaSyncOptions = {"isOpen": DefectFieldSyncOption.TIMESTAMP}
+        client = ExcelDefectClient(boolean_config)
+
+        result = client.get_defects("demo", sync_context)
+
+        fields = {
+            d.id.root: [(f.name, f.value) for f in d.userDefinedFields or []] for d in result.value
+        }
+        assert fields == {"D-0001": [("isOpen", "true")], "D-0002": []}
+        assert result.protocol.warnings is not None
+        message = result.protocol.warnings["D-0002"][0].message
+        assert message is not None
+        assert "maybe" in message
+        assert "isOpen" in message
+
+    def test_writing_another_defect_leaves_the_unknown_cell_alone(
+        self,
+        boolean_config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+        defect: Defect,
+    ):
+        client = ExcelDefectClient(boolean_config)
+
+        protocol = client.update_defect("demo", "D-0001", defect, sync_context)
+
+        assert protocol.successes
+        lines = (boolean_config.excel_file_path / "demo" / "defects.csv").read_text("utf-8")
+        assert lines.splitlines()[2].endswith(",maybe")
+
+
+@pytest.mark.unit
+class TestDefectIdNumbering:
+    def test_an_id_that_outgrows_the_digit_count_is_refused(
+        self,
+        syncable_config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+        defect: Defect,
+    ):
+        defect_path = syncable_config.excel_file_path / "demo" / "defects.csv"
+        defect_path.write_text(
+            "id,title,references,reporter,lastEdited,description,status,priority,classification\n"
+            "D-9,Demo,,Alice,2024-01-01,Example,Open,High,Bug\n",
+            encoding="utf-8",
+        )
+        original = defect_path.read_bytes()
+        syncable_config.defect_id_digit_numbers = 1
+        client = ExcelDefectClient(syncable_config)
+
+        result = client.create_defect("demo", defect, sync_context)
+
+        assert result.value is None
+        assert result.protocol.generalErrors is not None
+        assert [entry.code for entry in result.protocol.generalErrors] == [
+            ProtocolCode.INSERT_ERROR
+        ]
+        assert defect_path.read_bytes() == original
+
+    def test_update_writes_only_the_defects_own_row(
+        self,
+        syncable_config: ExcelDefectClientConfig,
+        sync_context: SyncContext,
+        defect: Defect,
+    ):
+        defect_path = syncable_config.excel_file_path / "demo" / "defects.csv"
+        defect_path.write_text(
+            "id,title,references,reporter,lastEdited,description,status,priority,classification,"
+            "notes\n"
+            "D-0001,One,,Alice,2024-01-01,Example,Open,High,Bug,007\n"
+            "D-0002,Two,,Bob,2024-01-02 ,Other, Open,High,Bug,N/A\n",
+            encoding="utf-8",
+        )
+        client = ExcelDefectClient(syncable_config)
+
+        protocol = client.update_defect("demo", "D-0001", defect, sync_context)
+
+        assert protocol.successes
+        lines = defect_path.read_text("utf-8").splitlines()
+        assert lines[1].startswith("D-0001,")
+        assert lines[1].endswith(",007")
+        # Byte for byte, stray spaces included: this row was not the one being updated.
+        assert lines[2] == "D-0002,Two,,Bob,2024-01-02 ,Other, Open,High,Bug,N/A"

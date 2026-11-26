@@ -6,6 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ---
 
+## Unreleased
+
+Brings the Excel client in line with the legacy DMProxy Excel connector it replaces.
+
+### Changed
+
+- Excel client: a write now touches only the row it is about. Creating a defect appends a
+  row, updating one writes that row's mapped cells, deleting one removes the whole row.
+  Before, every mapped column of every row was rewritten as text, which turned the dates
+  and numbers of an entire workbook into strings on the first defect created.
+- Excel client: the changed file is written next to the original and then put in its place
+  in one step, so a failed write — the workbook being open in Excel, for instance — leaves
+  the file as it was.
+- Excel client: a timestamp without a time zone is read and written as the local time of
+  the machine running the service, as the legacy connector did, instead of as UTC. In an
+  `.xlsx` file the last-edited value is written as a real date cell.
+- Excel client: a real date cell in the last-edited column keeps its time of day. With a
+  date-only `simple_date_format` such as `dd.MM.yyyy` the time used to be cut off, so a
+  change made later on the day of the last sync looked older than the sync.
+- Excel client: a control field keeps the name it is configured with. `class` is no longer
+  renamed to `classification`; a sync attribute `class` or `classification` reaches the
+  field under either name, so TestBench projects set up against the legacy connector keep
+  working.
+- Excel client: a status change that no configured transition allows is reported as an
+  `INVALID_ATTRIBUTES` error instead of an `INSERT_WARNING`. The update was already
+  refused; as a warning it could pass for published.
+- Excel client: a boolean attribute cell that matches neither `trueValue` nor `falseValue`
+  is no longer read as `false`. The attribute is left out of that defect with a warning,
+  and the cell is left alone when other defects are written.
+- Sync hooks: a hook can be a command line with its own arguments, and the Excel client
+  replaces `%1` with the path of the project's defect file — the form the legacy connector
+  used. A bare script path still receives the project name and the sync type.
+
+### Added
+
+- Excel client: the legacy keys `presync.<type>.command` / `postsync.<type>.command` and
+  `status.controlfield.name` are read, from a `.properties` file and by `migrate`.
+- Excel client: creating a defect fails with an error when the next number no longer fits
+  into `defect_id_digit_numbers`, instead of handing out a longer ID.
+
+### Fixed
+
+- Excel client: boolean attributes without `trueValue` / `falseValue` now use `true` /
+  `false` as documented. Before, `true` was written as an empty cell and every cell was
+  read as `false`.
+- Excel client: existing IDs are recognised across whitespace between prefix and number,
+  so a file numbered `Bug 0117` no longer starts over at 1 when the prefix is `Bug`.
+- `migrate`: the trailing space of `defect.id.prefix=Bug ` survives the conversion.
+  Trimmed, the defect after `Bug 0117` was created as `Bug0118`.
+- `migrate`: sync commands and `status.controlfield.name` are carried over instead of
+  being reported as lost.
+
+---
+
 ## [0.4.0][0.4.0] - 2026-08-21
 
 ### Added
