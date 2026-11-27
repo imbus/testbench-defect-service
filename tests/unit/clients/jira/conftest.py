@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import Mock
 
@@ -184,7 +184,7 @@ def sample_defect() -> Any:
             UserDefinedFieldProperties(name="Custom Field 1", value="Value 1"),
             UserDefinedFieldProperties(name="Tags", value="tag1, tag2, tag3"),
         ],
-        lastEdited=datetime.now(timezone.utc),
+        lastEdited=datetime.now(UTC),
         principal=Login(username="test", password="test"),
     )
 
@@ -205,7 +205,7 @@ def sample_defect_with_id() -> Any:
             UserDefinedFieldProperties(name="Custom Field 1", value="Value 1"),
             UserDefinedFieldProperties(name="Custom Field 2", value="Value 2"),
         ],
-        lastEdited=datetime.now(timezone.utc),
+        lastEdited=datetime.now(UTC),
         references=["https://example.com/file1.png"],
         principal=Login(username="test", password="test"),
     )

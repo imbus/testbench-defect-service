@@ -1,6 +1,7 @@
 import json
 import sys
-from datetime import datetime, timezone
+import tomllib
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -8,11 +9,6 @@ import click
 import javaproperties
 import tomli_w
 from pydantic import ValidationError
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 try:
     import javaproperties  # type: ignore[import-not-found]
@@ -249,7 +245,7 @@ def create_config_backup_file(config_path: Path) -> Path:
     """Create a timestamped backup of the existing config file."""
     backup_path = Path(f"{config_path}.backup")
     if backup_path.exists():
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         backup_path = Path(f"{config_path}.backup.{timestamp}")
     config_path.rename(backup_path)
     return backup_path

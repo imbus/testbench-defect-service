@@ -1,7 +1,7 @@
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal, TypedDict, get_args, get_origin
+from typing import Any, Literal, TypedDict, cast, get_args, get_origin
 
 import click
 import questionary
@@ -170,7 +170,7 @@ def get_field_type(field_info: FieldInfo) -> type:
         non_none_types = [arg for arg in args if arg is not type(None)]
         if non_none_types:
             return non_none_types[0]  # type: ignore[no-any-return]
-    return field_type  # type: ignore[return-value]
+    return cast(type, field_type)
 
 
 def prompt_with_validation(

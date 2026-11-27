@@ -15,7 +15,6 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_sub
 # Collect everything from packages that use dynamic internal imports.
 # collect_all() = collect_data_files + collect_binaries + collect_submodules,
 sanic_datas, sanic_binaries, sanic_hiddenimports = collect_all("sanic")
-sanic_ext_datas, sanic_ext_binaries, sanic_ext_hiddenimports = collect_all("sanic_ext")
 questionary_datas, questionary_binaries, questionary_hiddenimports = collect_all("questionary")
 
 # Package data files (openapi.yaml, static/swagger-ui, readers/jsonl/schemas, …)
@@ -27,17 +26,15 @@ datas = (
     pkg_datas
     + tracerite_datas
     + sanic_datas
-    + sanic_ext_datas
     + questionary_datas
     # Bundle dist-info for packages whose pip name differs from the importable module
     # name (e.g. beautifulsoup4 → bs4). Without this, importlib.metadata.distribution()
     # fails in the frozen exe and dependencies.py wrongly reports them as missing.
     + copy_metadata("beautifulsoup4")
 )
-binaries = sanic_binaries + sanic_ext_binaries + questionary_binaries
+binaries = sanic_binaries + questionary_binaries
 hiddenimports = (
     sanic_hiddenimports
-    + sanic_ext_hiddenimports
     + questionary_hiddenimports
     + collect_submodules("testbench_defect_service")
     + [

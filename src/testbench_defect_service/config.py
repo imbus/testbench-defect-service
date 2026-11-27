@@ -48,12 +48,6 @@ class AppConfig(Config):
 
         # Sanic-specific settings
         self.FALLBACK_ERROR_FORMAT = "json"
-        self.OAS_UI_DEFAULT = "swagger"
-        self.OAS_UI_REDOC = False
-        self.OAS_CUSTOM_FILE = (Path(__file__).parent / "openapi.yaml").resolve().as_posix()
-        self.OAS_PATH_TO_SWAGGER_HTML = (
-            (Path(__file__).parent / "static/swagger-ui/index.html").resolve().as_posix()
-        )
 
         # Load and validate config from file
         self.CONFIG_PATH = resolve_config_file_path(config_path)

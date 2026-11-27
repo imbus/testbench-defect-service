@@ -54,18 +54,18 @@ class DefectToJiraMapper:
                 ``"id"`` for Cloud (accountId), ``"name"`` for Data Center (username).
         """
         fields: dict[str, Any] = {}
-        # User-defined fields
+        synced_udas = sync_context.udaSyncOptions or {}
         if defect.userDefinedFields:
             for udf in defect.userDefinedFields:
-                if udf.value:
+                if udf.value and udf.name in synced_udas:
                     self._set_field(fields, udf.name, udf.value, allowed)
 
         # Standard fields
-        self._set_field(fields, "summary", str(defect.title) or "", allowed)
+        self._set_field(fields, "summary", defect.title or "", allowed)
         self._set_field(
             fields,
             "description",
-            str(defect.description) or "",
+            defect.description or "",
             allowed,
         )
 

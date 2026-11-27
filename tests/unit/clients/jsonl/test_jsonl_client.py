@@ -1,6 +1,6 @@
 import json
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -65,7 +65,7 @@ def sample_defect() -> Defect:
         status="Open",
         classification="Bug",
         priority="High",
-        lastEdited=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        lastEdited=datetime(2024, 1, 1, tzinfo=UTC),
         principal=Login(username="user", password="pass"),
     )
 
@@ -92,7 +92,7 @@ def _make_defect_with_id(defect_id: str = "D-1") -> DefectWithID:
         status="Open",
         classification="Bug",
         priority="High",
-        lastEdited=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        lastEdited=datetime(2024, 1, 1, tzinfo=UTC),
         principal=Login(username="u", password="p"),
     )
 
@@ -105,7 +105,7 @@ def _make_known_defect(defect_id: str = "D-1") -> KnownDefect:
         status="Open",
         classification="Bug",
         priority="High",
-        lastEdited=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        lastEdited=datetime(2024, 1, 1, tzinfo=UTC),
         principal=Login(username="u", password="p"),
     )
 
@@ -624,7 +624,7 @@ class TestCorrectSyncResults:
             status="Open",
             classification="Bug",
             priority="High",
-            lastEdited=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            lastEdited=datetime(2024, 1, 1, tzinfo=UTC),
             principal=Login(username="u", password="p"),
         )
         body = Results(remote=RemoteSyncActions(create=[defect]))

@@ -33,7 +33,7 @@ DEFAULT_SPEC = REPO_ROOT / "testbench-defect-service.spec"
 DIST_DIR = REPO_ROOT / "dist"
 BUILD_DIR = REPO_ROOT / "build"
 
-MIN_PYTHON = (3, 10)
+MIN_PYTHON = (3, 11)
 
 
 def _check_python_version() -> None:

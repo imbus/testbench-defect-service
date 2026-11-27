@@ -1,8 +1,8 @@
 import json
 import os
-import sys
 import threading
 import time
+import tomllib
 from pathlib import Path
 from urllib import error, request
 from urllib.parse import urlencode
@@ -10,11 +10,6 @@ from urllib.parse import urlencode
 import tomli_w
 
 from testbench_defect_service.utils.credentials import open_private_file
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 token_store: dict[str, str | float] = {
     "access_token": "YOUR_CURRENT_ACCESS_TOKEN",
