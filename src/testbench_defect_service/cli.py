@@ -13,10 +13,12 @@ from testbench_defect_service.app import AppConfig, create_app
 from testbench_defect_service.log import logger, setup_logging
 from testbench_defect_service.utils.config import load_service_config, resolve_config_file_path
 from testbench_defect_service.utils.config_wizard import (
+    CREDENTIAL_STORAGES,
     configure_client_only,
     configure_credentials_only,
     configure_service_only,
     run_full_wizard,
+    set_client_credential,
     show_main_menu,
     view_current_config,
 )
@@ -278,9 +280,35 @@ def set_credentials(config_path, username, password):
     configure_credentials_only(config_path, username=username, password=password)
 
 
+@click.command()
+@click.argument("variable", required=False)
+@click.option(
+    "--path",
+    "config_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    metavar="PATH",
+    default="config.toml",
+    help="Path to the app config file",
+)
+@click.option(
+    "--storage",
+    type=click.Choice(CREDENTIAL_STORAGES),
+    help="How to store the value in .env: plain text, or encrypted with Windows DPAPI for "
+    "the current user or for this machine  [default: asks on Windows, plain elsewhere]",
+)
+def set_client_credential_command(variable: str | None, config_path: Path, storage: str | None):
+    """Set or replace a client credential (e.g. JIRA_PASSWORD) in .env.
+
+    VARIABLE is the credential's environment variable; it is asked for if omitted.
+    The value is always prompted for, never passed on the command line.
+    """
+    set_client_credential(config_path, variable, storage)
+
+
 cli.add_command(init)
 cli.add_command(configure)
 cli.add_command(set_credentials)
+cli.add_command(set_client_credential_command, name="set-client-credential")
 cli.add_command(start)
 
 if __name__ == "__main__":

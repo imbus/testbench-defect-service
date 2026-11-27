@@ -29,10 +29,18 @@ CREDENTIAL_ENV_VARS = [
 @pytest.fixture(autouse=True)
 def _clean_jira_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in [*CREDENTIAL_ENV_VARS, "JIRA_USERNAME"]:
-        for name in (var, f"{var}_FILE"):
+        for name in (var, f"{var}_FILE", f"{var}_DPAPI"):
             # setenv first so monkeypatch records the original state and restores it on teardown
             monkeypatch.setenv(name, "")
             monkeypatch.delenv(name)
+
+
+@pytest.fixture(autouse=True)
+def _plain_storage_without_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On Windows the wizard asks how to store credentials; answer "plain text" by default."""
+    monkeypatch.setattr(
+        config_wizard, "choose_credential_storage", lambda: config_wizard.STORAGE_PLAIN
+    )
 
 
 _WIZARD = "testbench_defect_service.utils.config_wizard"
@@ -55,7 +63,9 @@ def _mock_questionary(select_answer: str, text_answers: list[str], confirm_answe
 
 @pytest.mark.unit
 def test_wizard_refresh_token_path_returns_pasted_token() -> None:
-    questionary = _mock_questionary("Enter a refresh token (Jira Cloud)", ["pasted-refresh-token"])
+    questionary = _mock_questionary("Enter a refresh token (Jira Cloud)", [])
+    # The refresh token is a credential: it is asked for with a masked prompt.
+    questionary.password.return_value.ask.return_value = "pasted-refresh-token"
     with patch(f"{_WIZARD}.questionary", questionary):
         result = run_jira_oauth_wizard(_DC_CLIENT_CONFIG)
 

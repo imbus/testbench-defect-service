@@ -102,7 +102,7 @@ Set the credentials (for example `JIRA_PASSWORD` for basic auth) via environment
 
 ### Credentials
 
-Credentials are read from environment variables, from a `.env` file in the working directory (or a parent directory; if none is found there, the installation directory is searched as before), or from a secret file named by a `<VARIABLE>_FILE` variable. The configuration wizard never writes them to `config.toml`, and a value set in the environment (or in a `_FILE`) overrides a value found in `config.toml` (or in a separate client config file).
+Credentials are read from environment variables, from a `.env` file in the working directory (or a parent directory; if none is found there, the installation directory is searched as before), or from a secret file named by a `<VARIABLE>_FILE` variable. On Windows a credential can also be stored encrypted in a `<VARIABLE>_DPAPI` variable (see [Encrypted credentials on Windows](#encrypted-credentials-on-windows-_dpapi)). The configuration wizard never writes them to `config.toml`, and a value set in the environment (or in a `_FILE` or `_DPAPI` variable) overrides a value found in `config.toml` (or in a separate client config file).
 
 | Variable | `_FILE` variant | Used for |
 |----------|-----------------|----------|
@@ -112,6 +112,8 @@ Credentials are read from environment variables, from a `.env` file in the worki
 | `JIRA_OAUTH1_ACCESS_TOKEN` | `JIRA_OAUTH1_ACCESS_TOKEN_FILE` | OAuth1 access token |
 | `JIRA_OAUTH1_ACCESS_TOKEN_SECRET` | `JIRA_OAUTH1_ACCESS_TOKEN_SECRET_FILE` | OAuth1 access token secret |
 | `JIRA_OAUTH1_KEY_CERT` | `JIRA_OAUTH1_KEY_CERT_FILE` | OAuth1 private key (PEM content; prefer `JIRA_OAUTH1_KEY_CERT_PATH`) |
+
+Each variable also has a `_DPAPI` variant (`JIRA_PASSWORD_DPAPI`, …) for a value encrypted on Windows.
 
 An empty variable counts as unset.
 
@@ -134,19 +136,54 @@ JIRA_PASSWORD_FILE=/run/secrets/jira_password
 
 - The file must be UTF-8. Exactly one trailing newline (`\n` or `\r\n`) is removed, so a file written with `echo` works as is. `JIRA_OAUTH1_KEY_CERT_FILE` is the exception: the PEM content is used unchanged.
 - `start` refuses to start if the file cannot be read, is not valid UTF-8 or is empty.
-- `start` refuses to start if both `<VARIABLE>` and `<VARIABLE>_FILE` are set — set only one of them.
+- `start` refuses to start if more than one of `<VARIABLE>`, `<VARIABLE>_FILE` and `<VARIABLE>_DPAPI` is set — set only one of them.
 
 Error messages name the variable (and, for file errors, the path), never the value.
 
-Values in `.env` are interpolated, so a secret containing `${` may not load as written; the wizard warns about such a value — put it in a `<VARIABLE>_FILE` instead, whose content is used literally.
+Values in `.env` are interpolated, so a secret containing `${` may not load as written; the wizard warns about such a value — put it in a `<VARIABLE>_FILE` instead, whose content is used literally. An encrypted `<VARIABLE>_DPAPI` value is not affected.
+
+#### Encrypted credentials on Windows (`_DPAPI`)
+
+On Windows a credential can be stored encrypted with the Windows Data Protection API (DPAPI). `<VARIABLE>_DPAPI` then holds the encrypted value as base64 text, and `.env` no longer contains the secret itself:
+
+```bash
+JIRA_PASSWORD_DPAPI=AQAAANCMnd8BFdERjHoAwE...
+```
+
+There is no key or passphrase to manage: Windows derives the key from the account. When the wizard has credentials to store on Windows, it asks how to store them:
+
+| Choice | Who can decrypt | Use it when |
+|--------|-----------------|-------------|
+| Encrypted for this Windows user | Only the account that ran the wizard, on this machine | The service runs under the same account |
+| Encrypted for this machine | Every account on this machine | The service runs under another account, e.g. as a Windows service under `LocalSystem` |
+| Plain text | Anyone who can read `.env` | You do not want encryption |
+
+- **The service must run under an account that can decrypt.** A value encrypted for a user cannot be read by a service running under another account: `start` then refuses to start and reports that `<VARIABLE>_DPAPI` cannot be decrypted by this Windows account. Encrypt for the machine instead, or run `set-client-credential` as the service account.
+- **The value is tied to the account and machine.** A copied `.env` or a backup is useless elsewhere. After moving to another machine, or after an administrator reset the account's password, set the credential again. A normal password change needs nothing.
+- **It does not protect against the account itself.** Every process running under an account that may decrypt can read the credential.
+- **Rotation:** an encrypted value cannot be edited by hand. Run [`set-client-credential`](../cli.md#set-client-credential):
+
+  ```bash
+  testbench-defect-service set-client-credential JIRA_PASSWORD
+  ```
+
+- **Other platforms:** `start` refuses to start on Linux and macOS if a `_DPAPI` variable is set; use `<VARIABLE>` or `<VARIABLE>_FILE` there.
+
+No extra entropy is used, so a value can also be created without the service, e.g. in PowerShell (use `LocalMachine` instead of `CurrentUser` for the machine scope):
+
+```powershell
+Add-Type -AssemblyName System.Security
+$bytes = [Text.Encoding]::UTF8.GetBytes('the-secret')
+[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect($bytes, $null, 'CurrentUser'))
+```
 
 #### Credentials still in config.toml
 
 Existing configuration files with credentials keep working. At start the service logs a warning that names the field and recommends `.env` (`<VARIABLE>`) or `<VARIABLE>_FILE`. If the environment or a `_FILE` provides the same credential, it takes precedence and the warning says the value in the configuration file is ignored.
 
-Re-run `testbench-defect-service configure` to move the credentials into `.env`: the wizard writes them to `./.env` in the working directory, removes them from `config.toml` and prints `✓ Moved '<field>' out of the configuration file into .env (<VARIABLE>)`. If `<VARIABLE>` or `<VARIABLE>_FILE` is already set when the wizard runs, it skips the prompt, writes nothing and does not read the file.
+Re-run `testbench-defect-service configure` to move the credentials into `.env`: the wizard writes them to `./.env` in the working directory, removes them from `config.toml` and prints `✓ Moved '<field>' out of the configuration file into .env (<VARIABLE>)`. If `<VARIABLE>`, `<VARIABLE>_FILE` or `<VARIABLE>_DPAPI` is already set when the wizard runs, it skips the prompt, writes nothing and neither reads the file nor decrypts the value.
 
-This also applies to a credential the wizard stored in `.env` earlier: its prompt is skipped on the next run, so rotate it by editing `.env`. If you later add `<VARIABLE>_FILE` while `.env` still holds `<VARIABLE>`, `start` refuses to start because both are set — remove the line from `.env`.
+This also applies to a credential the wizard stored in `.env` earlier: its prompt is skipped on the next run, so rotate it with `testbench-defect-service set-client-credential <VARIABLE>` (or, for a plain-text value, by editing `.env`). If you later add `<VARIABLE>_FILE` while `.env` still holds `<VARIABLE>`, `start` refuses to start because both are set — remove the line from `.env`.
 
 #### File permissions
 

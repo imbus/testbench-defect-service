@@ -5,7 +5,7 @@ from urllib.error import HTTPError, URLError
 
 import click
 import questionary
-from dotenv import set_key
+from dotenv import dotenv_values, set_key, unset_key
 from pydantic import BaseModel
 
 from testbench_defect_service.clients.jira.config import AUTH_OAUTH2_3LO
@@ -20,6 +20,7 @@ from testbench_defect_service.clients.utils import (
     get_defect_client_from_client_class_str,
 )
 from testbench_defect_service.models.config import DEFAULT_HOST, DEFAULT_PORT, DefectServiceConfig
+from testbench_defect_service.utils import dpapi
 from testbench_defect_service.utils.auth import create_credentials, save_credentials
 from testbench_defect_service.utils.config import (
     CONFIG_PREFIX,
@@ -31,9 +32,13 @@ from testbench_defect_service.utils.config import (
     update_config_files,
 )
 from testbench_defect_service.utils.credentials import (
+    DPAPI_SUFFIX,
     FILE_SUFFIX,
+    CredentialSourceError,
     credential_fields,
+    encrypt_credential_with_dpapi,
     ensure_private_file,
+    read_credential_from_env,
     with_file_sourced_placeholders,
 )
 from testbench_defect_service.utils.dependencies import check_client_dependencies
@@ -55,6 +60,16 @@ SERVICE_WIZARD_SKIP_FIELDS = {
 }
 
 DEFAULT_DOTENV_PATH = Path(".env")
+
+STORAGE_PLAIN = "plain"
+STORAGE_DPAPI_USER = "dpapi-user"
+STORAGE_DPAPI_MACHINE = "dpapi-machine"
+CREDENTIAL_STORAGES = (STORAGE_PLAIN, STORAGE_DPAPI_USER, STORAGE_DPAPI_MACHINE)
+STORAGE_NOTES = {
+    STORAGE_PLAIN: "",
+    STORAGE_DPAPI_USER: " (encrypted for this Windows user)",
+    STORAGE_DPAPI_MACHINE: " (encrypted for this machine)",
+}
 
 
 def validate_port(value: Any) -> tuple[bool, str | None]:
@@ -163,48 +178,199 @@ def merge_with_defaults(
     return config_obj.model_dump(mode="json", by_alias=True, exclude_none=True, exclude=exclude)
 
 
+def choose_credential_storage() -> str | None:
+    """Ask how credentials are stored in ``.env``; plain text without asking off Windows.
+
+    Returns one of the ``STORAGE_*`` values, or ``None`` if the prompt was cancelled.
+    """
+    if not dpapi.is_available():
+        return STORAGE_PLAIN
+    storage: str | None = questionary.select(
+        "How should the credentials be stored in .env?",
+        choices=[
+            questionary.Choice(
+                "🔒 Encrypted for this Windows user (recommended)", STORAGE_DPAPI_USER
+            ),
+            questionary.Choice(
+                "🔒 Encrypted for this machine (for a service running under another account; "
+                "every user on this machine can decrypt)",
+                STORAGE_DPAPI_MACHINE,
+            ),
+            questionary.Choice("📄 Plain text", STORAGE_PLAIN),
+        ],
+    ).ask()
+    return storage
+
+
+def write_credential_to_env(env_var: str, value: str, dotenv_path: Path, storage: str) -> str:
+    """Write one credential to ``dotenv_path`` and the process environment.
+
+    With a DPAPI ``storage`` the value is encrypted and written as ``<env_var>_DPAPI``,
+    otherwise as ``<env_var>`` in plain text. The other variants of the variable
+    (``<env_var>``, ``_FILE``, ``_DPAPI``) are removed from the file and the process
+    environment, since ``start`` refuses more than one source. Returns the variable written.
+    Raises ``dpapi.DpapiError`` if the value cannot be encrypted.
+    """
+    if storage == STORAGE_PLAIN:
+        target, stored_value = env_var, value
+    else:
+        target = f"{env_var}{DPAPI_SUFFIX}"
+        stored_value = encrypt_credential_with_dpapi(
+            value, machine_scope=storage == STORAGE_DPAPI_MACHINE
+        )
+
+    ensure_private_file(dotenv_path)
+    set_key(str(dotenv_path), target, stored_value)
+    os.environ[target] = stored_value
+    in_dotenv = dotenv_values(dotenv_path, interpolate=False)
+    for suffix in ("", FILE_SUFFIX, DPAPI_SUFFIX):
+        other = f"{env_var}{suffix}"
+        if other == target:
+            continue
+        if other in in_dotenv:
+            unset_key(str(dotenv_path), other)
+        os.environ.pop(other, None)
+    ensure_private_file(dotenv_path)  # python-dotenv rewrites the file
+    return target
+
+
 def store_credentials_in_env(
     config: dict[str, Any],
     config_class: type[BaseModel],
     dotenv_path: Path = DEFAULT_DOTENV_PATH,
+    storage: str | None = None,
 ) -> list[str]:
     """Always store credentials in an owner-only .env file, never in the config file.
 
     Every credential field of ``config_class`` with a non-empty string value in ``config`` is
-    written to ``dotenv_path`` under its environment variable, exported to the current process
-    environment, and removed from ``config``. Because ``merge_with_defaults`` excludes fields
-    whose env var is set, the secrets are thereby kept out of the generated config file while
-    the config still validates against the environment values.
+    written to ``dotenv_path``, exported to the current process environment, and removed from
+    ``config``. ``storage`` is one of the ``STORAGE_*`` values; if it is ``None`` and there is
+    something to store, the user is asked (on Windows only, elsewhere plain text is used).
+    Plain text goes under the environment variable itself, a DPAPI-encrypted value under
+    ``<VAR>_DPAPI``. Because ``merge_with_defaults`` excludes fields whose variable is set,
+    the secrets are thereby kept out of the generated config file while the config still
+    validates.
 
-    Mutates ``config`` in place. Returns the names of the environment variables written
-    (empty if there was nothing to store, in which case nothing is created or printed).
+    Mutates ``config`` in place. Returns the names of the credentials' environment variables
+    (without the ``_DPAPI`` suffix; empty if there was nothing to store, in which case nothing
+    is created or printed). Raises ``click.Abort`` if the storage prompt is cancelled.
     """
     to_store = {
         field: (env_var, config[field])
         for field, env_var in credential_fields(config_class).items()
         if isinstance(config.get(field), str) and config[field]
     }
-    stored: list[str] = []
-    if to_store:
-        ensure_private_file(dotenv_path)
-        for field, (env_var, value) in to_store.items():
-            set_key(str(dotenv_path), env_var, value)
-            os.environ[env_var] = value
-            config.pop(field)
-            stored.append(env_var)
-        ensure_private_file(dotenv_path)  # python-dotenv rewrites the file
+    if not to_store:
+        return []
+    if storage is None:
+        storage = choose_credential_storage()
+        if storage is None:
+            raise click.Abort
 
-    if stored:
-        for env_var in stored:
-            click.echo(f"✓ Stored {env_var} in {dotenv_path}")
+    stored: list[str] = []
+    for field, (env_var, value) in to_store.items():
+        target = write_credential_to_env(env_var, value, dotenv_path, storage)
+        config.pop(field)
+        stored.append(env_var)
+        click.echo(f"✓ Stored {target} in {dotenv_path}{STORAGE_NOTES[storage]}")
+
+    if storage == STORAGE_PLAIN:
         for env_var, value in to_store.values():
             if "${" in value:
                 click.echo(
                     f"⚠️  {env_var} contains '${{', which .env files interpolate; if the value "
                     f"is not loaded correctly, use {env_var}{FILE_SUFFIX} instead."
                 )
-        click.echo("  Keep this file out of version control (e.g. add '.env' to .gitignore).")
+    click.echo("  Keep this file out of version control (e.g. add '.env' to .gitignore).")
     return stored
+
+
+def _prompt_new_credential_value(env_var: str) -> str | None:
+    """Ask twice for the new value of ``env_var``; ``None`` if cancelled or left empty."""
+    while True:
+        value = questionary.password(f"Enter the new value for {env_var}:").ask()
+        if not value:
+            return None
+        confirmation = questionary.password("Confirm the new value:").ask()
+        if confirmation is None:
+            return None
+        if value == confirmation:
+            return str(value)
+        click.echo("❌ The values do not match. Please try again.\n")
+
+
+def _client_credential_env_vars(config_path: Path) -> list[str]:
+    """Return the credential environment variables of the client configured in ``config_path``.
+
+    Raises ``click.ClickException`` if the file is missing or the client has no credentials.
+    """
+    if not config_path.exists():
+        raise click.ClickException(f"Configuration file not found: {config_path}")
+    client_class = load_service_config(config_path).client_class
+    try:
+        config_class = get_client_config_class(client_class)
+    except (ImportError, TypeError, ValueError) as e:
+        raise click.ClickException(f"Unable to load the client configuration: {e}") from e
+    env_vars = list(credential_fields(config_class).values()) if config_class else []
+    if not env_vars:
+        raise click.ClickException(f"The configured client ({client_class}) has no credentials.")
+    return env_vars
+
+
+def set_client_credential(
+    config_path: Path,
+    env_var: str | None = None,
+    storage: str | None = None,
+    dotenv_path: Path = DEFAULT_DOTENV_PATH,
+) -> None:
+    """Set or replace one credential of the configured client in ``.env``.
+
+    ``env_var`` is the credential's environment variable (e.g. ``JIRA_PASSWORD``); it is
+    asked for if omitted. Raises ``click.ClickException`` for an unknown credential, a
+    client without credentials, or a value that cannot be encrypted.
+    """
+    env_vars = _client_credential_env_vars(config_path)
+    if storage is not None and storage != STORAGE_PLAIN and not dpapi.is_available():
+        raise click.ClickException("DPAPI encryption is only available on Windows.")
+
+    if env_var is None:
+        env_var = questionary.select("Which credential do you want to set?", choices=env_vars).ask()
+    elif env_var.upper() not in env_vars:
+        raise click.ClickException(
+            f"Unknown credential '{env_var.upper()}'. Choose one of: {', '.join(env_vars)}."
+        )
+    value = _prompt_new_credential_value(env_var.upper()) if env_var else None
+    if value and storage is None:
+        storage = choose_credential_storage()
+    if not env_var or not value or storage is None:
+        click.echo("\nCancelled. Nothing was changed.")
+        return
+    env_var = env_var.upper()
+
+    in_dotenv = dotenv_values(dotenv_path, interpolate=False) if dotenv_path.exists() else {}
+    set_outside_dotenv = [
+        name
+        for name in (env_var, f"{env_var}{FILE_SUFFIX}", f"{env_var}{DPAPI_SUFFIX}")
+        if os.getenv(name) and name not in in_dotenv
+    ]
+    try:
+        target = write_credential_to_env(env_var, value, dotenv_path, storage)
+    except dpapi.DpapiError as e:
+        raise click.ClickException(f"Could not encrypt {env_var}: {e.strerror or e}") from e
+
+    click.echo(f"\n✓ Stored {target} in {dotenv_path}{STORAGE_NOTES[storage]}")
+    for name in set_outside_dotenv:
+        if name != target:
+            click.echo(
+                f"⚠️  {name} is also set in the environment outside {dotenv_path}; unset it, "
+                "otherwise the service refuses to start because both are set."
+            )
+    if storage == STORAGE_PLAIN and "${" in value:
+        click.echo(
+            f"⚠️  {env_var} contains '${{', which .env files interpolate; if the value "
+            f"is not loaded correctly, use {env_var}{FILE_SUFFIX} instead."
+        )
+    click.echo("Restart the service to use the new value.")
 
 
 def _report_moved_credentials(
@@ -763,7 +929,7 @@ def run_jira_oauth_wizard(client_config: dict | None = None) -> str | None:
     ).ask()
 
     if choice == _OAUTH_CHOICE_REFRESH_TOKEN:
-        refresh_token = questionary.text("Please enter your OAuth2 refresh token: ").ask()
+        refresh_token = questionary.password("Please enter your OAuth2 refresh token: ").ask()
         return refresh_token if isinstance(refresh_token, str) and refresh_token else None
 
     if choice == _OAUTH_CHOICE_AUTH_CODE:
@@ -784,13 +950,17 @@ def _run_jira_dc_code_exchange(client_config: dict) -> str | None:
     """Prompt for code/verifier/redirect URI and exchange them at the DC endpoint."""
     server_url = client_config.get("server_url") or ""
     client_id = client_config.get("oauth2_client_id") or os.getenv("JIRA_OAUTH2_CLIENT_ID")
-    client_secret = client_config.get("oauth2_client_secret") or os.getenv(
-        "JIRA_OAUTH2_CLIENT_SECRET"
-    )
+    client_secret = client_config.get("oauth2_client_secret")
+    source_error = ""
+    if not client_secret:
+        try:
+            client_secret, _ = read_credential_from_env("JIRA_OAUTH2_CLIENT_SECRET")
+        except CredentialSourceError as e:
+            source_error = f" ({e})"
     if not server_url or not client_id or not client_secret:
         click.echo(
             "Cannot exchange the authorization code: server_url and OAuth2 client "
-            "credentials must be configured first."
+            f"credentials must be configured first.{source_error}"
         )
         return None
 

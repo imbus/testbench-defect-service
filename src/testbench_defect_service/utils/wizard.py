@@ -11,6 +11,7 @@ from pydantic_core import PydanticUndefined
 from questionary import Choice
 
 from testbench_defect_service.utils.credentials import (
+    DPAPI_SUFFIX,
     FILE_SUFFIX,
     is_credential_field,
     with_file_sourced_placeholders,
@@ -283,9 +284,10 @@ def get_env_value(field_info: FieldInfo) -> tuple[str | None, Any]:
     if env_var:
         env_value = os.getenv(env_var) or None
         if env_value is None and is_credential_field(field_info):
-            file_value = os.getenv(env_var + FILE_SUFFIX) or None
-            if file_value is not None:
-                return env_var + FILE_SUFFIX, file_value
+            for suffix in (FILE_SUFFIX, DPAPI_SUFFIX):
+                source_value = os.getenv(env_var + suffix) or None
+                if source_value is not None:
+                    return env_var + suffix, source_value
         return env_var, env_value
     return None, None
 
