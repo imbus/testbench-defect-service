@@ -1,5 +1,7 @@
 import io
 import json
+import stat
+import sys
 import threading
 import time
 from typing import ClassVar
@@ -684,3 +686,13 @@ class TestRefreshUsesConfiguredDcEndpoint:
             "client_secret": ["csec"],
             "refresh_token": ["rt-1"],
         }
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file permissions")
+def test_persist_token_store_creates_owner_only_cache(tmp_path):
+    jira_oauth.token_store["refresh_token"] = "rt-1"
+    jira_oauth._persist_token_store_to_disk()
+    cache_path = tmp_path / "oauth2_tokens.toml"
+    assert cache_path.exists()
+    assert stat.S_IMODE(cache_path.stat().st_mode) == 0o600

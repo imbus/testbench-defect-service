@@ -10,6 +10,13 @@ from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 from questionary import Choice
 
+from testbench_defect_service.utils.credentials import (
+    DPAPI_SUFFIX,
+    FILE_SUFFIX,
+    is_credential_field,
+    with_file_sourced_placeholders,
+)
+
 _MISSING = object()
 
 # Constants for json_schema_extra keys
@@ -276,6 +283,11 @@ def get_env_value(field_info: FieldInfo) -> tuple[str | None, Any]:
     env_var = schema_extra.get(SCHEMA_KEYS["ENV_VAR"])
     if env_var:
         env_value = os.getenv(env_var) or None
+        if env_value is None and is_credential_field(field_info):
+            for suffix in (FILE_SUFFIX, DPAPI_SUFFIX):
+                source_value = os.getenv(env_var + suffix) or None
+                if source_value is not None:
+                    return env_var + suffix, source_value
         return env_var, env_value
     return None, None
 
@@ -928,7 +940,21 @@ def prompt_path_field(description: str, default: Any, only_directories: bool = T
 
 
 def prompt_password_field(description: str, default: Any) -> Any:
-    return questionary.password(f"{description}:", default=default if default else "").ask()
+    """Prompt for a masked value without ever pre-filling or printing the existing one.
+
+    With an existing value, an empty answer keeps it and typed text replaces it.
+    ``None`` (cancelled) is returned unchanged.
+    """
+    has_default = isinstance(default, str) and bool(default)
+    label = (
+        f"{description} (press Enter to keep the current value):"
+        if has_default
+        else f"{description}:"
+    )
+    answer = questionary.password(label, default="").ask()
+    if has_default and answer == "":
+        return default
+    return answer
 
 
 def prompt_single_field(  # noqa: C901, PLR0912, PLR0913, PLR0917
@@ -1037,7 +1063,11 @@ def validate_field_value(
         Tuple of (is_valid, error_message)
     """
     try:
-        config_class.model_validate({**partial_config, field_name: field_value})
+        config_class.model_validate(
+            with_file_sourced_placeholders(
+                config_class, {**partial_config, field_name: field_value}
+            )
+        )
         return True, None
     except ValidationError as e:
         for error in e.errors():
@@ -1143,7 +1173,9 @@ def prompt_model_fields(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
                     return None
 
             try:
-                config_class.model_validate(config_dict)
+                config_class.model_validate(
+                    with_file_sourced_placeholders(config_class, config_dict)
+                )
                 return config_dict
             except ValidationError as e:
                 click.echo("\n❌ Configuration validation failed:")

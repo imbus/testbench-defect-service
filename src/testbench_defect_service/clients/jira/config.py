@@ -34,6 +34,12 @@ class PhaseCommands(BaseModel):
     postsync: SyncCommandConfig | None = Field(default=None, description="Post-sync commands")
 
 
+class JiraITBProjectConfig(BaseModel):
+    defect_jql: str | None = Field(
+        None, description="JQL query template for this TestBench project"
+    )
+
+
 class JiraProjectConfig(BaseModel):
     defect_jql: str | None = Field(None, description="JQL query template for this project")
     attributes: list[str] | None = Field(None, description="Attributes for this project")
@@ -311,6 +317,14 @@ class JiraDefectClientConfig(BaseModel):
             "add_another_prompt": "Add another project configuration?",
         },
     )
+    itb_projects: dict[str, JiraITBProjectConfig] = Field(
+        default_factory=dict,
+        description=(
+            "TestBench-project-specific overrides, keyed by TestBench project name. "
+            "Take precedence over the Jira project configuration."
+        ),
+        json_schema_extra={"skip_if_wizard": True},
+    )
 
     @property
     def ssl_verify(self) -> str | bool:
@@ -366,7 +380,8 @@ class JiraDefectClientConfig(BaseModel):
         self.password = self.password or os.getenv("JIRA_PASSWORD")
         if not self.password:
             raise ValueError(
-                "Jira password must be provided for basic auth (via config or JIRA_PASSWORD env)"
+                "Jira password must be provided for basic auth "
+                "(set JIRA_PASSWORD or JIRA_PASSWORD_FILE)"
             )
 
     def _validate_token_auth(self) -> None:
@@ -374,7 +389,7 @@ class JiraDefectClientConfig(BaseModel):
         if not self.token:
             raise ValueError(
                 "Jira Personal Access Token must be provided for token auth "
-                "(via config or JIRA_BEARER_TOKEN env)"
+                "(set JIRA_BEARER_TOKEN or JIRA_BEARER_TOKEN_FILE)"
             )
 
     def _validate_oauth1(self) -> None:
@@ -398,12 +413,12 @@ class JiraDefectClientConfig(BaseModel):
         if not self.oauth1_access_token:
             raise ValueError(
                 "Jira Access Token must be provided for OAuth1 "
-                "(via config or JIRA_OAUTH1_ACCESS_TOKEN env)"
+                "(set JIRA_OAUTH1_ACCESS_TOKEN or JIRA_OAUTH1_ACCESS_TOKEN_FILE)"
             )
         if not self.oauth1_access_token_secret:
             raise ValueError(
                 "Jira Access Token Secret must be provided for OAuth1 "
-                "(via config or JIRA_OAUTH1_ACCESS_TOKEN_SECRET env)"
+                "(set JIRA_OAUTH1_ACCESS_TOKEN_SECRET or JIRA_OAUTH1_ACCESS_TOKEN_SECRET_FILE)"
             )
         if not self.oauth1_consumer_key:
             raise ValueError(
@@ -413,8 +428,8 @@ class JiraDefectClientConfig(BaseModel):
         if not self.oauth1_key_cert:
             raise ValueError(
                 "Jira Private Key must be provided for OAuth1 "
-                "(via oauth1_key_cert_path / JIRA_OAUTH1_KEY_CERT_PATH "
-                "or oauth1_key_cert / JIRA_OAUTH1_KEY_CERT env)"
+                "(via oauth1_key_cert_path / JIRA_OAUTH1_KEY_CERT_PATH, "
+                "or set JIRA_OAUTH1_KEY_CERT or JIRA_OAUTH1_KEY_CERT_FILE)"
             )
 
     def _resolve_oauth2_client_credentials(self) -> None:
@@ -426,8 +441,8 @@ class JiraDefectClientConfig(BaseModel):
         if not self.oauth2_client_id or not self.oauth2_client_secret:
             raise ValueError(
                 "Jira OAuth2 client credentials must be provided "
-                "(via oauth2_client_id/oauth2_client_secret or JIRA_OAUTH2_CLIENT_ID/"
-                "JIRA_OAUTH2_CLIENT_SECRET)"
+                "(client ID via oauth2_client_id or JIRA_OAUTH2_CLIENT_ID; "
+                "client secret: set JIRA_OAUTH2_CLIENT_SECRET or JIRA_OAUTH2_CLIENT_SECRET_FILE)"
             )
 
     def _validate_oauth2_2lo(self) -> None:

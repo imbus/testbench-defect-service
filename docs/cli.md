@@ -20,6 +20,7 @@ testbench-defect-service [COMMAND] [OPTIONS]
 | [`init`](#init) | Interactive wizard to create a new configuration file from scratch. |
 | [`configure`](#configure) | Create or update an existing configuration interactively. |
 | [`set-credentials`](#set-credentials) | Set the service username and password. |
+| [`set-client-credential`](#set-client-credential) | Set or replace a client credential (e.g. the Jira password) in `.env`. |
 | [`start`](#start) | Start the defect service. |
 
 ---
@@ -120,6 +121,37 @@ testbench-defect-service set-credentials --username admin --password "s3cret!"
 :::warning[Security]
 Avoid passing passwords as command-line arguments in shared or audited environments, as they may appear in shell history. Prefer the interactive prompt or use an environment variable pipeline.
 :::
+
+---
+
+## `set-client-credential`
+
+Set or replace one credential of the configured client (for example the Jira password) in `./.env`. This is the way to rotate a credential, in particular one that is stored encrypted and cannot be edited by hand. The new value is always asked for with a masked prompt and a confirmation; it is never passed on the command line.
+
+```bash
+testbench-defect-service set-client-credential [OPTIONS] [VARIABLE]
+```
+
+`VARIABLE` is the credential's environment variable, e.g. `JIRA_PASSWORD`. If it is omitted, the command lists the credentials of the configured client to choose from.
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--path PATH` | Path to the app configuration file (default: `config.toml`) |
+| `--storage [plain\|dpapi-user\|dpapi-machine]` | How to store the value: plain text, or encrypted with Windows DPAPI for the current user or for this machine. Default: asks on Windows, plain text elsewhere. |
+
+### Examples
+
+```bash
+# Choose the credential and the storage interactively
+testbench-defect-service set-client-credential
+
+# Replace the Jira password, encrypted for the current Windows user
+testbench-defect-service set-client-credential JIRA_PASSWORD --storage dpapi-user
+```
+
+The other variants of the variable (`<VARIABLE>`, `<VARIABLE>_FILE`, `<VARIABLE>_DPAPI`) are removed from `.env`, because the service refuses to start when more than one is set. Restart the service to use the new value. See [Encrypted credentials on Windows](clients/jira-client.md#encrypted-credentials-on-windows-_dpapi).
 
 ---
 

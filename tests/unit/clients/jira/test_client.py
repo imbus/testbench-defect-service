@@ -18,6 +18,7 @@ from testbench_defect_service.clients.jira.client import (  # type: ignore[impor
 )
 from testbench_defect_service.clients.jira.config import (  # type: ignore[import-untyped]
     JiraDefectClientConfig,
+    JiraITBProjectConfig,
     JiraProjectConfig,
     PhaseCommands,
     SyncCommandConfig,
@@ -608,6 +609,104 @@ class TestGetDefects:
 
         result = mock_jira_client_instance.get_defects("Test Project (TEST)", sync_context)
         assert result.protocol.generalErrors
+
+
+@pytest.mark.unit
+class TestGetDefectsJqlResolution:
+    PROJECT = "Test Project (TEST)"
+    GLOBAL_JQL = "project = '{project}' AND scope = global"
+    PROJECT_JQL = "project = '{project}' AND scope = jira"
+    ITB_JQL = "project = '{project}' AND scope = itb"
+
+    def _used_jql(self, client, sync_context) -> str:
+        client.jira_client.fetch_issues_by_jql.return_value = []
+        client.jira_client.get_all_project_fields.return_value = []
+        client.get_defects(self.PROJECT, sync_context)
+        return str(client.jira_client.fetch_issues_by_jql.call_args.args[0])
+
+    def _configure(
+        self,
+        client,
+        project_jql: str | None = None,
+        itb_projects: dict[str, JiraITBProjectConfig] | None = None,
+    ) -> None:
+        client.config.defect_jql = self.GLOBAL_JQL
+        client.config.projects = (
+            {self.PROJECT: JiraProjectConfig.model_validate({"defect_jql": project_jql})}
+            if project_jql
+            else {}
+        )
+        client.config.itb_projects = itb_projects or {}
+
+    def test_uses_global_jql_without_overrides(self, mock_jira_client_instance):
+        self._configure(mock_jira_client_instance)
+
+        used = self._used_jql(mock_jira_client_instance, SyncContext(iTBProject="TB A"))
+
+        assert used == "project = 'TEST' AND scope = global"
+
+    def test_project_jql_overrides_global(self, mock_jira_client_instance):
+        self._configure(mock_jira_client_instance, project_jql=self.PROJECT_JQL)
+
+        used = self._used_jql(mock_jira_client_instance, SyncContext(iTBProject="TB A"))
+
+        assert used == "project = 'TEST' AND scope = jira"
+
+    def test_itb_project_jql_overrides_project_jql(self, mock_jira_client_instance):
+        self._configure(
+            mock_jira_client_instance,
+            project_jql=self.PROJECT_JQL,
+            itb_projects={"TB A": JiraITBProjectConfig(defect_jql=self.ITB_JQL)},
+        )
+
+        used = self._used_jql(mock_jira_client_instance, SyncContext(iTBProject="TB A"))
+
+        assert used == "project = 'TEST' AND scope = itb"
+
+    def test_itb_project_jql_overrides_global_without_project_jql(self, mock_jira_client_instance):
+        self._configure(
+            mock_jira_client_instance,
+            itb_projects={"TB A": JiraITBProjectConfig(defect_jql=self.ITB_JQL)},
+        )
+
+        used = self._used_jql(mock_jira_client_instance, SyncContext(iTBProject="TB A"))
+
+        assert used == "project = 'TEST' AND scope = itb"
+
+    @pytest.mark.parametrize("itb_project", [None, "TB Other"])
+    def test_falls_back_to_project_jql_when_itb_project_not_configured(
+        self, mock_jira_client_instance, itb_project
+    ):
+        self._configure(
+            mock_jira_client_instance,
+            project_jql=self.PROJECT_JQL,
+            itb_projects={"TB A": JiraITBProjectConfig(defect_jql=self.ITB_JQL)},
+        )
+
+        used = self._used_jql(mock_jira_client_instance, SyncContext(iTBProject=itb_project))
+
+        assert used == "project = 'TEST' AND scope = jira"
+
+    def test_itb_entry_without_jql_falls_back_to_project_jql(self, mock_jira_client_instance):
+        self._configure(
+            mock_jira_client_instance,
+            project_jql=self.PROJECT_JQL,
+            itb_projects={"TB A": JiraITBProjectConfig()},
+        )
+
+        used = self._used_jql(mock_jira_client_instance, SyncContext(iTBProject="TB A"))
+
+        assert used == "project = 'TEST' AND scope = jira"
+
+    def test_itb_projects_parsed_from_client_config(self, mock_jira_config):
+        config = JiraDefectClientConfig.model_validate(
+            {
+                **mock_jira_config.model_dump(),
+                "itb_projects": {"TB A": {"defect_jql": self.ITB_JQL}},
+            }
+        )
+
+        assert config.itb_projects["TB A"].defect_jql == self.ITB_JQL
 
 
 @pytest.mark.unit

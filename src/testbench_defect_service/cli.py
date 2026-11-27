@@ -4,18 +4,21 @@ from pathlib import Path
 from ssl import SSLContext
 
 import click
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from sanic import Sanic
 from sanic.worker.loader import AppLoader
 
 from testbench_defect_service import __title__, __version__
 from testbench_defect_service.app import AppConfig, create_app
-from testbench_defect_service.log import logger
+from testbench_defect_service.log import logger, setup_logging
+from testbench_defect_service.utils.config import load_service_config, resolve_config_file_path
 from testbench_defect_service.utils.config_wizard import (
+    CREDENTIAL_STORAGES,
     configure_client_only,
     configure_credentials_only,
     configure_service_only,
     run_full_wizard,
+    set_client_credential,
     show_main_menu,
     view_current_config,
 )
@@ -41,7 +44,9 @@ def print_wizard_banner():
 @click.pass_context
 def cli(ctx):
     ctx.max_content_width = 120
-    load_dotenv()
+    # Search from the working directory, where the wizard writes .env; fall back to the
+    # previous package-upward lookup (e.g. a service started from another directory).
+    load_dotenv(find_dotenv(usecwd=True) or find_dotenv())
 
 
 @click.command()
@@ -72,7 +77,7 @@ def init(config_path: Path):
 @click.option("--credentials-only", is_flag=True, help="Configure service credentials only")
 @click.option("--client-only", is_flag=True, help="Configure client settings only")
 @click.option("--view", is_flag=True, help="View current configuration")
-def configure(  # noqa: PLR0911, PLR0913, C901
+def configure(  # noqa: PLR0911, PLR0917, PLR0913, C901
     config_path: Path,
     full: bool,
     service_only: bool,
@@ -175,7 +180,7 @@ def configure(  # noqa: PLR0911, PLR0913, C901
     metavar="PATH",
     help="Path to CA certificate file for client verification (optional)",
 )
-def start(  # noqa: PLR0913
+def start(  # noqa: PLR0913, PLR0917
     config_path: Path | None = None,
     client_class: str | None = None,
     client_config: Path | None = None,
@@ -188,6 +193,8 @@ def start(  # noqa: PLR0913
 ):
     """Start the TestBench Defect Service."""
     app_name = __title__
+    # Configure logging first: AppConfig logs credential warnings while it is built.
+    setup_logging(load_service_config(resolve_config_file_path(config_path)).logging, debug=dev)
     app_config = AppConfig(
         config_path=config_path,
         client_class=client_class,
@@ -259,7 +266,7 @@ def start(  # noqa: PLR0913
 
 @click.command()
 @click.option(
-    "--config",
+    "--path",
     "config_path",
     type=click.Path(dir_okay=False, writable=True, path_type=Path),
     metavar="PATH",
@@ -273,9 +280,35 @@ def set_credentials(config_path, username, password):
     configure_credentials_only(config_path, username=username, password=password)
 
 
+@click.command()
+@click.argument("variable", required=False)
+@click.option(
+    "--path",
+    "config_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    metavar="PATH",
+    default="config.toml",
+    help="Path to the app config file",
+)
+@click.option(
+    "--storage",
+    type=click.Choice(CREDENTIAL_STORAGES),
+    help="How to store the value in .env: plain text, or encrypted with Windows DPAPI for "
+    "the current user or for this machine  [default: asks on Windows, plain elsewhere]",
+)
+def set_client_credential_command(variable: str | None, config_path: Path, storage: str | None):
+    """Set or replace a client credential (e.g. JIRA_PASSWORD) in .env.
+
+    VARIABLE is the credential's environment variable; it is asked for if omitted.
+    The value is always prompted for, never passed on the command line.
+    """
+    set_client_credential(config_path, variable, storage)
+
+
 cli.add_command(init)
 cli.add_command(configure)
 cli.add_command(set_credentials)
+cli.add_command(set_client_credential_command, name="set-client-credential")
 cli.add_command(start)
 
 if __name__ == "__main__":

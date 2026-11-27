@@ -5,6 +5,7 @@ import ssl
 import sys
 from pathlib import Path
 
+import click
 from pydantic import ValidationError
 from sanic.config import Config
 from sanic.http.tls.context import CIPHERS_TLS12
@@ -23,6 +24,7 @@ from testbench_defect_service.utils.config import (
     resolve_config_file_path,
 )
 from testbench_defect_service.utils.config_wizard import run_jira_oauth_wizard
+from testbench_defect_service.utils.credentials import CredentialSourceError, resolve_credentials
 
 
 class AppConfig(Config):
@@ -139,6 +141,11 @@ class AppConfig(Config):
                 client_config = load_client_config_from_file(self.CLIENT_CONFIG_PATH)
             else:
                 client_config = self._client_config_inline
+            client_config = resolve_credentials(
+                client_config_class,
+                client_config,
+                config_label=str(self.CLIENT_CONFIG_PATH if separate_file else self.CONFIG_PATH),
+            )
             self._prompt_for_missing_jira_oauth2_refresh_token(client_config)
             return client_config_class.model_validate(client_config)
         except ValidationError as e:
@@ -147,6 +154,10 @@ class AppConfig(Config):
             else:
                 config_prefix = f"{CONFIG_PREFIX}.client_config"
                 print_config_errors(e, config_path=self.CONFIG_PATH, config_prefix=config_prefix)
+            sys.exit(1)
+        except CredentialSourceError as e:
+            click.echo(f"Configuration Error: {e}")
+            click.echo()
             sys.exit(1)
         except Exception as e:
             raise ValueError(f"Failed to validate client configuration: {e}") from e
